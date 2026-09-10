@@ -1,0 +1,30 @@
+{
+  "name": "coffeebeans",
+  "version": "0.0.1",
+  "description": "A BASIC-shaped drawing toy in CoffeeScript",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Robert de Forest",
+  "scripts": {
+    "start": "electron .",
+    "build:vendor": "esbuild src/renderer/vendor/editor-entry.js --bundle --format=iife --global-name=CM --outfile=src/renderer/vendor/editor.js --minify",
+    "test": "BEANS_TEST=1 electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/legacy-modes": "^6.5.4",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@replit/codemirror-vim": "^6.4.0",
+    "coffeescript": "^2.7.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
