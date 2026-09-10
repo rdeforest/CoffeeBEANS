@@ -7,10 +7,12 @@ class Interrupted extends Error
   constructor: -> super 'stopped'
 
 state =
-  i32:     null
-  u32:     null
-  double:  no
-  native:  0
+  i32:        null
+  u32:        null
+  double:     no
+  native:     0
+  frameStart: null
+  started:    0
 
 # Everything that draws writes to `target`. The screen is just the target
 # that happens to live in shared memory; a Surface is one that does not, so
@@ -38,12 +40,17 @@ setDouble = (value) ->
 
 doSwap = ->
   checkInterrupt()
+  # Time from the previous swap returning to this one being asked for: the
+  # cost of the sketch's own frame, which is the number worth tuning.
+  now = performance.now()
+  Atomics.store state.i32, H.SKETCH_US, Math.round (now - state.frameStart) * 1000 if state.frameStart?
   Atomics.store state.i32, H.SWAP, 1
   while Atomics.load(state.i32, H.SWAP) is 1
     Atomics.wait state.i32, H.SWAP, 1, 100
     checkInterrupt()
   refreshBase()
   INPUT.claimHits()      # a frame boundary is also an input boundary
+  state.frameStart = performance.now()
   undefined
 
 # --- commands ---------------------------------------------------------------
@@ -268,6 +275,78 @@ drawTo = (destination, body) ->
     target = previous
   result
 
+# --- text -------------------------------------------------------------------
+
+# One cursor, in character cells, the way BASIC had it. Text goes through the
+# same plot/span the shapes use, so it lands on a surface under drawTo too.
+cursor =
+  col:        0
+  row:        0
+  scale:      1
+  background: null
+
+cellWidth  = -> FONT.width  * cursor.scale
+cellHeight = -> FONT.height * cursor.scale
+
+drawGlyph = (character, x, y, pixel, background) ->
+  rows  = FONT.rows character
+  scale = cursor.scale
+  for gy in [0...FONT.height] by 1
+    bits = rows[gy]
+    for gx in [0...FONT.width] by 1
+      value = if (bits >> gx) & 1 then pixel else background
+      continue unless value?
+      if scale is 1
+        plot x + gx, y + gy, value
+      else
+        left = x + gx * scale
+        span y + gy * scale + row, left, left + scale - 1, value for row in [0...scale] by 1
+  undefined
+
+writeAt = (x, y, string, pixel, background) ->
+  for character in string
+    drawGlyph character, x, y, pixel, background
+    x += cellWidth()
+  undefined
+
+locate = (col, row) ->
+  cursor.col = col | 0
+  cursor.row = row | 0
+  undefined
+
+textScale = (scale) ->
+  cursor.scale = Math.max 1, scale | 0
+  undefined
+
+textBackground = (value) ->
+  cursor.background = value ? null
+  undefined
+
+textWidth = (string) -> String(string).length * cellWidth()
+
+text = (parts...) ->
+  string     = parts.join ' '
+  pixel      = state.native
+  background = if cursor.background? then toNative toColor cursor.background else null
+  columns    = Math.max 1, Math.floor target.width / cellWidth()
+
+  for character in string
+    if character is '\n'
+      cursor.col = 0
+      cursor.row += 1
+      continue
+    if cursor.col >= columns
+      cursor.col = 0
+      cursor.row += 1
+    drawGlyph character, cursor.col * cellWidth(), cursor.row * cellHeight(), pixel, background
+    cursor.col += 1
+  undefined
+
+textAt = (x, y, parts...) ->
+  background = if cursor.background? then toNative toColor cursor.background else null
+  writeAt x, y, parts.join(' '), state.native, background
+  undefined
+
 pget = (x, y) ->
   x |= 0
   y |= 0
@@ -311,8 +390,12 @@ globalThis.attach = (sab) ->
     screen, color, cls, point, pget, print, wait, buffer, keys, mouse
     line, rect, rectFill, ellipse, ellipseFill, circle, circleFill
     surface, get, put, stamp, drawTo, overlaps, display
+    locate, text, textAt, textScale, textBackground, textWidth
   }
+  Object.defineProperty globalThis, 'elapsed', get: -> (performance.now() - state.started) / 1000
+  Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME
   globalThis.Interrupted = Interrupted
+  state.started = performance.now()
   setDouble no          # a restart must not inherit the last sketch's mode
   screen 320, 200
   undefined

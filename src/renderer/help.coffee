@@ -42,6 +42,26 @@ SECTIONS = [
     ['',                        'every one takes an optional colour last']
   ]
 ,
+  name:  'text'
+  title: 'Text'
+  lines: [
+    ['text "hi", n',        'draw at the cursor in the current colour']
+    ['locate col, row',     'move the cursor, in 8x8 character cells']
+    ['textAt x, y, "hi"',   'draw at pixel coordinates, cursor untouched']
+    ['textScale 2',         'chunkier characters; cells scale with it']
+    ['textBackground c',    'fill behind the glyphs; null for none']
+    ['textWidth "hi"',      'how wide that would be, in pixels']
+    ['',                    'text obeys drawTo, so it lands on surfaces too']
+  ]
+,
+  name:  'timing'
+  title: 'Timing'
+  lines: [
+    ['elapsed',   'seconds since this sketch started']
+    ['frames',    'frames presented since the app did']
+    ['',          'the header shows fps and what your frame costs']
+  ]
+,
   name:  'surfaces'
   title: 'Surfaces'
   lines: [

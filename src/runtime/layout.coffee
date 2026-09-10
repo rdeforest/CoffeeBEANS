@@ -18,6 +18,7 @@ HEADER =
   MOUSE_WHEEL:13     # accumulates; the sketch consumes it by reading
   KEYS:       16     # 16..23, one bit per key: held right now
   KEYS_HIT:   24     # 24..31, sticky: went down since the sketch last looked
+  SKETCH_US:  32     # microseconds the sketch spent building the last frame
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160

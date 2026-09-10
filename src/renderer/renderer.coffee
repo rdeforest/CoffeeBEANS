@@ -10,6 +10,7 @@ stage    = document.getElementById 'stage'
 output   = document.getElementById 'console'
 statusEl = document.getElementById 'status'
 picker   = document.getElementById 'sketch'
+meter    = document.getElementById 'meter'
 main     = document.getElementById 'main'
 ctx      = canvas.getContext '2d'
 
@@ -183,6 +184,23 @@ present = (index) ->
   surface.view32.set u32.subarray base, base + surface.width * surface.height
   ctx.putImageData surface.imageData, 0, 0
 
+# You cannot tune what you cannot see. fps is how often a frame reaches the
+# screen; the second number is what the sketch spent building one, which is
+# the half a sketch can do something about.
+meterState = presented: 0, shown: 0, since: performance.now()
+
+updateMeter = ->
+  meterState.presented += 1
+  span = performance.now() - meterState.since
+  return if span < 500
+  fps    = (meterState.presented - meterState.shown) * 1000 / span
+  cost   = Atomics.load(i32, H.SKETCH_US) / 1000
+  sketch = if cost > 0 then "   sketch #{cost.toFixed 1}ms" else ''
+  meter.textContent = "#{fps.toFixed 0}fps#{sketch}"
+  meterState.shown = meterState.presented
+  meterState.since = performance.now()
+  undefined
+
 frame = ->
   requestAnimationFrame frame
   reshape Atomics.load(i32, H.WIDTH), Atomics.load(i32, H.HEIGHT)
@@ -201,6 +219,7 @@ frame = ->
     present Atomics.load i32, H.FRONT
 
   Atomics.add i32, H.FRAME, 1
+  updateMeter()
 
 # --- worker lifecycle -------------------------------------------------------
 
@@ -228,6 +247,7 @@ send = ({source, name}) ->
 start = (thenRun = null) ->
   worker?.terminate()
   Atomics.store i32, H.INTERRUPT, 0
+  Atomics.store i32, H.SKETCH_US, 0
   Atomics.store i32, H.SWAP,      0
   Atomics.store i32, H.FRONT,     0
   pending = thenRun

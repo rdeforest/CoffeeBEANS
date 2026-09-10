@@ -528,6 +528,67 @@ print 'branched=' + (above > 100 and offAxis > 50)
     text.includes('trunk=true') and text.includes('branched=true'),
     JSON.stringify text.trim()
 
+  # 29. text: glyph shape, cursor, scaling, wrapping, and drawTo
+  texting = """
+screen 320, 200
+cls()
+color COLORS.white
+
+# 'A' is 0C1E33333F333300: the top row lights bits 2 and 3 only
+textAt 0, 0, 'A'
+print 'glyphOn=' + (pget(2, 0) is COLORS.white and pget(3, 0) is COLORS.white)
+print 'glyphOff=' + (pget(0, 0) isnt COLORS.white)
+print 'width=' + textWidth('hello')
+
+# locate puts the cursor on cell boundaries
+cls()
+locate 2, 3
+text 'A'
+print 'located=' + (pget(2 * 8 + 2, 3 * 8) is COLORS.white)
+
+# scaling doubles every pixel
+cls()
+textScale 2
+textAt 0, 0, 'A'
+print 'scaled=' + (pget(4, 0) is COLORS.white and pget(5, 1) is COLORS.white)
+print 'scaledWidth=' + textWidth('AB')
+textScale 1
+
+# wrapping at the right edge
+cls()
+locate 39, 0
+text 'AB'
+print 'wrapped=' + (pget(2, 8) is COLORS.white)
+
+# text obeys drawTo like everything else
+sheet = surface 32, 16
+drawTo sheet, ->
+  cls 0x00000000
+  textAt 0, 0, 'A'
+print 'onSurface=' + (drawTo(sheet, -> pget 2, 0) is COLORS.white)
+print 'screenClean=' + (pget(2, 0) isnt COLORS.white)
+
+# an unknown character still draws something
+cls()
+textAt 0, 0, 'a-with-accent-here'.charAt(0)
+textAt 40, 0, String.fromCharCode(233)
+print 'missingBox=' + (pget(40, 0) is COLORS.white and pget(47, 0) is COLORS.white)
+
+print 'timing=' + (elapsed >= 0 and frames >= 0)
+"""
+  await setDoc texting
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 900
+  text2  = await consoleText()
+  wanted = ['glyphOn=true', 'glyphOff=true', 'width=40', 'located=true',
+            'scaled=true', 'scaledWidth=32', 'wrapped=true',
+            'onSurface=true', 'screenClean=true', 'missingBox=true', 'timing=true']
+  absent = (want for want in wanted when not text2.includes want)
+  check 'text renders, positions, scales and retargets', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '}" else 'all eleven'
+
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'
   check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"

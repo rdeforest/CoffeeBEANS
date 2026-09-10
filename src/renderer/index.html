@@ -26,6 +26,7 @@
   button.ghost { background: #22222a; color: var(--coffee); }
   button.stop  { background: #ff6b6b; }
   #status { opacity: .7; min-width: 6rem; text-align: right; }
+  #meter  { opacity: .45; font-variant-numeric: tabular-nums; }
 
   main { display: grid; grid-template-columns: 1fr var(--grip) var(--editor-w); min-height: 0; }
   main.solo { grid-template-columns: 1fr 0 0; }
@@ -60,6 +61,7 @@
   <button id="stop" class="stop">Stop</button>
   <span class="spacer"></span>
   <button id="toggle" class="ghost">Editor</button>
+  <span id="meter"></span>
   <span id="status">booting</span>
 </header>
 
