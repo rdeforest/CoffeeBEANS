@@ -96,8 +96,8 @@ install, and re-seeding would be obnoxious.
 
 Expected to land beside `sketches/`:
 
-- `assets/` -- images pulled off the internet, cached so a sketch still runs
-  when the venue wifi is bad or the URL has rotted.
+- `assets/` -- done. Images pulled off the internet are cached here on
+  first fetch, keyed by a hash of the URL.
 - a preferences file, in YAML. Panel sizes currently live in localStorage,
   which is the wrong home for anything a person might want to edit or copy
   between machines; they should move here.
@@ -186,3 +186,24 @@ Wanted eventually, and they fit the existing shape: both are state, like the
 current colour. A line style is a repeating bit pattern consumed along the
 walk; a fill pattern is an 8x8 tile indexed by destination coordinates, which
 is how every paint program of that era did it. Neither changes any signature.
+
+## Scope shadowing, three times now
+
+Worth writing down as a rule, because it has bitten in three different
+contexts with three different symptoms and no error message in any of them:
+
+1. `history` in the renderer silently became `window.history`, because
+   assigning a read-only global fails quietly in sloppy mode.
+2. `onmessage` in a sketch nulled the worker's inbox, because assigning a
+   non-callable to an event handler sets it to null.
+3. `load` declared as a top-level `const` in worker-boot.js shadowed the
+   runtime's `load` for every sketch, because a classic worker's top-level
+   `const` lives in the global *lexical* environment, which indirect eval
+   can see and which wins over globalThis.
+
+The rule that covers all three: **anything that shares a scope with sketch
+code must declare nothing at that scope.** Our modules compile wrapped, the
+bootstrap lives inside an IIFE, and the worker listens with
+addEventListener rather than assigning onmessage. A test asserts the
+runtime globals are still reachable from a bare sketch, which is the
+cheapest way to catch the next one.

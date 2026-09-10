@@ -38,6 +38,29 @@ Lines are clipped before they are drawn, so `line -1e9, -1e9, 1e9, 1e9`
 costs the same as any other line. Ellipses are scanline-filled and bounded
 by the screen for the same reason.
 
+## Text
+
+    locate 1, 1
+    color COLORS.coffee
+    text "SCORE #{score}"
+
+An 8x8 bitmap font, drawn through the same plot the shapes use -- so it
+obeys `drawTo` and lands on a surface as readily as on the screen. `textAt`
+takes pixel coordinates when a score needs to sit somewhere exact, and
+`textScale` makes it chunkier. The glyphs live in `src/runtime/font.coffee`
+as readable hex, one line each, so you can edit one.
+
+## Loading images
+
+    cat = load "https://example.com/cat.png"
+    put cat, 100, 80
+
+`load` blocks, the way `buffer.swap` does and for the same reason: a worker
+parked in `Atomics.wait` cannot receive a message, but it can send one before
+it parks. No promises, no await. Downloads are cached under `assets/` in your
+data folder on first fetch, so a sketch you demo on a stage with bad wifi
+still runs, and so does one whose URL rotted six months ago.
+
 ## Surfaces
 
 An off-screen surface is shaped exactly like the screen, so every drawing

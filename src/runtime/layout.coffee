@@ -19,12 +19,21 @@ HEADER =
   KEYS:       16     # 16..23, one bit per key: held right now
   KEYS_HIT:   24     # 24..31, sticky: went down since the sketch last looked
   SKETCH_US:  32     # microseconds the sketch spent building the last frame
+  LOAD_STATE: 33     # 0 idle, 1 asked, 2 pixels ready, 3 failed
+  LOAD_W:     34     # width, or the error message length when state is 3
+  LOAD_H:     35
+  LOAD_ID:    36
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 32..63 spare: wheel modes, gamepads, whatever comes
+HEADER_WORDS = 64        # 37..63 spare: gamepads, audio, whatever comes
 BUFFERS      = 2
+
+# Where a loaded image lands on its way from the main process to the worker.
+# Big enough for a 2048-square image, which is far past anything this toy
+# wants to be blitting around.
+TRANSFER_PIXELS = 2048 * 2048
 
 globalThis.LAYOUT =
   HEADER:       HEADER
@@ -34,5 +43,7 @@ globalThis.LAYOUT =
   MAX_PIXELS:   MAX_PIXELS
   HEADER_WORDS: HEADER_WORDS
   BUFFERS:      BUFFERS
-  TOTAL_BYTES:  (HEADER_WORDS + BUFFERS * MAX_PIXELS) * 4
+  TRANSFER_PIXELS: TRANSFER_PIXELS
+  transferWords:   HEADER_WORDS + BUFFERS * MAX_PIXELS
+  TOTAL_BYTES:  (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
   bufferWords:  (index) -> HEADER_WORDS + index * MAX_PIXELS

@@ -233,12 +233,38 @@ messages =
     send pending
     pending = null
   print:   (data) -> say data.text
+  load:    (data) -> answerLoad data.url
   done:    -> setStatus 'ready'
   stopped: -> say '*** stopped ***', 'sys'; setStatus 'ready'
   error:   (data) ->
     where = if data.line? then " (line #{data.line})" else ''
     say "#{data.stage}#{where}: #{data.message}", 'err'
     setStatus 'error'
+
+# nativeImage hands back BGRA; the framebuffer wants RGBA. One swizzle here
+# beats one per pixel at draw time.
+answerLoad = (url) ->
+  try
+    image = await beans.image url
+    pixels = image.width * image.height
+    throw new Error "image too large: #{image.width}x#{image.height}" if pixels > LAYOUT.TRANSFER_PIXELS
+    source = new Uint8Array image.data
+    into   = new Uint8Array sab, LAYOUT.transferWords * 4, pixels * 4
+    for at in [0...source.length] by 4
+      into[at]     = source[at + 2]
+      into[at + 1] = source[at + 1]
+      into[at + 2] = source[at]
+      into[at + 3] = source[at + 3]
+    Atomics.store i32, H.LOAD_W, image.width
+    Atomics.store i32, H.LOAD_H, image.height
+    Atomics.store i32, H.LOAD_STATE, 2
+  catch error
+    message = new TextEncoder().encode String error.message ? error
+    new Uint8Array(sab, LAYOUT.transferWords * 4, message.length).set message
+    Atomics.store i32, H.LOAD_W, message.length
+    Atomics.store i32, H.LOAD_STATE, 3
+  Atomics.notify i32, H.LOAD_STATE
+  undefined
 
 send = ({source, name}) ->
   setStatus 'running'

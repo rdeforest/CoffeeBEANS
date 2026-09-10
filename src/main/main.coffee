@@ -1,4 +1,5 @@
-{app, BrowserWindow, Menu, protocol, net, ipcMain, shell} = require 'electron'
+{app, BrowserWindow, Menu, nativeImage, protocol, net, ipcMain, shell} = require 'electron'
+crypto = require 'crypto'
 fs   = require 'fs'
 fsp  = require 'fs/promises'
 os   = require 'os'
@@ -57,7 +58,38 @@ sketchFile = (name) ->
 
 ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(name), 'utf8'
 ipcMain.handle 'sketch:write', (event, name, text) -> await fsp.writeFile sketchFile(name), text, 'utf8'; true
-ipcMain.handle 'beans:paths', -> {data: DATA, sketches: SKETCHES}
+ASSETS = path.join DATA, 'assets'
+
+# Cached on first fetch, and thereafter never touched again. A sketch shown
+# on a stage with bad wifi, or six months after the URL rotted, still runs.
+cachedBytes = (url) ->
+  await fsp.mkdir ASSETS, recursive: yes
+  key  = crypto.createHash('sha256').update(url).digest('hex')[0...32]
+  file = path.join ASSETS, key
+  try
+    return await fsp.readFile file
+  catch error
+    throw error unless error.code is 'ENOENT'
+
+  response = await net.fetch url
+  throw new Error "#{response.status} #{response.statusText} for #{url}" unless response.ok
+  bytes = Buffer.from await response.arrayBuffer()
+  await fsp.writeFile file, bytes
+  bytes
+
+localBytes = (where) ->
+  file = path.resolve DATA, where
+  throw new Error "outside the data folder: #{where}" unless file.startsWith DATA + path.sep
+  await fsp.readFile file
+
+ipcMain.handle 'image:load', (event, url) ->
+  bytes = if /^https?:/i.test url then await cachedBytes url else await localBytes url
+  image = nativeImage.createFromBuffer bytes
+  {width, height} = image.getSize()
+  throw new Error "not an image we can decode: #{url}" unless width and height
+  {width, height, data: image.toBitmap()}
+
+ipcMain.handle 'beans:paths', -> {data: DATA, sketches: SKETCHES, assets: ASSETS}
 ipcMain.handle 'sketch:list',  ->
   entries = await fsp.readdir SKETCHES
   (entry.replace /\.coffee$/, '' for entry in entries when entry.endsWith '.coffee').sort()

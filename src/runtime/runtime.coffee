@@ -275,6 +275,44 @@ drawTo = (destination, body) ->
     target = previous
   result
 
+# --- loading ----------------------------------------------------------------
+
+# Blocking, like buffer.swap, and for the same reason: a worker parked in
+# Atomics.wait cannot receive a message, but it can still send one before it
+# parks. So the request goes out, the worker sleeps, and the answer arrives
+# in shared memory.
+LOAD_TIMEOUT = 15000
+
+loadFailure = ->
+  length  = Atomics.load state.i32, H.LOAD_W
+  bytes   = new Uint8Array state.u32.buffer, LAYOUT.transferWords * 4, length
+  message = new TextDecoder().decode bytes
+  Atomics.store state.i32, H.LOAD_STATE, 0
+  new Error message
+
+load = (url) ->
+  Atomics.store state.i32, H.LOAD_ID, Atomics.load(state.i32, H.LOAD_ID) + 1
+  Atomics.store state.i32, H.LOAD_STATE, 1
+  postMessage {type: 'load', url: String url}
+
+  deadline = performance.now() + LOAD_TIMEOUT
+  while Atomics.load(state.i32, H.LOAD_STATE) is 1
+    checkInterrupt()
+    if performance.now() > deadline
+      Atomics.store state.i32, H.LOAD_STATE, 0
+      throw new Error "load timed out after #{LOAD_TIMEOUT / 1000}s: #{url}"
+    Atomics.wait state.i32, H.LOAD_STATE, 1, 100
+
+  throw loadFailure() if Atomics.load(state.i32, H.LOAD_STATE) is 3
+
+  width  = Atomics.load state.i32, H.LOAD_W
+  height = Atomics.load state.i32, H.LOAD_H
+  loaded = surface width, height
+  from   = LAYOUT.transferWords
+  loaded.pixels.set state.u32.subarray from, from + width * height
+  Atomics.store state.i32, H.LOAD_STATE, 0
+  loaded
+
 # --- text -------------------------------------------------------------------
 
 # One cursor, in character cells, the way BASIC had it. Text goes through the
@@ -390,7 +428,7 @@ globalThis.attach = (sab) ->
     screen, color, cls, point, pget, print, wait, buffer, keys, mouse
     line, rect, rectFill, ellipse, ellipseFill, circle, circleFill
     surface, get, put, stamp, drawTo, overlaps, display
-    locate, text, textAt, textScale, textBackground, textWidth
+    locate, text, textAt, textScale, textBackground, textWidth, load
   }
   Object.defineProperty globalThis, 'elapsed', get: -> (performance.now() - state.started) / 1000
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME

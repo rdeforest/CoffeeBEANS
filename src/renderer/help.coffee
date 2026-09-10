@@ -62,6 +62,15 @@ SECTIONS = [
     ['',          'the header shows fps and what your frame costs']
   ]
 ,
+  name:  'loading'
+  title: 'Loading images'
+  lines: [
+    ['load "https://..."',   'returns a surface; blocks until it arrives']
+    ['load "assets/cat.png"','a file in your data folder']
+    ['',                     'downloads are cached in assets/, so a sketch']
+    ['',                     'still runs on bad wifi or a dead URL']
+  ]
+,
   name:  'surfaces'
   title: 'Surfaces'
   lines: [
