@@ -22,6 +22,23 @@ screen. That is what makes a plain `loop` work as an animation loop.
 Stop sets an interrupt flag. A sketch that reaches `buffer.swap` unwinds
 cleanly and keeps its definitions; one with no yield point gets terminated.
 
+## Where your work lives
+
+Sketches live in your data directory, not in this repo, so running the app
+never collides with working on it:
+
+    ~/.local/share/coffeebeans/sketches/       ($XDG_DATA_HOME is honoured)
+
+**File -> Open Data Folder** (Ctrl+Shift+D) opens it in your file manager.
+The directory is seeded from `examples/` the first time it is created, and
+never again -- an existing data directory belongs to you, including an empty
+one. `BEANS_DATA_HOME` overrides the location; that is how `npm test` gets
+its own throwaway copy.
+
+The directory is a directory rather than a bare pile of sketches so it has
+somewhere to grow: `assets/` and a preferences file are the next things
+expected to land beside `sketches/`.
+
 ## Editing
 
 The editor pane is CodeMirror with vim keybindings, and the file on disk is
@@ -73,5 +90,5 @@ see NOTES.md.
     src/main/       Electron main process; serves app:// with COOP/COEP
     src/renderer/   SAB owner, worker lifecycle, rAF present loop
     src/runtime/    the drawing API, runs inside the worker
-    sketches/       your stuff
+    examples/       seed sketches, copied out on first run
     test/           integration suite -- npm test

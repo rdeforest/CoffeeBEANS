@@ -3,12 +3,14 @@
 # and whether the worker is genuinely a persistent image.
 fsp  = require 'fs/promises'
 path = require 'path'
+{Menu} = require 'electron'
 
 wait = (ms) -> new Promise (resolve) -> setTimeout resolve, ms
 
-module.exports = (win, ROOT) ->
-  scratch = path.join ROOT, 'sketches', 'scratch.coffee'
-  guarded = path.join ROOT, 'sketches', 'hello.coffee'
+module.exports = (win, paths) ->
+  scratch = path.join paths.sketches, 'scratch.coffee'
+  guarded = path.join paths.sketches, 'hello.coffee'
+  await fsp.writeFile scratch, "print 'scratch'\n", 'utf8'
   before  = await fsp.readFile guarded, 'utf8'
   js      = (code) -> win.webContents.executeJavaScript "(async () => { #{code} })()", yes
   failures = 0
@@ -271,6 +273,18 @@ module.exports = (win, ROOT) ->
   text = await consoleText()
   check 'mouse maps into screen pixels', text.includes('at=80,100'), JSON.stringify text.trim()
 
+  # 19. the data directory was seeded from examples/
+  seeded   = (await fsp.readdir paths.sketches).filter (name) -> name.endsWith '.coffee'
+  examples = (await fsp.readdir path.join paths.root, 'examples').filter (name) -> name.endsWith '.coffee'
+  missing  = (name for name in examples when name not in seeded)
+  check 'data directory seeded from examples', missing.length is 0, "have #{seeded.join ', '}"
+
+  # 20. the File menu can get the user to their own files
+  menu = Menu.getApplicationMenu()
+  file = menu?.items.find (item) -> item.label is 'File'
+  open = file?.submenu?.items.find (item) -> item.label is 'Open Data Folder'
+  check 'File menu opens the data folder', open? and open.enabled, "#{file?.submenu?.items.length} items under File"
+
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'
   check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"
@@ -279,4 +293,13 @@ module.exports = (win, ROOT) ->
   await js "localStorage.removeItem('panel.editor'); localStorage.removeItem('panel.console'); return true"
 
   console.log "\n#{if failures then "#{failures} FAILED" else 'all passed'}"
+
+  # Only ever remove a data directory the test run created inside the repo.
+  disposable = process.env.BEANS_DATA_HOME and paths.data.startsWith paths.root + path.sep
+  if disposable and not failures
+    await fsp.rm paths.data, recursive: yes, force: yes
+    console.log "removed #{paths.data}"
+  else if disposable
+    console.log "left #{paths.data} in place for troubleshooting"
+
   failures

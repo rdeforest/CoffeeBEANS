@@ -79,3 +79,25 @@ Also missing on purpose, in rough order of likely demand:
   cleanly -- main thread reads pads each frame and writes the header.
 
 Header words 32..63 are spare and reserved for exactly this sort of thing.
+
+## The data directory
+
+    ~/.local/share/coffeebeans/
+      sketches/
+
+`$XDG_DATA_HOME` is honoured, and `BEANS_DATA_HOME` overrides it outright --
+which is how the test suite gets a disposable copy at `$PWD/test_tmp`. That
+suite removes its directory when everything passes and leaves it behind when
+anything fails, so a failure can be picked over afterwards.
+
+Seeding happens only when the whole data directory is absent. An existing
+one with no sketches in it is a user who deleted their sketches, not a fresh
+install, and re-seeding would be obnoxious.
+
+Expected to land beside `sketches/`:
+
+- `assets/` -- images pulled off the internet, cached so a sketch still runs
+  when the venue wifi is bad or the URL has rotted.
+- a preferences file, in YAML. Panel sizes currently live in localStorage,
+  which is the wrong home for anything a person might want to edit or copy
+  between machines; they should move here.
