@@ -10,23 +10,13 @@ EXAMPLES = path.join ROOT, 'examples'
 
 # The user's work lives outside the repo, so running the app never collides
 # with working on it. BEANS_DATA_HOME is how the test suite gets its own.
-dataHome = ->
-  return path.resolve process.env.BEANS_DATA_HOME if process.env.BEANS_DATA_HOME
-  share = process.env.XDG_DATA_HOME or path.join os.homedir(), '.local', 'share'
-  path.join share, 'coffeebeans'
-
-DATA     = dataHome()
+data     = require './data'
+DATA     = data.home()
 SKETCHES = path.join DATA, 'sketches'
 
-# Seeded only when there is no data directory at all -- an existing one with
-# an empty sketches/ belongs to the user, who may have deleted them on purpose.
 prepareDataHome = ->
-  fresh = not fs.existsSync DATA
-  await fsp.mkdir SKETCHES, recursive: yes
-  return unless fresh
-  for entry in await fsp.readdir EXAMPLES when entry.endsWith '.coffee'
-    await fsp.copyFile path.join(EXAMPLES, entry), path.join SKETCHES, entry
-  console.log "seeded #{SKETCHES} from examples/"
+  {added} = await data.prepare DATA, EXAMPLES
+  console.log "added to #{SKETCHES}: #{added.join ', '}" if added.length
   undefined
 
 MIME =
@@ -95,9 +85,16 @@ capture = (win) ->
   for delay, i in delays
     do (delay, i) ->
       setTimeout (->
-        image = await win.webContents.capturePage()
-        fs.writeFileSync "tmp/capture-#{i}.png", image.toPNG()
-        console.log "captured #{i} at #{delay}ms"
+        # capturePage rejects with UnknownVizError when the window is not
+        # being composited -- occluded, minimised, or simply not frontmost.
+        # That is the developer's desktop, not the app, and it must not
+        # leave the process running forever.
+        try
+          image = await win.webContents.capturePage()
+          fs.writeFileSync "tmp/capture-#{i}.png", image.toPNG()
+          console.log "captured #{i} at #{delay}ms"
+        catch error
+          console.log "capture #{i} failed: #{error.message} (is the window visible?)"
         app.quit() if i is delays.length - 1
       ), delay
 

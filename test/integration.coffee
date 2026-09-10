@@ -4,6 +4,7 @@
 fsp  = require 'fs/promises'
 path = require 'path'
 {Menu} = require 'electron'
+seeding = require '../src/main/data'
 
 wait = (ms) -> new Promise (resolve) -> setTimeout resolve, ms
 
@@ -284,6 +285,93 @@ module.exports = (win, paths) ->
   file = menu?.items.find (item) -> item.label is 'File'
   open = file?.submenu?.items.find (item) -> item.label is 'Open Data Folder'
   check 'File menu opens the data folder', open? and open.enabled, "#{file?.submenu?.items.length} items under File"
+
+  # 21. the shape primitives put pixels where they claim to
+  shapes = """
+screen 320, 200
+cls()
+line 10, 10, 100, 10, COLORS.white
+rect 150, 20, 200, 60, COLORS.red
+rectFill 220, 20, 260, 60, COLORS.lime
+circle 60, 140, 30, COLORS.cyan
+circleFill 160, 140, 30, COLORS.yellow
+print 'lineStart='   + (pget(10, 10)   is COLORS.white)
+print 'lineEnd='     + (pget(100, 10)  is COLORS.white)
+print 'rectEdge='    + (pget(150, 20)  is COLORS.red)
+print 'rectHollow='  + (pget(175, 40)  is COLORS.red)
+print 'fillCentre='  + (pget(240, 40)  is COLORS.lime)
+print 'circleRim='   + (pget(60, 110)  is COLORS.cyan)
+print 'circleHollow='+ (pget(60, 140)  is COLORS.cyan)
+print 'discCentre='  + (pget(160, 140) is COLORS.yellow)
+"""
+  await setDoc shapes
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 800
+  text   = await consoleText()
+  wanted = ['lineStart=true', 'lineEnd=true', 'rectEdge=true', 'rectHollow=false',
+            'fillCentre=true', 'circleRim=true', 'circleHollow=false', 'discCentre=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'shapes land where they claim', absent.length is 0, "missing #{absent.join ', '}"
+
+  # 22. clipping, not iterating: a line across a billion pixels is cheap
+  await setDoc "screen 320, 200\ncls()\nt = performance.now()\nline -1e9, -1e9, 1e9, 1e9, COLORS.white\nline 400, 400, 900, 900, COLORS.red\nprint 'ms=' + round(performance.now() - t)\nprint 'diagonal=' + (pget(160, 160) is COLORS.white)\nprint 'offscreen=' + (pget(319, 199) is COLORS.red)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 800
+  text = await consoleText()
+  elapsed = Number /ms=(\d+)/.exec(text)?[1] ? 9999
+  check 'line clips instead of iterating', elapsed < 50 and text.includes('diagonal=true') and text.includes('offscreen=false'), JSON.stringify text.trim()
+
+  # 23. a sketch that is not there must not take the boot sequence with it
+  missingName = 'definitely-not-a-sketch'
+  await js "return (async () => { try { await beans.read('#{missingName}') } catch (e) { return 'threw' } })()"
+  await clearConsole()
+  await js "await Editor.load('scratch'); return true"
+  alive = await js """
+    document.getElementById('runAll').click()
+    return true
+  """
+  await wait 600
+  check 'a failed read does not stop the app', alive is true and (await js "return typeof Panels.size('editor')") is 'number'
+
+  # 24. seeding offers each example once, and never at the cost of your edits
+  sandbox  = path.join paths.data, 'seedcheck'
+  fakeEx   = path.join sandbox, 'examples'
+  fakeData = path.join sandbox, 'data'
+  await fsp.mkdir fakeEx, recursive: yes
+  await fsp.writeFile path.join(fakeEx, 'one.coffee'), 'print 1\n', 'utf8'
+
+  first = await seeding.prepare fakeData, fakeEx
+  check 'seeding copies a new example', first.added.join(',') is 'one.coffee', first.added.join ','
+
+  mine = path.join fakeData, 'sketches', 'one.coffee'
+  await fsp.writeFile mine, 'print "mine"\n', 'utf8'
+  await fsp.writeFile path.join(fakeEx, 'two.coffee'), 'print 2\n', 'utf8'
+  second = await seeding.prepare fakeData, fakeEx
+  kept   = await fsp.readFile mine, 'utf8'
+  check 'a new example arrives without clobbering an edited one',
+    second.added.join(',') is 'two.coffee' and kept is 'print "mine"\n',
+    "added=#{second.added.join ','} kept=#{JSON.stringify kept}"
+
+  await fsp.rm path.join(fakeData, 'sketches', 'two.coffee')
+  third = await seeding.prepare fakeData, fakeEx
+  gone  = not (await fsp.readdir path.join fakeData, 'sketches').includes 'two.coffee'
+  check 'a deleted example stays deleted', third.added.length is 0 and gone,
+    "added=#{third.added.join ','} gone=#{gone}"
+
+  # A data directory predating the manifest must not have its contents
+  # treated as never-offered, or an upgrade would overwrite every edit.
+  legacy = path.join sandbox, 'legacy'
+  await fsp.mkdir path.join(legacy, 'sketches'), recursive: yes
+  await fsp.writeFile path.join(legacy, 'sketches', 'one.coffee'), 'print "old"\n', 'utf8'
+  fourth = await seeding.prepare legacy, fakeEx
+  survived = await fsp.readFile path.join(legacy, 'sketches', 'one.coffee'), 'utf8'
+  check 'a pre-manifest data folder keeps its edits',
+    survived is 'print "old"\n' and fourth.added.join(',') is 'two.coffee',
+    "added=#{fourth.added.join ','} kept=#{JSON.stringify survived}"
 
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'

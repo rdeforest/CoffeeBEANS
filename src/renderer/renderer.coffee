@@ -308,12 +308,27 @@ window.addEventListener 'resize', reflowPanels
 # --- boot -------------------------------------------------------------------
 
 do ->
+  # The worker and the present loop come up first and unconditionally. If
+  # loading a sketch goes wrong, you should still get a window that draws
+  # and a console that tells you what happened.
   restorePanels()
-  names = await fillPicker()
-  await selectSketch (params.get('sketch') ? names[0])
   start()
   frame()
   say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter runs the block under the cursor, :help for the rest', 'sys'
+
+  try
+    names  = await fillPicker()
+    wanted = params.get 'sketch'
+    if wanted and wanted not in names
+      say "no sketch named \"#{wanted}\" -- opening #{names[0]}", 'err'
+      wanted = null
+    if names.length
+      await selectSketch (wanted ? names[0])
+    else
+      say "no sketches in your data folder (File -> Open Data Folder)", 'err'
+  catch error
+    say "startup: #{error.message}", 'err'
+
   if params.has 'help'
     topic = params.get 'help'
     showHelp (if topic and topic isnt '1' then topic else undefined)

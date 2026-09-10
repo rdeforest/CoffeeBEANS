@@ -22,6 +22,22 @@ screen. That is what makes a plain `loop` work as an animation loop.
 Stop sets an interrupt flag. A sketch that reaches `buffer.swap` unwinds
 cleanly and keeps its definitions; one with no yield point gets terminated.
 
+## Drawing
+
+    point x, y                    line x1, y1, x2, y2
+    rect x1, y1, x2, y2           rectFill x1, y1, x2, y2
+    circle cx, cy, r              circleFill cx, cy, r
+    ellipse cx, cy, rx, ry        ellipseFill cx, cy, rx, ry
+
+Every one takes an optional colour as its last argument, and every one is a
+primitive writing the buffer directly rather than a loop over `point`.
+Rectangles take two corners, like `line`, rather than a position and a size,
+so the arguments do not change meaning between neighbouring commands.
+
+Lines are clipped before they are drawn, so `line -1e9, -1e9, 1e9, 1e9`
+costs the same as any other line. Ellipses are scanline-filled and bounded
+by the screen for the same reason.
+
 ## Where your work lives
 
 Sketches live in your data directory, not in this repo, so running the app
@@ -34,6 +50,10 @@ The directory is seeded from `examples/` the first time it is created, and
 never again -- an existing data directory belongs to you, including an empty
 one. `BEANS_DATA_HOME` overrides the location; that is how `npm test` gets
 its own throwaway copy.
+
+Each example is offered exactly once, recorded in `.seeded`, so a new
+example added in an update arrives on your next launch while an example you
+edited keeps your edit and one you deleted stays deleted.
 
 The directory is a directory rather than a bare pile of sketches so it has
 somewhere to grow: `assets/` and a preferences file are the next things

@@ -101,3 +101,51 @@ Expected to land beside `sketches/`:
 - a preferences file, in YAML. Panel sizes currently live in localStorage,
   which is the wrong home for anything a person might want to edit or copy
   between machines; they should move here.
+
+## Capture and redraw, for feedback effects
+
+The eventual want: sample a region of the screen and redraw it scaled and
+rotated, repeatedly, so a vertical line becomes two branches becomes a tree.
+
+The thing to notice before building it is that **four separate features want
+the same underlying type**: an off-screen pixel surface with a blit that can
+scale and rotate.
+
+- capture-and-redraw, above
+- sprites, which are surfaces the main thread composites
+- images loaded from disk or the network
+- bitmap font glyphs, which are just small sprites
+
+Design that surface type once and all four fall out. Designing them
+separately means writing the same sampling loop four times.
+
+### Sampling
+
+Iterate the *destination* pixels over the transformed bounding box and
+inverse-transform each one back into the source. Forward mapping leaves
+holes whenever the transform magnifies. Nearest-neighbour by default --
+the crunch is the aesthetic, and it is what makes the moire in the hallway
+sketch interesting rather than a defect. Bilinear can be an option later.
+
+### The part that is easy to get wrong
+
+For feedback effects the source and the destination are the same buffer.
+Sampling from a region you are simultaneously writing gives progressive
+smearing; sampling a snapshot gives clean recursion. Both are legitimate
+effects, so the choice has to be explicit rather than an accident of loop
+order. That argues for two operations, not one:
+
+    snap = capture 0, 0, 320, 200      # a surface, detached from the screen
+    draw snap, x, y, scale: 0.7, angle: 0.4
+
+`capture` copies; `draw` blits. If someone wants smearing they can blit the
+screen to itself deliberately once that is a separate, named thing.
+
+### Open question
+
+Where does a surface live? Worker-local memory is enough for anything the
+worker draws itself. Hardware sprites are different -- the main thread
+composites those during the blit, so they have to be in the SAB, which
+means an allocator and a free list. The cheap answer is worker-local by
+default, promoted into the SAB only when registered as a sprite. Decide
+before writing the type, because it changes what a surface handle is.

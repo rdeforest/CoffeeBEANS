@@ -29,6 +29,19 @@ SECTIONS = [
     ['print args...',     'write a line to this console']
   ]
 ,
+  name:  'shapes'
+  title: 'Shapes'
+  lines: [
+    ['line x1,y1,x2,y2',        'clipped, so huge coordinates are cheap']
+    ['rect x1,y1,x2,y2',        'outline, corner to corner like line']
+    ['rectFill x1,y1,x2,y2',    'filled']
+    ['circle cx,cy,r',          'outline']
+    ['circleFill cx,cy,r',      'filled']
+    ['ellipse cx,cy,rx,ry',     'outline']
+    ['ellipseFill cx,cy,rx,ry', 'filled']
+    ['',                        'every one takes an optional colour last']
+  ]
+,
   name:  'buffers'
   title: 'Buffers'
   lines: [
