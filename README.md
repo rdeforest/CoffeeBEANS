@@ -42,6 +42,13 @@ BASIC's immediate mode. `:restart` is `RUN`: a clean scope.
 Ctrl-r stays bound to redo in normal mode; the run binding only takes it in
 visual mode, where vim leaves it free.
 
+## Panels
+
+Screen, editor and console are resizable -- drag the splitters between them.
+Sizes are remembered. Ctrl-e hides and shows the editor. Detaching panels
+into their own windows, and driving all of this from a sketch, is planned:
+see NOTES.md.
+
 ## Layout
 
     src/main/       Electron main process; serves app:// with COOP/COEP

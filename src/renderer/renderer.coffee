@@ -24,6 +24,70 @@ say = (text, kind = '') ->
   output.appendChild line
   output.scrollTop = output.scrollHeight
 
+# --- panels -----------------------------------------------------------------
+
+# Sizes are CSS variables so the grid stays declarative; dragging a splitter
+# only ever writes a number. Detaching and scripting these is future work --
+# see NOTES.md.
+PANELS =
+  editor:
+    variable: '--editor-w'
+    min:      220
+    room:     -> window.innerWidth  - 240
+    measure:  (event) -> window.innerWidth  - event.clientX
+    current:  -> document.getElementById('editor').getBoundingClientRect().width
+  console:
+    variable: '--console-h'
+    min:      32
+    room:     -> window.innerHeight - 260
+    measure:  (event) -> window.innerHeight - event.clientY
+    current:  -> document.getElementById('console').getBoundingClientRect().height
+
+applyPanel = (name, px) ->
+  panel = PANELS[name]
+  size  = Math.round Math.min Math.max(px, panel.min), Math.max panel.min, panel.room()
+  document.documentElement.style.setProperty panel.variable, "#{size}px"
+  resize()
+  size
+
+setPanel = (name, px) ->
+  size = applyPanel name, px
+  localStorage.setItem "panel.#{name}", size
+  size
+
+# A window that got smaller has to give the panel back some room, but that is
+# not a preference the user expressed, so it must not overwrite the stored one.
+reflowPanels = ->
+  for name, panel of PANELS
+    size = panel.current()
+    applyPanel name, size if size > panel.room()
+  undefined
+
+dragPanel = (splitter, name) ->
+  {measure} = PANELS[name]
+  splitter.addEventListener 'pointerdown', (event) ->
+    event.preventDefault()
+    splitter.setPointerCapture event.pointerId
+    splitter.classList.add 'dragging'
+    onMove = (moved) -> setPanel name, measure moved
+    onUp   = ->
+      splitter.classList.remove 'dragging'
+      splitter.removeEventListener 'pointermove', onMove
+      splitter.removeEventListener 'pointerup',   onUp
+    splitter.addEventListener 'pointermove', onMove
+    splitter.addEventListener 'pointerup',   onUp
+
+restorePanels = ->
+  for name of PANELS
+    stored = Number localStorage.getItem "panel.#{name}"
+    setPanel name, stored if stored > 0
+  undefined
+
+globalThis.Panels =
+  set:     setPanel
+  size:    (name) -> PANELS[name].current()
+  names:   -> Object.keys PANELS
+
 showHelp = (topic) ->
   sections = HELP.match topic
   unless sections.length
@@ -177,11 +241,16 @@ window.addEventListener 'keydown', (event) ->
     event.preventDefault()
     handled[event.key]()
 
+dragPanel document.getElementById('splitEditor'),  'editor'
+dragPanel document.getElementById('splitConsole'), 'console'
+
 new ResizeObserver(resize).observe stage
+window.addEventListener 'resize', reflowPanels
 
 # --- boot -------------------------------------------------------------------
 
 do ->
+  restorePanels()
   names = await fillPicker()
   await selectSketch (params.get('sketch') ? names[0])
   start()

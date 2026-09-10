@@ -172,5 +172,31 @@ module.exports = (win, ROOT) ->
   onDisk = await fsp.readFile scratch, 'utf8'
   check 'switching sketches flushes a pending edit', onDisk.includes('PENDING EDIT'), JSON.stringify onDisk
 
+  # 14. panels resize, clamp at both ends, and remember the last size
+  await js "Panels.set('editor', 400); return true"
+  await wait 150
+  width = await js "return Math.round(Panels.size('editor'))"
+  check 'editor panel resizes', width is 400, "#{width}px"
+
+  await js "Panels.set('editor', 10); return true"
+  await wait 150
+  narrow = await js "return Math.round(Panels.size('editor'))"
+  check 'editor panel clamps to a minimum', narrow >= 200 and narrow < 400, "#{narrow}px"
+
+  await js "Panels.set('editor', 99999); return true"
+  await wait 150
+  wide  = await js "return Math.round(Panels.size('editor'))"
+  total = await js "return window.innerWidth"
+  check 'editor panel clamps to available room', wide < total - 100, "#{wide}px of #{total}px"
+
+  await js "Panels.set('console', 200); return true"
+  await wait 150
+  tall = await js "return Math.round(Panels.size('console'))"
+  remembered = await js "return Number(localStorage.getItem('panel.console'))"
+  check 'console panel resizes and is remembered', tall is 200 and remembered is 200, "#{tall}px stored=#{remembered}"
+
+  # leave the user's layout the way we found it
+  await js "localStorage.removeItem('panel.editor'); localStorage.removeItem('panel.console'); return true"
+
   console.log "\n#{if failures then "#{failures} FAILED" else 'all passed'}"
   failures
