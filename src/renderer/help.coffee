@@ -39,6 +39,19 @@ SECTIONS = [
     ['wait n',            'wait n presented frames']
   ]
 ,
+  name:  'input'
+  title: 'Input'
+  lines: [
+    ['',                  'click the screen to send keys to the sketch']
+    ["keys.down 'left'",  'held right now']
+    ["keys.hit 'space'",  'went down since the last frame, even a fast tap']
+    ['keys.any',          'is anything held']
+    ['keys.poll',         'claim hits by hand; buffer.swap already does']
+    ['mouse.x  mouse.y',  'in screen pixels, not window pixels']
+    ['mouse.left',        'and .right .middle .down']
+    ['mouse.wheel',       'delta since you last read it -- reading consumes']
+  ]
+,
   name:  'colors'
   title: 'Colors'
   lines: [

@@ -24,6 +24,62 @@ say = (text, kind = '') ->
   output.appendChild line
   output.scrollTop = output.scrollHeight
 
+# --- input ------------------------------------------------------------------
+
+# Keys reach the sketch only while the screen has focus, so the editor keeps
+# its own keystrokes. Click the screen to hand them over; click back to
+# take them away.
+setKey = (code, isDown) ->
+  index = KEYTABLE.index[code]
+  return false unless index?
+  word = index >>> 5
+  mask = 1 << (index & 31)
+  if isDown
+    Atomics.or  i32, H.KEYS     + word, mask
+    Atomics.or  i32, H.KEYS_HIT + word, mask
+  else
+    Atomics.and i32, H.KEYS     + word, ~mask
+  true
+
+clearKeys = ->
+  Atomics.store i32, H.KEYS + word, 0 for word in [0...LAYOUT.KEY_WORDS]
+  undefined
+
+toScreen = (event) ->
+  rect = canvas.getBoundingClientRect()
+  return null unless rect.width and rect.height and surface.width
+  clamp = (value, limit) -> Math.min Math.max(Math.floor(value), 0), limit - 1
+  x: clamp ((event.clientX - rect.left) / rect.width  * surface.width),  surface.width
+  y: clamp ((event.clientY - rect.top)  / rect.height * surface.height), surface.height
+
+listenForInput = ->
+  stage.tabIndex = 0
+
+  stage.addEventListener 'keydown', (event) ->
+    tracked = setKey event.code, yes
+    # Leave modified keys alone -- those are app and system shortcuts.
+    event.preventDefault() if tracked and not (event.ctrlKey or event.metaKey or event.altKey)
+  stage.addEventListener 'keyup', (event) -> setKey event.code, no
+  # A key still held when focus leaves would otherwise stay down forever.
+  stage.addEventListener 'blur', clearKeys
+
+  stage.addEventListener 'pointermove', (event) ->
+    position = toScreen event
+    return unless position
+    Atomics.store i32, H.MOUSE_X, position.x
+    Atomics.store i32, H.MOUSE_Y, position.y
+
+  buttons = (event) -> Atomics.store i32, H.MOUSE_BTN, event.buttons
+  stage.addEventListener 'pointerdown', (event) -> stage.focus(); buttons event
+  stage.addEventListener 'pointerup',   buttons
+  stage.addEventListener 'pointerleave', -> Atomics.store i32, H.MOUSE_BTN, 0
+  stage.addEventListener 'contextmenu', (event) -> event.preventDefault()
+  stage.addEventListener 'wheel', ((event) ->
+    Atomics.add i32, H.MOUSE_WHEEL, Math.round event.deltaY
+    event.preventDefault()
+  ), passive: no
+  undefined
+
 # --- panels -----------------------------------------------------------------
 
 # Sizes are CSS variables so the grid stays declarative; dragging a splitter
@@ -241,6 +297,8 @@ window.addEventListener 'keydown', (event) ->
     event.preventDefault()
     handled[event.key]()
 
+listenForInput()
+
 dragPanel document.getElementById('splitEditor'),  'editor'
 dragPanel document.getElementById('splitConsole'), 'console'
 
@@ -259,6 +317,7 @@ do ->
   if params.has 'help'
     topic = params.get 'help'
     showHelp (if topic and topic isnt '1' then topic else undefined)
+  stage.focus() if params.has 'focus'
   if params.has 'run'
     setTimeout (-> runSource Editor.all(), Editor.name()), 300
   if params.get 'stopAt'

@@ -37,7 +37,8 @@ const fail = (stage, error) => {
 self.addEventListener('message', async ({ data }) => {
   const handlers = {
     async boot() {
-      for (const path of ['/src/runtime/layout.coffee', '/src/runtime/colors.coffee', '/src/runtime/runtime.coffee'])
+      for (const path of ['/src/runtime/layout.coffee', '/src/runtime/keys.coffee', '/src/runtime/colors.coffee',
+           '/src/runtime/input.coffee', '/src/runtime/runtime.coffee'])
         await load(path)
       attach(data.sab)
       postMessage({ type: 'ready' })

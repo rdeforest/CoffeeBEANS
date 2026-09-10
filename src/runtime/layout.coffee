@@ -15,16 +15,19 @@ HEADER =
   MOUSE_X:    10
   MOUSE_Y:    11
   MOUSE_BTN:  12
-  KEYS:       16     # 16..23, one bit per keycode
+  MOUSE_WHEEL:13     # accumulates; the sketch consumes it by reading
+  KEYS:       16     # 16..23, one bit per key: held right now
+  KEYS_HIT:   24     # 24..31, sticky: went down since the sketch last looked
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 32
+HEADER_WORDS = 64        # 32..63 spare: wheel modes, gamepads, whatever comes
 BUFFERS      = 2
 
 globalThis.LAYOUT =
   HEADER:       HEADER
+  KEY_WORDS:    8
   MAX_WIDTH:    MAX_WIDTH
   MAX_HEIGHT:   MAX_HEIGHT
   MAX_PIXELS:   MAX_PIXELS

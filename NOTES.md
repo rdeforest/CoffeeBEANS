@@ -55,3 +55,27 @@ the layout. Detached, both are straightforward BrowserWindow operations.
 Either the verbs mean the obvious thing in each mode, or detaching is
 required before the window-ish verbs work. Pick one before writing the API,
 not after.
+
+## Input, and what it deliberately does not do yet
+
+Keys are a bitmap: one bit per key for "held", one for "went down since you
+last looked". That answers *is this key down*. It does not answer *what did
+they type*, and the difference matters as soon as anyone wants a sketch that
+accepts text -- keyboard layout, shifted characters, dead keys and IME all
+live on the other side of that line.
+
+The mechanism for text is different: a ring buffer of characters in the SAB
+with an atomic head and tail, filled from `keydown`'s resolved `event.key`
+rather than `event.code`. That is BASIC's `INKEY$`. Worth doing when
+something needs it, not before.
+
+Also missing on purpose, in rough order of likely demand:
+
+- `keys.released`, the falling edge. Same sticky-bit trick as `hit`, one
+  more bank of 8 words.
+- Key repeat. The bitmap has no notion of it; a sketch that wants repeat
+  can count frames itself, which is usually what you want anyway.
+- Gamepads. The Gamepad API is polled already, so it maps onto this design
+  cleanly -- main thread reads pads each frame and writes the header.
+
+Header words 32..63 are spare and reserved for exactly this sort of thing.

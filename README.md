@@ -42,6 +42,25 @@ BASIC's immediate mode. `:restart` is `RUN`: a clean scope.
 Ctrl-r stays bound to redo in normal mode; the run binding only takes it in
 visual mode, where vim leaves it free.
 
+## Input
+
+Polled, not evented -- a worker parked in `Atomics.wait` cannot receive a
+message, so the main thread writes shared memory and the sketch reads it.
+That is also how BASIC felt.
+
+    if keys.down 'left' then x -= 2
+    print 'jump' if keys.hit 'space'
+    point mouse.x, mouse.y if mouse.left
+
+`down` is held right now; `hit` went down since the last frame and is sticky
+in shared memory until claimed, so a tap that starts and ends between two
+frames is still caught. `buffer.swap` claims them; `keys.poll` does it by
+hand for code that never swaps.
+
+**Click the screen to send it keys.** Otherwise the editor keeps them, which
+is what you want while you are typing. The canvas gets a coffee-coloured
+outline when it holds the keyboard.
+
 ## Panels
 
 Screen, editor and console are resizable -- drag the splitters between them.

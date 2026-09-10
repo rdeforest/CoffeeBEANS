@@ -8,6 +8,8 @@ wait = (ms) -> new Promise (resolve) -> setTimeout resolve, ms
 
 module.exports = (win, ROOT) ->
   scratch = path.join ROOT, 'sketches', 'scratch.coffee'
+  guarded = path.join ROOT, 'sketches', 'hello.coffee'
+  before  = await fsp.readFile guarded, 'utf8'
   js      = (code) -> win.webContents.executeJavaScript "(async () => { #{code} })()", yes
   failures = 0
 
@@ -171,6 +173,9 @@ module.exports = (win, ROOT) ->
   await wait 700
   onDisk = await fsp.readFile scratch, 'utf8'
   check 'switching sketches flushes a pending edit', onDisk.includes('PENDING EDIT'), JSON.stringify onDisk
+  # Back to scratch at once: anything that edits while a real sketch is
+  # current would autosave test content straight over it.
+  await js "await Editor.load('scratch'); return true"
 
   # 14. panels resize, clamp at both ends, and remember the last size
   await js "Panels.set('editor', 400); return true"
@@ -194,6 +199,81 @@ module.exports = (win, ROOT) ->
   tall = await js "return Math.round(Panels.size('console'))"
   remembered = await js "return Number(localStorage.getItem('panel.console'))"
   check 'console panel resizes and is remembered', tall is 200 and remembered is 200, "#{tall}px stored=#{remembered}"
+
+  # 15. keyboard state reaches the sketch, and clears on keyup
+  key = (kind, code) -> js """
+    const stage = document.getElementById('stage')
+    stage.focus()
+    stage.dispatchEvent(new KeyboardEvent('#{kind}', { code: '#{code}', bubbles: true }))
+    return true
+  """
+
+  await setDoc "print 'down=' + keys.down('a')\n"
+  await wait 500
+  await key 'keydown', 'KeyA'
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'keys.down sees a held key', text.includes('down=true'), JSON.stringify text.trim()
+
+  await key 'keyup', 'KeyA'
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'keys.down clears on keyup', text.includes('down=false'), JSON.stringify text.trim()
+
+  # 16. a tap between frames is still caught, and claimed only once
+  await setDoc "keys.poll\nprint 'hit=' + keys.hit('b')\n"
+  await wait 500
+  await key 'keydown', 'KeyB'
+  await key 'keyup',   'KeyB'
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'keys.hit catches a tap between frames', text.includes('hit=true'), JSON.stringify text.trim()
+
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'keys.hit is claimed once', text.includes('hit=false'), JSON.stringify text.trim()
+
+  # 17. losing focus must not leave a key stuck down
+  await setDoc "print 'stuck=' + keys.down('c')\n"
+  await wait 500
+  await key 'keydown', 'KeyC'
+  # Dispatched rather than calling .blur(), which does nothing when the
+  # Electron window is not the OS-focused window. This exercises the
+  # handler; that a real blur fires it is browser behaviour.
+  await js "document.getElementById('stage').dispatchEvent(new FocusEvent('blur')); return true"
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'blur releases held keys', text.includes('stuck=false'), JSON.stringify text.trim()
+
+  # 18. mouse position arrives in screen pixels, not window pixels
+  await setDoc "print 'at=' + mouse.x + ',' + mouse.y\n"
+  await wait 500
+  await js """
+    const c = document.getElementById('screen')
+    const r = c.getBoundingClientRect()
+    document.getElementById('stage').dispatchEvent(new PointerEvent('pointermove', {
+      clientX: r.left + r.width * 0.25, clientY: r.top + r.height * 0.5, bubbles: true }))
+    return true
+  """
+  await clearConsole()
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'mouse maps into screen pixels', text.includes('at=80,100'), JSON.stringify text.trim()
+
+  # the suite owns scratch.coffee and nothing else
+  after = await fsp.readFile guarded, 'utf8'
+  check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"
 
   # leave the user's layout the way we found it
   await js "localStorage.removeItem('panel.editor'); localStorage.removeItem('panel.console'); return true"

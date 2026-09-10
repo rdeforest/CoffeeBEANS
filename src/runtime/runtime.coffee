@@ -35,6 +35,7 @@ doSwap = ->
     Atomics.wait state.i32, H.SWAP, 1, 100
     checkInterrupt()
   refreshBase()
+  INPUT.claimHits()      # a frame boundary is also an input boundary
   undefined
 
 # --- commands ---------------------------------------------------------------
@@ -101,7 +102,8 @@ globalThis.attach = (sab) ->
   state.u32 = new Uint32Array sab
   state.native = toNative COLORS.white
   installMath()
-  Object.assign globalThis, {screen, color, cls, point, pget, print, wait, buffer}
+  {keys, mouse} = INPUT.attach state
+  Object.assign globalThis, {screen, color, cls, point, pget, print, wait, buffer, keys, mouse}
   globalThis.Interrupted = Interrupted
   setDouble no          # a restart must not inherit the last sketch's mode
   screen 320, 200

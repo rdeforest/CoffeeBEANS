@@ -36,7 +36,9 @@
   .splitter.h { cursor: row-resize; }
   main.solo .splitter { display: none; }
   #stage { display: grid; place-items: center; overflow: hidden; background: #000; }
-  canvas { image-rendering: pixelated; }
+  canvas { image-rendering: pixelated; outline: 1px solid transparent; }
+  #stage:focus { outline: none; }
+  #stage:focus canvas { outline: 1px solid var(--coffee); }
   #editor { min-width: 0; overflow: hidden; }
 
   #console {
@@ -74,6 +76,7 @@
 <script>
   (async () => {
     for (const path of ['/src/runtime/layout.coffee',
+                        '/src/runtime/keys.coffee',
                         '/src/renderer/help.coffee',
                         '/src/renderer/editor.coffee',
                         '/src/renderer/renderer.coffee']) {
