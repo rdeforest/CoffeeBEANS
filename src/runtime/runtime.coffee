@@ -68,7 +68,7 @@ pget = (x, y) ->
   x |= 0
   y |= 0
   return 0 if x < 0 or y < 0 or x >= state.width or y >= state.height
-  state.u32[state.base + y * state.width + x]
+  fromNative state.u32[state.base + y * state.width + x]
 
 print = (args...) ->
   postMessage type: 'print', text: args.join ' '
@@ -103,5 +103,6 @@ globalThis.attach = (sab) ->
   installMath()
   Object.assign globalThis, {screen, color, cls, point, pget, print, wait, buffer}
   globalThis.Interrupted = Interrupted
+  setDouble no          # a restart must not inherit the last sketch's mode
   screen 320, 200
   undefined

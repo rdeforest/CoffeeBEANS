@@ -33,6 +33,8 @@ module.exports = (win, ROOT) ->
     return true
   """
 
+  runAll = -> js "document.getElementById('runAll').click(); return true"
+
   consoleText = -> js "return document.getElementById('console').textContent"
   clearConsole = -> js "document.getElementById('console').innerHTML = ''; return true"
 
@@ -117,6 +119,58 @@ module.exports = (win, ROOT) ->
   await wait 700
   doc = await js "return Editor.all()"
   check 'external write reloads editor', doc is "print 'FROM VIM'\n", JSON.stringify doc
+
+  # 9. :help goes through the real ex parser
+  await clearConsole()
+  await js "CM.Vim.handleEx(CM.getCM(Editor.view()), 'help'); return true"
+  await wait 300
+  text = await consoleText()
+  check ':help lists every section',
+    text.includes('Running code') and text.includes('Colors') and text.includes('Buffers')
+
+  await clearConsole()
+  await js "CM.Vim.handleEx(CM.getCM(Editor.view()), 'help colors'); return true"
+  await wait 300
+  text = await consoleText()
+  check ':help <topic> narrows to one section',
+    text.includes('Colors') and not text.includes('Running code')
+
+  # 10. a swap in single-buffer mode must not flip away the drawing
+  await setDoc "screen 320, 200\ncls()\npoint 10, 10, COLORS.white\nwait 1\nprint 'pget=' + pget(10, 10)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'wait keeps the drawing in single-buffer mode',
+    text.includes('pget=') and not text.includes('pget=0'), JSON.stringify text.trim()
+
+  # 11. double buffering must still flip: after a swap you are drawing
+  # into the buffer that was on screen, not the one you just filled.
+  await setDoc "screen 320, 200\ncls()\nbuffer.on\ncls()\npoint 10, 10, COLORS.white\nbefore = pget(10, 10)\nbuffer.swap\nprint 'flipped=' + (pget(10, 10) isnt before)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'double buffering flips on swap', text.includes('flipped=true'), JSON.stringify text.trim()
+
+  # 12. pget must return the color point was given, not the stored byte order
+  await setDoc "screen 320, 200\ncls()\npoint 5, 5, COLORS.red\nprint 'roundtrip=' + (pget(5, 5) is COLORS.red)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'pget round-trips a color', text.includes('roundtrip=true'), JSON.stringify text.trim()
+
+  # 13. switching sketches must not drop an edit the autosave has not flushed
+  await js "await Editor.load('scratch'); return true"
+  await setDoc "print 'PENDING EDIT'\n"
+  await js "await Editor.load('hello'); return true"
+  await wait 700
+  onDisk = await fsp.readFile scratch, 'utf8'
+  check 'switching sketches flushes a pending edit', onDisk.includes('PENDING EDIT'), JSON.stringify onDisk
 
   console.log "\n#{if failures then "#{failures} FAILED" else 'all passed'}"
   failures

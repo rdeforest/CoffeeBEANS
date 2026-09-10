@@ -24,6 +24,21 @@ say = (text, kind = '') ->
   output.appendChild line
   output.scrollTop = output.scrollHeight
 
+showHelp = (topic) ->
+  sections = HELP.match topic
+  unless sections.length
+    say "no help for \"#{topic}\" -- try :help with no topic", 'err'
+    return
+  entries = [].concat (section.lines for section in sections)...
+  width   = Math.max (syntax.length for [syntax] in entries)...
+  top     = output.scrollHeight
+  for section in sections
+    say section.title, 'help-head'
+    for [syntax, description] in section.lines
+      say "  #{syntax.padEnd width}   #{description}", 'help'
+  output.scrollTop = top          # land on the first section, not the last
+  undefined
+
 # --- presentation -----------------------------------------------------------
 
 resize = ->
@@ -54,9 +69,12 @@ frame = ->
   return unless surface.width
 
   if Atomics.load(i32, H.SWAP) is 1
-    front = 1 - Atomics.load i32, H.FRONT
-    Atomics.store  i32, H.FRONT, front
-    present front
+    # Only double buffering flips. Single buffered, a swap means no more than
+    # "wait until this frame is on screen" -- flipping would hand the sketch
+    # the other buffer and its drawing would vanish.
+    if Atomics.load(i32, H.DOUBLE) is 1
+      Atomics.store i32, H.FRONT, 1 - Atomics.load i32, H.FRONT
+    present Atomics.load i32, H.FRONT
     Atomics.store  i32, H.SWAP, 0
     Atomics.notify i32, H.SWAP
   else
@@ -123,6 +141,7 @@ Editor.mount document.getElementById('editor'),
   onRunAll:   (source, name) -> runSource source, name
   onRestart:  (source, name) -> say '*** restarting worker ***', 'sys'; start {source, name}
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
+  onHelp:     showHelp
 
 selectSketch = (name) ->
   await Editor.load name
@@ -167,7 +186,10 @@ do ->
   await selectSketch (params.get('sketch') ? names[0])
   start()
   frame()
-  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter runs the block under the cursor', 'sys'
+  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter runs the block under the cursor, :help for the rest', 'sys'
+  if params.has 'help'
+    topic = params.get 'help'
+    showHelp (if topic and topic isnt '1' then topic else undefined)
   if params.has 'run'
     setTimeout (-> runSource Editor.all(), Editor.name()), 300
   if params.get 'stopAt'

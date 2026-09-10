@@ -37,6 +37,8 @@
   }
   .err { color: #ff6b6b; }
   .sys { opacity: .5; }
+  .help-head { color: var(--coffee); font-weight: bold; margin-top: .5rem; }
+  .help      { color: #d3d3d8; }
 </style>
 
 <header>
@@ -62,6 +64,7 @@
 <script>
   (async () => {
     for (const path of ['/src/runtime/layout.coffee',
+                        '/src/renderer/help.coffee',
                         '/src/renderer/editor.coffee',
                         '/src/renderer/renderer.coffee']) {
       const source = await (await fetch(path)).text()

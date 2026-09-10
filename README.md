@@ -33,6 +33,7 @@ window reload the pane. Running is an operation on a region:
     Ctrl-Shift-Enter    restart the worker and run the whole buffer
     :w                  force a save        :run       run the whole buffer
     :restart            fresh worker        Ctrl-.     stop
+    :help [topic]       quick reference in the console pane
 
 Ctrl-Enter and `:run` evaluate into the *live* worker, so definitions persist
 between runs -- define a function in one region, call it from another. That is

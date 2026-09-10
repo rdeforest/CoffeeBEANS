@@ -157,6 +157,7 @@ installVimCommands = ->
   Vim.defineEx 'write',   'w',   -> save()
   Vim.defineEx 'run',     'run', -> runAll()
   Vim.defineEx 'restart', 'restart', -> restartAll()
+  Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?[0]
 
 # --- public -----------------------------------------------------------------
 
@@ -190,6 +191,7 @@ Editor =
     view
 
   load: (name) ->
+    await save()          # the outgoing sketch may have an unflushed edit
     text        = await beans.read name
     current     = name
     lastWritten = text

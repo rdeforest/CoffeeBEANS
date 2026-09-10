@@ -64,7 +64,12 @@ toNative = (argb) ->
   b =  argb         & 0xFF
   ((a << 24) | (b << 16) | (g << 8) | r) >>> 0
 
+# Swapping R and B is its own inverse, so this is toNative again -- named
+# separately because the direction is what matters at the call site.
+fromNative = toNative
+
 globalThis.COLORS       = COLORS
 globalThis.ColorBuilder = ColorBuilder
 globalThis.toColor      = toColor
 globalThis.toNative     = toNative
+globalThis.fromNative   = fromNative
