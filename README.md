@@ -38,6 +38,25 @@ Lines are clipped before they are drawn, so `line -1e9, -1e9, 1e9, 1e9`
 costs the same as any other line. Ellipses are scanline-filled and bounded
 by the screen for the same reason.
 
+## Surfaces
+
+An off-screen surface is shaped exactly like the screen, so every drawing
+command works on one without knowing the difference:
+
+    canvas = surface 64, 64
+    drawTo canvas, ->
+      cls 0x00000000
+      circleFill 32, 32, 20, COLORS.coffee
+    put canvas, 100, 80
+
+`get` captures a region, `put` blits one back, `stamp` blits one scaled and
+rotated, and `overlaps` answers collision by actual pixels rather than
+bounding boxes. `drawTo` takes a block, which restores the previous target
+even if the block throws; called bare it is a mode, like the current colour.
+
+The same type is meant to serve sprites, loaded images and font glyphs when
+those arrive. `examples/tree.coffee` uses it for recursive feedback.
+
 ## Where your work lives
 
 Sketches live in your data directory, not in this repo, so running the app

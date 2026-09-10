@@ -42,6 +42,19 @@ SECTIONS = [
     ['',                        'every one takes an optional colour last']
   ]
 ,
+  name:  'surfaces'
+  title: 'Surfaces'
+  lines: [
+    ['surface w, h',        'a new off-screen surface, cleared transparent']
+    ['get x1,y1,x2,y2',     'capture a region of the current target']
+    ['put s, x, y',         'blit it back, skipping transparent pixels']
+    ["put s, x, y, 'xor'",  "also 'copy', 'or', 'and' -- PUT's old actions"]
+    ['stamp s, x, y, opts', 'scale:, angle:, anchorX:, anchorY:, mode:']
+    ['drawTo s, -> ...',    'send every drawing command to s instead']
+    ['drawTo s',            'same, but as a mode until you drawTo display']
+    ['overlaps a,ax,ay,b,bx,by', 'pixel-accurate, not just bounding boxes']
+  ]
+,
   name:  'buffers'
   title: 'Buffers'
   lines: [

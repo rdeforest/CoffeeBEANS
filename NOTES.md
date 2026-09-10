@@ -141,7 +141,7 @@ order. That argues for two operations, not one:
 `capture` copies; `draw` blits. If someone wants smearing they can blit the
 screen to itself deliberately once that is a separate, named thing.
 
-### Open question
+### Still open
 
 Where does a surface live? Worker-local memory is enough for anything the
 worker draws itself. Hardware sprites are different -- the main thread
@@ -149,3 +149,40 @@ composites those during the blit, so they have to be in the SAB, which
 means an allocator and a free list. The cheap answer is worker-local by
 default, promoted into the SAB only when registered as a sprite. Decide
 before writing the type, because it changes what a surface handle is.
+
+## What is left of sprites
+
+Surfaces, get/put/stamp and pixel-accurate `overlaps` are in. What is not is
+the *hardware* half: sprites that live outside both framebuffers, composited
+by the main thread during present, so moving one does not dirty the picture
+underneath.
+
+Worth being honest about the payoff. Every sketch so far is a `cls` and
+redraw loop, and in that shape hardware sprites buy nothing -- the
+background is being repainted anyway. Where they do pay is the case with no
+full redraw: a cursor over a canvas you do not want to touch, which is
+exactly the paint-app shape. Build them when something needs that, not
+before.
+
+When it happens it needs a sprite arena in the SAB, because the main thread
+has to read the pixels. Surfaces stay worker-local by default and only get
+copied in when registered as a sprite; sprite counts are small and stable,
+so a slot allocator is enough and no general-purpose heap is needed.
+
+## Smaller things noticed while building surfaces
+
+- `get` allocates a fresh Uint32Array every call. `examples/tree.coffee`
+  makes seven per frame, which is a couple of megabytes of garbage a frame.
+  A `get x1, y1, x2, y2, into: existing` form would reuse the storage.
+- `stamp` samples nearest neighbour. Bilinear would want to be an option
+  rather than a replacement -- the crunch is the aesthetic.
+- `overlaps` tests alpha per pixel over the overlapping rectangle. A cached
+  1-bit mask per surface would be faster, at the cost of invalidating it on
+  every draw into that surface. Not worth the bug surface yet.
+
+## Line styles and fill patterns
+
+Wanted eventually, and they fit the existing shape: both are state, like the
+current colour. A line style is a repeating bit pattern consumed along the
+walk; a fill pattern is an 8x8 tile indexed by destination coordinates, which
+is how every paint program of that era did it. Neither changes any signature.

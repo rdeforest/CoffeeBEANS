@@ -9,18 +9,26 @@ class Interrupted extends Error
 state =
   i32:     null
   u32:     null
-  width:   320
-  height:  200
   double:  no
-  base:    LAYOUT.bufferWords 0
   native:  0
+
+# Everything that draws writes to `target`. The screen is just the target
+# that happens to live in shared memory; a Surface is one that does not, so
+# every primitive works off screen for free.
+display =
+  pixels: null
+  base:   LAYOUT.bufferWords 0
+  width:  320
+  height: 200
+
+target = display
 
 checkInterrupt = ->
   throw new Interrupted() if Atomics.load(state.i32, H.INTERRUPT) is 1
 
 refreshBase = ->
-  front     = Atomics.load state.i32, H.FRONT
-  state.base = LAYOUT.bufferWords if state.double then 1 - front else front
+  front        = Atomics.load state.i32, H.FRONT
+  display.base = LAYOUT.bufferWords if state.double then 1 - front else front
 
 setDouble = (value) ->
   state.double = value
@@ -41,8 +49,8 @@ doSwap = ->
 # --- commands ---------------------------------------------------------------
 
 screen = (width, height) ->
-  state.width  = width
-  state.height = height
+  display.width  = width
+  display.height = height
   Atomics.store state.i32, H.WIDTH,  width
   Atomics.store state.i32, H.HEIGHT, height
   # A sketch that reads the mouse before it has moved should get somewhere
@@ -61,14 +69,14 @@ color = (value) ->
 
 cls = (value) ->
   fill = if value? then toNative toColor value else 0xFF000000
-  state.u32.fill fill, state.base, state.base + state.width * state.height
+  target.pixels.fill fill, target.base, target.base + target.width * target.height
   undefined
 
 point = (x, y, value) ->
   x |= 0
   y |= 0
-  return undefined if x < 0 or y < 0 or x >= state.width or y >= state.height
-  state.u32[state.base + y * state.width + x] = resolve value
+  return undefined if x < 0 or y < 0 or x >= target.width or y >= target.height
+  target.pixels[target.base + y * target.width + x] = resolve value
   undefined
 
 # --- shapes -----------------------------------------------------------------
@@ -79,17 +87,17 @@ point = (x, y, value) ->
 resolve = (value) -> if value? then toNative toColor value else state.native
 
 plot = (x, y, pixel) ->
-  return if x < 0 or y < 0 or x >= state.width or y >= state.height
-  state.u32[state.base + y * state.width + x] = pixel
+  return if x < 0 or y < 0 or x >= target.width or y >= target.height
+  target.pixels[target.base + y * target.width + x] = pixel
   undefined
 
 span = (y, from, to, pixel) ->
-  return if y < 0 or y >= state.height
+  return if y < 0 or y >= target.height
   left  = Math.max 0,                 Math.min from, to
-  right = Math.min state.width - 1,   Math.max from, to
+  right = Math.min target.width - 1,   Math.max from, to
   return if left > right
-  start = state.base + y * state.width + left
-  state.u32.fill pixel, start, start + (right - left + 1)
+  start = target.base + y * target.width + left
+  target.pixels.fill pixel, start, start + (right - left + 1)
   undefined
 
 OUT = {LEFT: 1, RIGHT: 2, BOTTOM: 4, TOP: 8}
@@ -112,8 +120,8 @@ outcode = (x, y, maxX, maxY) ->
   code
 
 clipLine = (a, b) ->
-  maxX = state.width  - 1
-  maxY = state.height - 1
+  maxX = target.width  - 1
+  maxY = target.height - 1
   return null unless isFinite(a.x) and isFinite(a.y) and isFinite(b.x) and isFinite(b.y)
   codeA = outcode a.x, a.y, maxX, maxY
   codeB = outcode b.x, b.y, maxX, maxY
@@ -164,7 +172,7 @@ line = (x1, y1, x2, y2, value) ->
 rectFill = (x1, y1, x2, y2, value) ->
   pixel = resolve value
   top    = Math.max 0,                 Math.min y1, y2
-  bottom = Math.min state.height - 1,  Math.max y1, y2
+  bottom = Math.min target.height - 1,  Math.max y1, y2
   span y, x1, x2, pixel for y in [top..bottom] by 1 if top <= bottom
   undefined
 
@@ -176,7 +184,7 @@ rect = (x1, y1, x2, y2, value) ->
   span bottom, x1, x2, pixel
   left  = Math.min x1, x2
   right = Math.max x1, x2
-  for y in [Math.max(0, top)..Math.min(state.height - 1, bottom)] by 1
+  for y in [Math.max(0, top)..Math.min(target.height - 1, bottom)] by 1
     plot left,  y, pixel
     plot right, y, pixel
   undefined
@@ -187,7 +195,7 @@ ellipseFill = (cx, cy, rx, ry, value) ->
   return undefined unless rx > 0 and ry > 0
   pixel  = resolve value
   top    = Math.max 0,                Math.ceil  cy - ry
-  bottom = Math.min state.height - 1, Math.floor cy + ry
+  bottom = Math.min target.height - 1, Math.floor cy + ry
   for y in [top..bottom] by 1
     ratio = (y - cy) / ry
     continue if ratio * ratio > 1
@@ -201,14 +209,14 @@ ellipse = (cx, cy, rx, ry, value) ->
   return undefined unless rx > 0 and ry > 0
   pixel = resolve value
 
-  for y in [Math.max(0, Math.ceil cy - ry)..Math.min(state.height - 1, Math.floor cy + ry)] by 1
+  for y in [Math.max(0, Math.ceil cy - ry)..Math.min(target.height - 1, Math.floor cy + ry)] by 1
     ratio = (y - cy) / ry
     continue if ratio * ratio > 1
     half = rx * Math.sqrt 1 - ratio * ratio
     plot Math.round(cx - half), y, pixel
     plot Math.round(cx + half), y, pixel
 
-  for x in [Math.max(0, Math.ceil cx - rx)..Math.min(state.width - 1, Math.floor cx + rx)] by 1
+  for x in [Math.max(0, Math.ceil cx - rx)..Math.min(target.width - 1, Math.floor cx + rx)] by 1
     ratio = (x - cx) / rx
     continue if ratio * ratio > 1
     half = ry * Math.sqrt 1 - ratio * ratio
@@ -219,11 +227,52 @@ ellipse = (cx, cy, rx, ry, value) ->
 circle     = (cx, cy, r, value) -> ellipse     cx, cy, r, r, value
 circleFill = (cx, cy, r, value) -> ellipseFill cx, cy, r, r, value
 
+# --- surfaces ---------------------------------------------------------------
+
+surface = (width, height) -> new SURFACE.Surface width, height
+
+# GET in GW-BASIC, and the same corner-to-corner arguments as rect.
+get = (x1, y1, x2, y2) ->
+  left   = Math.max 0,                 Math.min x1, x2
+  top    = Math.max 0,                 Math.min y1, y2
+  right  = Math.min target.width  - 1, Math.max x1, x2
+  bottom = Math.min target.height - 1, Math.max y1, y2
+  return surface 1, 1 if left > right or top > bottom
+
+  taken = surface right - left + 1, bottom - top + 1
+  for y in [0...taken.height] by 1
+    from = target.base + (top + y) * target.width + left
+    taken.pixels.set target.pixels.subarray(from, from + taken.width), y * taken.width
+  taken
+
+put = (source, x, y, mode) ->
+  SURFACE.blit target, Math.round(x), Math.round(y), source, mode
+  undefined
+
+stamp = (source, x, y, options) ->
+  SURFACE.stamp target, x, y, source, options
+  undefined
+
+overlaps = SURFACE.overlaps
+
+# Bare, this is a mode, like the current colour. Given a body it is scoped,
+# which is what you want almost every time -- forgetting to change back
+# means the rest of your sketch draws somewhere you cannot see.
+drawTo = (destination, body) ->
+  previous = target
+  target   = destination ? display
+  return undefined unless body?
+  try
+    result = body()
+  finally
+    target = previous
+  result
+
 pget = (x, y) ->
   x |= 0
   y |= 0
-  return 0 if x < 0 or y < 0 or x >= state.width or y >= state.height
-  fromNative state.u32[state.base + y * state.width + x]
+  return 0 if x < 0 or y < 0 or x >= target.width or y >= target.height
+  fromNative target.pixels[target.base + y * target.width + x]
 
 print = (args...) ->
   postMessage type: 'print', text: args.join ' '
@@ -254,12 +303,14 @@ installMath = ->
 globalThis.attach = (sab) ->
   state.i32 = new Int32Array  sab, 0, LAYOUT.HEADER_WORDS
   state.u32 = new Uint32Array sab
+  display.pixels = state.u32
   state.native = toNative COLORS.white
   installMath()
   {keys, mouse} = INPUT.attach state
   Object.assign globalThis, {
     screen, color, cls, point, pget, print, wait, buffer, keys, mouse
     line, rect, rectFill, ellipse, ellipseFill, circle, circleFill
+    surface, get, put, stamp, drawTo, overlaps, display
   }
   globalThis.Interrupted = Interrupted
   setDouble no          # a restart must not inherit the last sketch's mode
