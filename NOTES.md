@@ -207,3 +207,43 @@ bootstrap lives inside an IIFE, and the worker listens with
 addEventListener rather than assigning onmessage. A test asserts the
 runtime globals are still reachable from a bare sketch, which is the
 cheapest way to catch the next one.
+
+## Flood fill
+
+Wanted: `fill x, y[, borderRule[, color]]`. The two cases already asked for
+are "stop at anything that is not the colour under x, y" and "stop at
+anything whose red component is above 0.1". Those are the same walk with a
+different predicate, so the border rule is a function from a pixel colour to
+stop-or-continue, defaulting to "not the seed colour", plus a few named
+rules so the common cases read like BASIC. Not designed yet; workshop the
+argument shape before writing the walk.
+
+## Known defects, queued
+
+Found by a code review on 2026-09-12 and deliberately left out of the worker
+lifecycle fix, so they do not get lost:
+
+- Runtime error line numbers never show. `worker-boot.js` matches
+  `<anonymous>:N:` in the stack, but CoffeeScript's inline source map adds a
+  `sourceURL`, so frames read `sketch (region):N:` and `line` is always
+  undefined. It would also be a JS line, not a CoffeeScript one; map it back
+  through the source map.
+- `buffer.fps` stores a header word the renderer never reads. Either pace
+  swaps in `frame` or drop it from `:help`.
+- `screen` accepts 0, negative and over-sized dimensions; the renderer then
+  throws in `createImageData` every frame. Clamp or throw in `screen`.
+- Autosave writes with truncate-then-write, and the watcher can fire on the
+  truncate and read a blank file 60ms later, which the editor then accepts
+  and autosaves back. Needs a slow disk or a large file. Write to a temp
+  file and rename, and ignore watcher events while our own write is in
+  flight.
+- Seeding copies an example over a user sketch of the same name if the name
+  is not yet in `.seeded`, and a pre-manifest directory with an emptied
+  `sketches/` gets re-seeded. Skip names already on disk, but still record
+  them.
+- `fs.watch` on the sketches directory has no error listener; removing the
+  directory while the app runs throws in the main process.
+- The `app://` path guard uses `startsWith ROOT` without a trailing
+  separator.
+- The rainbow in `curve.coffee` had to be hand-built from a hue ramp. A
+  `COLORS.fromHSV` beside `fromRGB` would have saved the detour.

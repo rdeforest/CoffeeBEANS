@@ -16,14 +16,53 @@ ctx      = canvas.getContext '2d'
 
 surface = width: 0, height: 0, imageData: null, view32: null
 
-setStatus = (text) -> statusEl.textContent = text
+status = ''
+setStatus = (text) ->
+  status = text
+  statusEl.textContent = text
+  # Run means "evaluate into the live worker", which a busy worker cannot
+  # do, so the buttons say so. Restart replaces the worker and always works.
+  for id in ['run', 'runAll']
+    document.getElementById(id).disabled = text is 'running'
+  undefined
+
+# --- console ----------------------------------------------------------------
+
+# Lines are queued and appended in batches, as one fragment with one scroll.
+# Appending per line forces a layout per line, which is quadratic in the
+# size of the console and is what froze the window when a sketch printed
+# every iteration of a loop. The cap keeps a runaway loop from eating memory.
+# A timer rather than requestAnimationFrame, because an occluded window gets
+# no animation frames and its console should still fill in.
+CONSOLE_CAP   = 2000
+CONSOLE_EVERY = 16
+queued        = []
+flushQueued   = null
+
+flushConsole = ->
+  clearTimeout flushQueued if flushQueued?
+  flushQueued = null
+  return unless queued.length
+  queued = queued.slice -CONSOLE_CAP if queued.length > CONSOLE_CAP
+  fragment = document.createDocumentFragment()
+  for {text, kind} in queued
+    line = document.createElement 'div'
+    line.className   = kind
+    line.textContent = text
+    fragment.appendChild line
+  if queued.length is CONSOLE_CAP
+    output.replaceChildren fragment
+  else
+    output.appendChild fragment
+    output.firstElementChild.remove() while output.childElementCount > CONSOLE_CAP
+  queued = []
+  output.scrollTop = output.scrollHeight
 
 say = (text, kind = '') ->
-  line = document.createElement 'div'
-  line.className   = kind
-  line.textContent = text
-  output.appendChild line
-  output.scrollTop = output.scrollHeight
+  queued.push {text, kind}
+  # Trim in chunks so a flood costs amortised constant time per line.
+  queued.splice 0, queued.length - CONSOLE_CAP if queued.length > 2 * CONSOLE_CAP
+  flushQueued ?= setTimeout flushConsole, CONSOLE_EVERY
 
 # --- input ------------------------------------------------------------------
 
@@ -157,6 +196,7 @@ showHelp = (topic) ->
     say section.title, 'help-head'
     for [syntax, description] in section.lines
       say "  #{syntax.padEnd width}   #{description}", 'help'
+  flushConsole()
   output.scrollTop = top          # land on the first section, not the last
   undefined
 
@@ -232,7 +272,7 @@ messages =
     return unless pending
     send pending
     pending = null
-  print:   (data) -> say data.text
+  print:   (data) -> say line for line in data.lines
   load:    (data) -> answerLoad data.url
   done:    -> setStatus 'ready'
   stopped: -> say '*** stopped ***', 'sys'; setStatus 'ready'
@@ -266,7 +306,14 @@ answerLoad = (url) ->
   Atomics.notify i32, H.LOAD_STATE
   undefined
 
+# The worker runs one thing at a time and its inbox is not a queue we want:
+# a run posted while a sketch is busy would sit there and fire the moment the
+# sketch ended, which looks exactly like the sketch running itself twice.
 send = ({source, name}) ->
+  if status is 'running'
+    say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
+    return
+  Atomics.store i32, H.INTERRUPT, 0   # a stop leaves the flag raised
   setStatus 'running'
   worker.postMessage {type: 'run', source, name}
 
@@ -283,12 +330,16 @@ start = (thenRun = null) ->
   setStatus 'booting'
 
 stop = ->
+  pending = null
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
+  # The deadline belongs to this worker. A restart before it passes replaces
+  # the worker, and this check must not shoot the new one.
+  stopping = worker
   deadline = performance.now() + 250
   check = ->
-    return unless statusEl.textContent is 'running'
+    return unless worker is stopping and status is 'running'
     if performance.now() > deadline
       say '*** no yield point, worker terminated (state lost) ***', 'sys'
       start()
@@ -298,8 +349,12 @@ stop = ->
 
 # --- editor wiring ----------------------------------------------------------
 
+# A run that arrives while the runtime is still loading waits for it; sent
+# straight through it would evaluate before `screen` exists. The latest
+# request wins, which is also what a held-down Ctrl-Enter means.
 runSource = (source, name) ->
   return start {source, name} unless worker
+  return pending = {source, name} if status is 'booting'
   send {source, name}
 
 Editor.mount document.getElementById('editor'),

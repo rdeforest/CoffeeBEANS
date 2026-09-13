@@ -94,6 +94,7 @@ stamp = (dest, x, y, source, options = {}) ->
 # than from a cached 1-bit mask, because a cached mask has to be invalidated
 # every time anything draws into the surface and that is a bug waiting.
 overlaps = (first, fx, fy, second, sx, sy) ->
+  fx = Math.round fx; fy = Math.round fy; sx = Math.round sx; sy = Math.round sy
   left   = Math.max fx, sx
   top    = Math.max fy, sy
   right  = Math.min fx + first.width,  sx + second.width

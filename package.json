@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "build:vendor": "esbuild src/renderer/vendor/editor-entry.js --bundle --format=iife --global-name=CM --outfile=src/renderer/vendor/editor.js --minify",
-    "test": "BEANS_TEST=1 BEANS_DATA_HOME=test_tmp electron ."
+    "test": "rm -rf test_tmp && BEANS_TEST=1 BEANS_DATA_HOME=test_tmp electron ."
   },
   "devDependencies": {
     "electron": "^44.3.0",

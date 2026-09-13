@@ -148,7 +148,12 @@ createWindow = ->
   watchSketches win
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
-      failures = await require('../../test/integration')(win, {root: ROOT, data: DATA, sketches: SKETCHES})
+      try
+        failures = await require('../../test/integration')(win, {root: ROOT, data: DATA, sketches: SKETCHES})
+      catch error
+        # A suite that throws must still bring the app down, or the run hangs.
+        console.error "suite crashed: #{error.stack ? error}"
+        failures = 1
       process.exitCode = if failures then 1 else 0
       app.quit()
   win

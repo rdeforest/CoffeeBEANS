@@ -19,7 +19,7 @@ SECTIONS = [
   name:  'screen'
   title: 'Screen'
   lines: [
-    ['screen w, h',       'set resolution (default 320, 200)']
+    ['screen w, h',       'set resolution (default 320, 200); resets to single buffering']
     ['cls()',             'clear to black']
     ['cls color',         'clear to a color']
     ['color c',           'set the current drawing color']

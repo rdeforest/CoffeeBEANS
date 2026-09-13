@@ -25,6 +25,7 @@
   select { background: #22222a; color: var(--coffee); }
   button.ghost { background: #22222a; color: var(--coffee); }
   button.stop  { background: #ff6b6b; }
+  button:disabled { opacity: .35; cursor: default; }
   #status { opacity: .7; min-width: 6rem; text-align: right; }
   #meter  { opacity: .45; font-variant-numeric: tabular-nums; }
 
@@ -55,10 +56,10 @@
 <header>
   <b>CoffeeBEANS</b>
   <select id="sketch"></select>
-  <button id="run">Run region</button>
-  <button id="runAll" class="ghost">Run all</button>
-  <button id="restart" class="ghost">Restart</button>
-  <button id="stop" class="stop">Stop</button>
+  <button id="run">&#9654; Run region</button>
+  <button id="runAll" class="ghost">&#9654;&#9654; Run all</button>
+  <button id="restart" class="ghost">&#8635; Restart</button>
+  <button id="stop" class="stop">&#9632; Stop</button>
   <span class="spacer"></span>
   <button id="toggle" class="ghost">Editor</button>
   <span id="meter"></span>

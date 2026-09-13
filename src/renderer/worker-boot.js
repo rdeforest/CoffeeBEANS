@@ -57,10 +57,14 @@
         postMessage({ type: 'ready' })
       },
       run() {
+        // Batched prints have to land before the line that ends the run.
+        const flush = () => globalThis.RUNTIME && globalThis.RUNTIME.flushPrint()
         try {
           evaluate(data.source, data.name || 'sketch.coffee', true)
+          flush()
           postMessage({ type: 'done' })
         } catch (error) {
+          flush()
           if (error instanceof Interrupted) postMessage({ type: 'stopped' })
           else fail('run', error)
         }

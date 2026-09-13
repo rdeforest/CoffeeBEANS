@@ -114,6 +114,17 @@ window reload the pane. Running is an operation on a region:
     :restart            fresh worker        Ctrl-.     stop
     :help [topic]       quick reference in the console pane
 
+A run pressed while a sketch is still running is refused, not queued: the
+run buttons grey out and the keyboard bindings say so in the console. Stop
+it first, or Restart, which replaces the worker. Otherwise the second run
+would fire the instant the first ended and look exactly like the sketch
+starting itself again.
+
+Modes persist in the live worker too: the current colour, the draw target,
+double buffering. `screen` resets double buffering, like BASIC's SCREEN
+reset pages, so a sketch starts in the mode it asks for rather than the one
+the last sketch left behind. Put `buffer.on` after `screen`.
+
 Ctrl-Enter and `:run` evaluate into the *live* worker, so definitions persist
 between runs -- define a function in one region, call it from another. That is
 BASIC's immediate mode. `:restart` is `RUN`: a clean scope.

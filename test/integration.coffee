@@ -646,6 +646,92 @@ catch error
   check 'runtime globals are not shadowed by the bootstrap', shadowed.length is 0,
     if shadowed.length then "shadowed: #{shadowed.join ', '}" else 'all reachable'
 
+  # 33. a stop must not poison the live worker: the next region that swaps runs
+  click = (id) -> js "document.getElementById('#{id}').click(); return true"
+  status = -> js "return document.getElementById('status').textContent"
+  await setDoc "screen 320, 200\nbuffer.on\nloop\n  buffer.swap\n"
+  await wait 500
+  await runAll()
+  await wait 300
+  await click 'stop'
+  await wait 300
+  await clearConsole()
+  await setDoc "buffer.swap\nprint 'ALIVE'\n"
+  await wait 500
+  await runAll()
+  await wait 500
+  text = await consoleText()
+  check 'stop does not poison the next run', text.includes('ALIVE') and not text.includes('stopped'), JSON.stringify text.trim()
+
+  # 34. a run while a sketch is running is refused, not queued: the buttons
+  # grey out, and the keyboard path says so
+  await setDoc "screen 320, 200\nbuffer.on\nloop\n  buffer.swap\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 300
+  greyed = await js "return document.getElementById('runAll').disabled && document.getElementById('run').disabled"
+  await js "Editor.runRegion(); return true"
+  await wait 300
+  text = await consoleText()
+  await click 'stop'
+  await wait 300
+  idle    = await status()
+  enabled = await js "return !document.getElementById('runAll').disabled"
+  check 'run while running is refused', greyed and text.includes('already running') and idle is 'ready' and enabled, "#{JSON.stringify text.trim()} status=#{idle} greyed=#{greyed} enabled=#{enabled}"
+
+  # 35. a restart right after a stop must not be killed by the stop's deadline
+  await setDoc "loop\n  0\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 200
+  await click 'stop'
+  await wait 50
+  await setDoc "screen 320, 200\nbuffer.on\nprint 'RESTARTED'\nloop\n  buffer.swap\n"
+  await click 'restart'
+  await wait 800
+  text = await consoleText()
+  live = await status()
+  check 'restart during a stop deadline survives', text.includes('RESTARTED') and not text.includes('no yield point') and live is 'running', "#{JSON.stringify text.trim()} status=#{live}"
+  await click 'stop'
+  await wait 300
+
+  # 36. a flood of prints is capped, and the last line still arrives
+  await setDoc "print i for i in [1..5000]\nprint 'LAST'\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 800
+  count = await js "return document.getElementById('console').childElementCount"
+  text  = await consoleText()
+  check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines"
+
+  # 37. fractional corners land on whole rows instead of mid-row
+  await setDoc "screen 320, 200\ncls()\nrectFill 0, 2.5, 10, 5.5, COLORS.white\nprint 'inside=' + (pget(5, 4) is COLORS.white)\nprint 'rowStart=' + (pget(0, 3) is COLORS.white)\nprint 'wrapped=' + (pget(300, 2) is COLORS.white)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'rectFill rounds fractional corners', text.includes('inside=true') and text.includes('rowStart=true') and text.includes('wrapped=false'), JSON.stringify text.trim()
+
+  # 38. a stopped double-buffered sketch must not leave the next sketch
+  # drawing into the buffer that is not on screen, or over its leftovers
+  await setDoc "screen 320, 200\nbuffer.on\nloop\n  cls()\n  point 10, 10, COLORS.red\n  buffer.swap\n"
+  await wait 500
+  await runAll()
+  await wait 400
+  await click 'stop'
+  await wait 300
+  await clearConsole()
+  await setDoc "screen 320, 200\ncls()\npoint 20, 20, COLORS.white\nprint 'onScreen=' + (display.base is LAYOUT.bufferWords display.pixels[LAYOUT.HEADER.FRONT])\nprint 'oldGone=' + (pget(10, 10) isnt COLORS.red)\n"
+  await wait 500
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'next sketch after a stopped double-buffered one draws on screen', text.includes('onScreen=true') and text.includes('oldGone=true'), JSON.stringify text.trim()
+
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'
   check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"

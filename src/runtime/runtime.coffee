@@ -39,27 +39,37 @@ setDouble = (value) ->
   undefined
 
 doSwap = ->
+  flushPrint()
   checkInterrupt()
   # Time from the previous swap returning to this one being asked for: the
   # cost of the sketch's own frame, which is the number worth tuning.
   now = performance.now()
   Atomics.store state.i32, H.SKETCH_US, Math.round (now - state.frameStart) * 1000 if state.frameStart?
   Atomics.store state.i32, H.SWAP, 1
-  while Atomics.load(state.i32, H.SWAP) is 1
-    Atomics.wait state.i32, H.SWAP, 1, 100
-    checkInterrupt()
-  refreshBase()
+  try
+    while Atomics.load(state.i32, H.SWAP) is 1
+      Atomics.wait state.i32, H.SWAP, 1, 100
+      checkInterrupt()
+  finally
+    # Whether the frame landed or a stop got there first, the renderer may
+    # have flipped; a stale base would have the next run draw on screen.
+    refreshBase()
   INPUT.claimHits()      # a frame boundary is also an input boundary
   state.frameStart = performance.now()
   undefined
 
 # --- commands ---------------------------------------------------------------
 
+# Like BASIC's SCREEN, this also resets the page mode. Modes persist in the
+# live worker, so without this a sketch run after a stopped double-buffered
+# one would draw into the back buffer, never swap, and show nothing but the
+# old sketch's last frame. Put `buffer.on` after `screen`.
 screen = (width, height) ->
   display.width  = width
   display.height = height
   Atomics.store state.i32, H.WIDTH,  width
   Atomics.store state.i32, H.HEIGHT, height
+  setDouble no
   # A sketch that reads the mouse before it has moved should get somewhere
   # sensible, and a resolution change must not leave it out of bounds.
   centre = (index, limit) ->
@@ -176,7 +186,11 @@ line = (x1, y1, x2, y2, value) ->
       y     += sy
   undefined
 
+# The rect family and get take corners in pixels. Rounding here rather than
+# in span keeps a fractional y from landing mid-row: y * width with y = 2.5
+# is not a row start, it is halfway across one.
 rectFill = (x1, y1, x2, y2, value) ->
+  x1 = Math.round x1; y1 = Math.round y1; x2 = Math.round x2; y2 = Math.round y2
   pixel = resolve value
   top    = Math.max 0,                 Math.min y1, y2
   bottom = Math.min target.height - 1,  Math.max y1, y2
@@ -184,6 +198,7 @@ rectFill = (x1, y1, x2, y2, value) ->
   undefined
 
 rect = (x1, y1, x2, y2, value) ->
+  x1 = Math.round x1; y1 = Math.round y1; x2 = Math.round x2; y2 = Math.round y2
   pixel  = resolve value
   top    = Math.min y1, y2
   bottom = Math.max y1, y2
@@ -240,6 +255,7 @@ surface = (width, height) -> new SURFACE.Surface width, height
 
 # GET in GW-BASIC, and the same corner-to-corner arguments as rect.
 get = (x1, y1, x2, y2) ->
+  x1 = Math.round x1; y1 = Math.round y1; x2 = Math.round x2; y2 = Math.round y2
   left   = Math.max 0,                 Math.min x1, x2
   top    = Math.max 0,                 Math.min y1, y2
   right  = Math.min target.width  - 1, Math.max x1, x2
@@ -391,8 +407,28 @@ pget = (x, y) ->
   return 0 if x < 0 or y < 0 or x >= target.width or y >= target.height
   fromNative target.pixels[target.base + y * target.width + x]
 
+# Prints are batched. One message per line was fine until a sketch printed
+# every iteration of a tight loop and the renderer drowned in messages it
+# could not append fast enough. A lone print still goes out at once; a burst
+# rides in one message per frame. The batch also flushes at every swap and
+# when the run ends, so nothing is held past a point the console could have
+# shown it, and a flood keeps only its most recent lines.
+PRINT_CAP   = 2000
+PRINT_EVERY = 16           # ms, about one frame
+printed     = []
+printedAt   = -Infinity
+
+flushPrint = ->
+  return unless printed.length
+  postMessage type: 'print', lines: printed
+  printed   = []
+  printedAt = performance.now()
+  undefined
+
 print = (args...) ->
-  postMessage type: 'print', text: args.join ' '
+  printed.push args.join ' '
+  printed.splice 0, PRINT_CAP >> 1 if printed.length > PRINT_CAP
+  flushPrint() if performance.now() - printedAt >= PRINT_EVERY
   undefined
 
 wait = (frames = 1) ->
@@ -434,6 +470,7 @@ globalThis.attach = (sab) ->
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME
   globalThis.Interrupted = Interrupted
   state.started = performance.now()
+  globalThis.RUNTIME     = {flushPrint}   # for worker-boot, at the end of a run
   setDouble no          # a restart must not inherit the last sketch's mode
   screen 320, 200
   undefined
