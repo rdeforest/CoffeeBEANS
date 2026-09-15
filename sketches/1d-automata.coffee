@@ -29,9 +29,12 @@ nextStateMaker = (rule) ->
         rule[n]
         )[1 .. -2]
 
-freshState = ->
+freshState = (seed = 1) ->
   state = [1..w].map -> 0
-  state[w // 2] = 1
+  x = w // 2
+  while seed
+    state[x++] = seed % 2
+    seed //= 2
   state
 
 print "..."
@@ -42,8 +45,8 @@ drawState = (state, y) ->
   for cell, x in state when cell
     point x, y
 
-drawRule = (rule) ->
-  state = freshState()
+drawRule = (rule, seed) ->
+  state     = freshState     seed
   nextState = nextStateMaker rule
 
   cls 'black'
@@ -55,10 +58,11 @@ drawRule = (rule) ->
 
 loop
   rule = floor 256 * mouse.x / (w - 1)
+  seed = floor 256 * mouse.y / (h - 1)
   
   if keys.down 'q'
     break
 
   if mouse.left
-    drawRule rule
+    drawRule rule, seed
     print rule
