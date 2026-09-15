@@ -31,7 +31,7 @@ rectFill 0, 120, 319, 149, maker (p) ->
 # paint too.
 textScale 2
 color gradient COLORS.fromHSV(50, 1, 1), COLORS.fromHSV(340, 0.9, 1), length: 200
-textAt 20, 20, 'COFFEEBEANS'
+textAt 20, 20, 'CoffeeBEANS'
 
 textScale 1
 color COLORS.white
