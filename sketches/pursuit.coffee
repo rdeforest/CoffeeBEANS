@@ -15,8 +15,8 @@
 # spiralling and start doing something else.
 ###
 
-MAX_TURN_SPEED = pi
-BUG_SPEED      = 0.0003
+MAX_TURN_RATE = 40 * pi # radian per second
+BUG_SPEED     = 0.01    # pixels per second
 
 screen SCREEN_WIDTH = 320, SCREEN_HEIGHT = 200
 
@@ -39,12 +39,16 @@ initBugs = (liveBugs) ->
 
 bugs = []
 
+t = Date.now()
 loop
+  dt = Date.now() - t
+  t  = Date.now()
+
   if mouse.left
     cls 'black'
-    liveBugs = 3 + floor 10 * mouse.x / SCREEN_WIDTH
+    liveBugs =        3 + floor(10 * mouse.x / SCREEN_WIDTH)
     bugs = initBugs liveBugs
-    turnSpeed = MAX_TURN_SPEED * mouse.y / SCREEN_HEIGHT
+    turnSpeed = MAX_TURN_RATE * dt * mouse.y / SCREEN_HEIGHT
 
   if liveBugs
     for bugA, i in bugs
@@ -58,7 +62,7 @@ loop
 
       bugA[2] += max -turnSpeed, min turnNeeded, turnSpeed
 
-      bugA[0] += BUG_SPEED * cos(bugA[2])
-      bugA[1] += BUG_SPEED * sin(bugA[2])
+      bugA[0] += BUG_SPEED * dt * cos(bugA[2])
+      bugA[1] += BUG_SPEED * dt * sin(bugA[2])
       point (p = bugA[0..1])...
 
