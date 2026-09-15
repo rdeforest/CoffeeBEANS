@@ -61,6 +61,28 @@ it parks. No promises, no await. Downloads are cached under `assets/` in your
 data folder on first fetch, so a sketch you demo on a stage with bad wifi
 still runs, and so does one whose URL rotted six months ago.
 
+## Filling
+
+    fill x, y                              # flood what matches the seed pixel
+    fill x, y, COLORS.red, border COLORS.white
+    fill x, y, COLORS.red, where (p) -> p.value < 0.5
+
+One walk, one question: may the fill continue into this pixel. "Stop at
+anything unlike where I started" and "stop at white" are not two features,
+they are two answers. `border` is BASIC's `PAINT`: it crosses anything that
+is not the border colour, where the default crosses nothing unlike the seed.
+
+A rule is a rule and a colour is not, so they tell themselves apart and
+`fill x, y, border black` needs no placeholder to mean "the colour I already
+set". Scanline spans, four-way, and it obeys `drawTo`.
+
+The probe a `where` predicate receives carries position (`p.x`, `p.y`), the
+colour there and at the seed, channels as `p.red`/`p.green`/`p.blue`/
+`p.alpha` and `p.hue`/`p.saturation`/`p.value`, and the four neighbours,
+which are `null` past the edge. It is one reused object, valid during the
+call and not after -- a fill tests tens of thousands of pixels and building
+one each would cost more than the walk.
+
 ## Surfaces
 
 An off-screen surface is shaped exactly like the screen, so every drawing

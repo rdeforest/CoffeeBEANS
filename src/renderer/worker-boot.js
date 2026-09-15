@@ -137,6 +137,7 @@
     '/src/runtime/colors.coffee',
     '/src/runtime/input.coffee',
     '/src/runtime/surface.coffee',
+    '/src/runtime/fill.coffee',
     '/src/runtime/font.coffee',
     '/src/runtime/runtime.coffee',
   ]

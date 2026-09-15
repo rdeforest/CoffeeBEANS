@@ -71,6 +71,20 @@ SECTIONS = [
     ['',                     'still runs on bad wifi or a dead URL']
   ]
 ,
+  name:  'fill'
+  title: 'Filling'
+  lines: [
+    ['fill x, y',              'flood what matches the pixel you started on']
+    ['fill x, y, c',           'and paint it c instead of the current colour']
+    ['fill x, y, c, border b', 'cross anything that is not b -- BASIC PAINT']
+    ['fill x, y, c, matching m', 'only pixels that are m']
+    ['fill x, y, c, where fn',  'fn p decides; no colour needed before a rule']
+    ['',                       'p.x p.y p.color p.seed']
+    ['',                       'p.red p.green p.blue p.alpha       0..1']
+    ['',                       'p.hue p.saturation p.value         hue in degrees']
+    ['',                       'p.up p.down p.left p.right         null past the edge']
+  ]
+,
   name:  'surfaces'
   title: 'Surfaces'
   lines: [

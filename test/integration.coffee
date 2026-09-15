@@ -880,6 +880,93 @@ catch error
   text = await consoleText()
   check 'definitions survive a sketch that throws', text.includes('kept=7'), JSON.stringify text.trim()
 
+  # 50. fill: the default rule, boundaries, custom predicates, and the traps
+  filling = """
+screen 320, 200
+
+# default rule: spread over what matches the seed, stop at anything else
+cls COLORS.black
+rect 10, 10, 40, 40, COLORS.white
+fill 25, 25, COLORS.red
+print 'inside='  + (pget(25, 25) is COLORS.red)
+print 'edgeKept=' + (pget(10, 10) is COLORS.white)
+print 'outside=' + (pget(5, 5) is COLORS.black)
+
+# it does not leak through a gap in the outline
+cls COLORS.black
+rect 10, 10, 40, 40, COLORS.white
+point 25, 10, COLORS.black          # punch a hole in the top edge
+fill 25, 25, COLORS.red
+print 'leaked=' + (pget(5, 5) is COLORS.red)
+
+# border: cross anything that is not the border colour
+cls COLORS.black
+rect 10, 10, 40, 40, COLORS.white
+point 20, 20, COLORS.blue           # an island the default rule would refuse
+point 30, 30, COLORS.lime
+fill 25, 25, COLORS.red, border COLORS.white
+print 'crossedBlue=' + (pget(20, 20) is COLORS.red)
+print 'crossedLime=' + (pget(30, 30) is COLORS.red)
+print 'stoppedAtBorder=' + (pget(10, 10) is COLORS.white)
+
+# matching: only pixels of one colour, wherever the walk reaches
+cls COLORS.black
+rectFill 0, 0, 60, 60, COLORS.blue
+fill 30, 30, COLORS.red, matching COLORS.blue
+print 'matched=' + (pget(30, 30) is COLORS.red)
+
+# where: a predicate over the probe
+cls COLORS.black
+rectFill 0, 0, 60, 60, COLORS.fromHSV 200, 1, 0.3
+rect 0, 0, 60, 60, COLORS.white
+fill 30, 30, COLORS.yellow, where (p) -> p.value < 0.5
+print 'byValue=' + (pget(30, 30) is COLORS.yellow)
+print 'valueStopped=' + (pget(0, 0) is COLORS.white)
+
+# the probe carries position, channels and neighbours
+cls COLORS.black
+probed = null
+fill 5, 5, COLORS.red, where (p) ->
+  probed ?= {x: p.x, y: p.y, red: p.red, blue: p.blue, seed: p.seed, up: p.up}
+  p.color is p.seed
+print 'probeXY='    + (probed.x is 5 and probed.y is 5)
+print 'probeChan='  + (probed.red is 0 and probed.blue is 0)
+print 'probeSeed='  + (probed.seed is COLORS.black)
+print 'probeEdge='  + (probed.up is COLORS.black)
+
+# filling with the colour already there terminates instead of spinning
+cls COLORS.black
+fill 100, 100, COLORS.black
+print 'noSpin=true'
+
+# a seed outside the screen does nothing
+fill -5, -5, COLORS.red
+fill 9999, 9999, COLORS.red
+print 'offscreen=true'
+
+# fill obeys drawTo like every other primitive
+sheet = surface 16, 16
+drawTo sheet, ->
+  cls COLORS.black
+  fill 8, 8, COLORS.lime
+print 'onSurface='   + (drawTo(sheet, -> pget 8, 8) is COLORS.lime)
+print 'screenClean=' + (pget(8, 8) isnt COLORS.lime)
+"""
+  await setDoc filling
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 1500
+  text   = await consoleText()
+  wanted = ['inside=true', 'edgeKept=true', 'outside=true', 'leaked=true',
+            'crossedBlue=true', 'crossedLime=true', 'stoppedAtBorder=true',
+            'matched=true', 'byValue=true', 'valueStopped=true',
+            'probeXY=true', 'probeChan=true', 'probeSeed=true', 'probeEdge=true',
+            'noSpin=true', 'offscreen=true', 'onSurface=true', 'screenClean=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'fill walks, stops and retargets', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '}" else 'all eighteen'
+
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'
   check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"

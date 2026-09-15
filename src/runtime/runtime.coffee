@@ -262,6 +262,18 @@ ellipse = (cx, cy, rx, ry, value) ->
 circle     = (cx, cy, r, value) -> ellipse     cx, cy, r, r, value
 circleFill = (cx, cy, r, value) -> ellipseFill cx, cy, r, r, value
 
+# --- filling ----------------------------------------------------------------
+
+# No placeholder argument: a rule is a Rule and a colour is not, so the two
+# tell themselves apart and `fill x, y, border black` needs no null in the
+# middle to say "the colour I already set".
+fill = (x, y, first, second) ->
+  [value, rule] = if first instanceof FILL.Rule then [undefined, first] else [first, second]
+  FILL.flood target, Math.round(x), Math.round(y), resolve(value), rule
+  undefined
+
+{where, matching, border} = FILL
+
 # --- surfaces ---------------------------------------------------------------
 
 surface = (width, height) -> new SURFACE.Surface width, height
@@ -486,6 +498,7 @@ globalThis.attach = (sab) ->
     line, rect, rectFill, ellipse, ellipseFill, circle, circleFill
     surface, get, put, stamp, drawTo, overlaps, display
     locate, text, textAt, textScale, textBackground, textWidth, load
+    fill, where, matching, border
   }
   Object.defineProperty globalThis, 'elapsed', get: -> (performance.now() - state.started) / 1000
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME

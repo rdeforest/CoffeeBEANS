@@ -208,15 +208,38 @@ addEventListener rather than assigning onmessage. A test asserts the
 runtime globals are still reachable from a bare sketch, which is the
 cheapest way to catch the next one.
 
-## Flood fill
+## Flood fill, and the axis it is not on
 
-Wanted: `fill x, y[, borderRule[, color]]`. The two cases already asked for
-are "stop at anything that is not the colour under x, y" and "stop at
-anything whose red component is above 0.1". Those are the same walk with a
-different predicate, so the border rule is a function from a pixel colour to
-stop-or-continue, defaulting to "not the seed colour", plus a few named
-rules so the common cases read like BASIC. Not designed yet; workshop the
-argument shape before writing the walk.
+Built. The design turned on noticing that two independent things were being
+described as one command: *which pixels* get filled, and *what colour* each
+becomes. Patterns and gradients are entirely the second. Putting them on
+`fill` would have built a special case that `rectFill` and `circleFill` do
+not get; putting them on the paint side gives every fill primitive the same
+power and leaves `fill` a two-argument command forever.
+
+So `fill` owns the region axis only, and the region axis is one predicate
+with a short vocabulary over it: the default, `border`, `matching`, `where`.
+The built-in three compare native pixels directly and skip the probe
+entirely, which is why a plain `fill` does not pay for HSV it never reads.
+
+The trap worth remembering: if the rule still accepts the colour being
+painted -- `fill x, y` where the fill colour equals the seed is the easy way
+to write it -- the walk never terminates. The cure is a visited buffer, not
+a restriction on predicates, because with `where` someone will eventually
+write one by accident. It is kept and regrown rather than allocated per
+call, so a fill inside an animation loop does not make a new one each frame.
+
+Still to do, on the paint axis, applied to every fill primitive at once
+rather than to `fill` alone:
+
+- `maker (p) -> ...`, taking the same probe the rules take, so the two axes
+  are one concept learned once.
+- `tile surface` and `gradient a, b, angle` as prebuilt makers.
+- `setHue`, `setSaturation`, `setValue` on the colour builder.
+
+Every fill primitive grows a second inner loop for the non-solid case, which
+is the real cost and the reason it is its own step. Nothing built for the
+region axis needs revisiting to do it.
 
 ## A line count in the editor
 
@@ -284,15 +307,38 @@ addEventListener rather than assigning onmessage. A test asserts the
 runtime globals are still reachable from a bare sketch, which is the
 cheapest way to catch the next one.
 
-## Flood fill
+## Flood fill, and the axis it is not on
 
-Wanted: `fill x, y[, borderRule[, color]]`. The two cases already asked for
-are "stop at anything that is not the colour under x, y" and "stop at
-anything whose red component is above 0.1". Those are the same walk with a
-different predicate, so the border rule is a function from a pixel colour to
-stop-or-continue, defaulting to "not the seed colour", plus a few named
-rules so the common cases read like BASIC. Not designed yet; workshop the
-argument shape before writing the walk.
+Built. The design turned on noticing that two independent things were being
+described as one command: *which pixels* get filled, and *what colour* each
+becomes. Patterns and gradients are entirely the second. Putting them on
+`fill` would have built a special case that `rectFill` and `circleFill` do
+not get; putting them on the paint side gives every fill primitive the same
+power and leaves `fill` a two-argument command forever.
+
+So `fill` owns the region axis only, and the region axis is one predicate
+with a short vocabulary over it: the default, `border`, `matching`, `where`.
+The built-in three compare native pixels directly and skip the probe
+entirely, which is why a plain `fill` does not pay for HSV it never reads.
+
+The trap worth remembering: if the rule still accepts the colour being
+painted -- `fill x, y` where the fill colour equals the seed is the easy way
+to write it -- the walk never terminates. The cure is a visited buffer, not
+a restriction on predicates, because with `where` someone will eventually
+write one by accident. It is kept and regrown rather than allocated per
+call, so a fill inside an animation loop does not make a new one each frame.
+
+Still to do, on the paint axis, applied to every fill primitive at once
+rather than to `fill` alone:
+
+- `maker (p) -> ...`, taking the same probe the rules take, so the two axes
+  are one concept learned once.
+- `tile surface` and `gradient a, b, angle` as prebuilt makers.
+- `setHue`, `setSaturation`, `setValue` on the colour builder.
+
+Every fill primitive grows a second inner loop for the non-solid case, which
+is the real cost and the reason it is its own step. Nothing built for the
+region axis needs revisiting to do it.
 
 ## A line count in the editor
 
