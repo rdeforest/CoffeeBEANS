@@ -61,6 +61,29 @@ it parks. No promises, no await. Downloads are cached under `assets/` in your
 data folder on first fetch, so a sketch you demo on a stage with bad wifi
 still runs, and so does one whose URL rotted six months ago.
 
+## Paints
+
+Anywhere a colour goes, a paint goes too -- `cls`, `point`, `line`, the rect
+and ellipse families, `text` and `fill`:
+
+    cls gradient COLORS.blue, COLORS.black, angle: pi / 2, length: 200
+    rectFill 0, 150, 319, 199, tile myPattern
+    color maker (p) -> COLORS.fromHSV p.x, 1, 1
+
+A paint is a function of position, which is all a pattern or a gradient
+really is, and it takes **the same probe a fill rule takes**. So there is one
+idea here rather than two:
+
+    fill 10, 10, where (p) -> p.value < 0.5     # which pixels
+    color        maker (p) -> ...                # what colour each becomes
+
+A maker can read the pixel it is replacing through `p.color`, which is how
+you darken or tint what is already there rather than painting over it.
+
+A solid colour stays a plain number the whole way down, so a run is still
+filled in one call and nothing pays for machinery it is not using. Only a
+maker costs a call per pixel.
+
 ## Filling
 
     fill x, y                              # flood what matches the seed pixel

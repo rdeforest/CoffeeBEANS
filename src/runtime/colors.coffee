@@ -39,6 +39,19 @@ class ColorBuilder
   setBlue:  (v) -> @b = byte v; this
   valueOf:  -> pack @a, @r, @g, @b
 
+  # Round-tripped through HSV so `setValue` means the same thing here as it
+  # does on a probe. A grey has no hue to preserve, which is why setting the
+  # saturation of one leaves it grey.
+  replaceHSV: (hue, saturation, value) ->
+    packed = fromHSV hue, saturation, value
+    @r = (packed >>> 16) & 0xFF
+    @g = (packed >>>  8) & 0xFF
+    @b =  packed         & 0xFF
+    this
+  setHue:        (v) -> hsvInto @valueOf(), scratch; @replaceHSV v,         scratch[1], scratch[2]
+  setSaturation: (v) -> hsvInto @valueOf(), scratch; @replaceHSV scratch[0], v,         scratch[2]
+  setValue:      (v) -> hsvInto @valueOf(), scratch; @replaceHSV scratch[0], scratch[1], v
+
 unit = (value) -> Math.min 1, Math.max 0, value
 
 # Which channels carry the chroma, per 60 degree sector. A table rather than
@@ -52,6 +65,34 @@ SECTORS = [
   (c, x) -> [c, 0, x]
 ]
 
+# Which channel is the maximum decides the formula, so the formulas are a
+# table indexed by that rather than a chain asking the same question thrice.
+HUE_FROM = [
+  (r, g, b, span) -> ((g - b) / span) %% 6
+  (r, g, b, span) -> (b - r) / span + 2
+  (r, g, b, span) -> (r - g) / span + 4
+]
+
+ranked = [0, 0, 0]
+
+# Writes into a caller-supplied array. The probe calls this once per pixel,
+# so it must not allocate; toHSV below is the convenient wrapper over it.
+hsvInto = (argb, out) ->
+  r = ((argb >>> 16) & 0xFF) / 255
+  g = ((argb >>>  8) & 0xFF) / 255
+  b =  (argb         & 0xFF) / 255
+  high = Math.max r, g, b
+  span = high - Math.min r, g, b
+  ranked[0] = r
+  ranked[1] = g
+  ranked[2] = b
+  out[0] = if span is 0 then 0 else ((60 * HUE_FROM[ranked.indexOf high] r, g, b, span) %% 360)
+  out[1] = if high is 0 then 0 else span / high
+  out[2] = high
+  out
+
+scratch = [0, 0, 0]
+
 fromHSV = (hue, saturation = 1, value = 1, alpha = 1) ->
   hue        = ((hue % 360) + 360) % 360
   saturation = unit saturation
@@ -64,6 +105,9 @@ fromHSV = (hue, saturation = 1, value = 1, alpha = 1) ->
 
 COLORS =
   fromHSV:     fromHSV
+  toHSV:       (value) ->
+    [hue, saturation, brightness] = hsvInto toColor(value), [0, 0, 0]
+    {hue, saturation, value: brightness}
   byName:      (name)          -> rgb = NAMED[name]; pack 255, (rgb >>> 16) & 0xFF, (rgb >>> 8) & 0xFF, rgb & 0xFF
   fromRGB:     (r, g, b, a = 1)-> pack byte(a),  byte(r),  byte(g),  byte(b)
   fromRGB256:  (r, g, b, a = 255) -> pack a, r, g, b
@@ -96,4 +140,5 @@ globalThis.COLORS       = COLORS
 globalThis.ColorBuilder = ColorBuilder
 globalThis.toColor      = toColor
 globalThis.toNative     = toNative
+globalThis.hsvInto      = hsvInto
 globalThis.fromNative   = fromNative

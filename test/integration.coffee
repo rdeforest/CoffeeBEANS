@@ -967,6 +967,120 @@ print 'screenClean=' + (pget(8, 8) isnt COLORS.lime)
   check 'fill walks, stops and retargets', absent.length is 0,
     if absent.length then "missing #{absent.join ', '}" else 'all eighteen'
 
+  # 51. the paint axis reaches every primitive, not just fill
+  painting = """
+screen 320, 200
+
+stripe = maker (p) -> if (p.x %% 8) < 4 then COLORS.red else COLORS.blue
+
+# a maker as an argument, on each kind of primitive
+cls COLORS.black
+rectFill 0, 0, 15, 3, stripe
+print 'rectFill=' + (pget(1, 1) is COLORS.red and pget(5, 1) is COLORS.blue)
+
+cls COLORS.black
+circleFill 40, 40, 10, stripe
+print 'circleFill=' + (pget(40, 40) is COLORS.blue or pget(40, 40) is COLORS.red)
+
+cls COLORS.black
+line 0, 100, 15, 100, stripe
+print 'line=' + (pget(1, 100) is COLORS.red and pget(5, 100) is COLORS.blue)
+
+cls COLORS.black
+color COLORS.white
+textAt 0, 120, 'A'
+cls COLORS.black
+color stripe
+textAt 0, 120, 'A'
+print 'text=' + (pget(2, 120) is COLORS.red)
+
+cls stripe
+print 'cls=' + (pget(1, 1) is COLORS.red and pget(5, 1) is COLORS.blue)
+
+# and as the current colour, so nothing needs an argument at all
+cls COLORS.black
+color stripe
+rectFill 0, 0, 15, 3
+print 'asColour=' + (pget(1, 1) is COLORS.red and pget(5, 1) is COLORS.blue)
+color COLORS.white
+
+# a maker sees the pixel it is replacing
+cls COLORS.blue
+rectFill 0, 0, 9, 9, maker (p) -> if p.color is COLORS.blue then COLORS.lime else COLORS.red
+print 'seesUnder=' + (pget(5, 5) is COLORS.lime)
+
+# and it is the same probe the rules take
+cls COLORS.black
+rectFill 0, 0, 9, 9, maker (p) -> if p.value < 0.5 then COLORS.yellow else COLORS.red
+print 'sameProbe=' + (pget(5, 5) is COLORS.yellow)
+
+# fill, with a maker, through the rule it already had
+cls COLORS.black
+rect 20, 20, 60, 60, COLORS.white
+fill 40, 40, stripe
+print 'filled=' + (pget(25, 40) is COLORS.red or pget(25, 40) is COLORS.blue)
+print 'fillKeptEdge=' + (pget(20, 20) is COLORS.white)
+
+# tile repeats a surface
+patch = surface 2, 2
+drawTo patch, ->
+  point 0, 0, COLORS.red
+  point 1, 0, COLORS.lime
+  point 0, 1, COLORS.blue
+  point 1, 1, COLORS.yellow
+cls COLORS.black
+rectFill 0, 0, 7, 7, tile patch
+print 'tile=' + (pget(0, 0) is COLORS.red and pget(3, 0) is COLORS.lime and pget(2, 3) is COLORS.blue and pget(3, 3) is COLORS.yellow)
+
+# gradient ramps along an angle
+cls COLORS.black
+rectFill 0, 0, 100, 4, gradient COLORS.black, COLORS.white, length: 100
+print 'gradFrom=' + (pget(0, 1) is COLORS.black)
+print 'gradMid='  + (pget(50, 1) is COLORS.fromRGB256 128, 128, 128)
+print 'gradTo='   + (pget(100, 1) is COLORS.white)
+
+# radial measures distance instead
+cls COLORS.black
+circleFill 50, 50, 50, radial COLORS.white, COLORS.black, x: 50, y: 50, radius: 50
+print 'radialCentre=' + (pget(50, 50) is COLORS.white)
+
+# HSV setters on the builder
+print 'setValue=' + (COLORS.create().setRed(1).setValue(0.5).valueOf() is COLORS.fromRGB256 128, 0, 0)
+print 'setHue='   + (COLORS.create().setRed(1).setHue(120).valueOf() is COLORS.lime)
+print 'toHSV='    + (round(COLORS.toHSV(COLORS.lime).hue) is 120)
+
+# a solid colour still takes the fast path and is unchanged
+cls COLORS.black
+rectFill 0, 0, 9, 9, COLORS.red
+print 'solid=' + (pget(5, 5) is COLORS.red)
+"""
+  await setDoc painting
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 1500
+  text   = await consoleText()
+  wanted = ['rectFill=true', 'circleFill=true', 'line=true', 'text=true', 'cls=true',
+            'asColour=true', 'seesUnder=true', 'sameProbe=true',
+            'filled=true', 'fillKeptEdge=true', 'tile=true',
+            'gradFrom=true', 'gradMid=true', 'gradTo=true', 'radialCentre=true',
+            'setValue=true', 'setHue=true', 'toHSV=true', 'solid=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'paints reach every primitive', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all nineteen'
+
+  # 52. the solid path stays fast. The bound is deliberately far below what
+  # the machine does, so this is a canary for a primitive quietly falling
+  # onto the per-pixel path, not a benchmark.
+  await setDoc "screen 320, 200\ncls()\nt = performance.now()\npoint i %% 320, (i / 320) %% 200, COLORS.red for i in [0...2000000] by 1\nrate = 2000000 / ((performance.now() - t) / 1000)\nprint 'rate=' + round(rate / 1000000)\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 4000
+  text = await consoleText()
+  rate = Number /rate=(\d+)/.exec(text)?[1] ? 0
+  check 'solid drawing stays on the fast path', rate >= 3, "#{rate}M points/sec"
+
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'
   check 'suite does not touch real sketches', after is before, "hello.coffee #{after.length} bytes"

@@ -85,6 +85,20 @@ SECTIONS = [
     ['',                       'p.up p.down p.left p.right         null past the edge']
   ]
 ,
+  name:  'paints'
+  title: 'Paints'
+  lines: [
+    ['',                       'anywhere a colour goes, a paint goes too --']
+    ['',                       'cls, point, line, rect, circle, text, fill']
+    ['maker (p) -> ...',       'p is the probe the fill rules take']
+    ['tile surface',           'repeat a surface across the target']
+    ['gradient a, b, opts',    'angle:, length:, x:, y:']
+    ['radial a, b, opts',      'x:, y:, radius:']
+    ['color maker (p) -> ...', 'a paint can be the current colour']
+    ['COLORS.toHSV c',         'hue, saturation, value back out of a colour']
+    ['.setHue .setSaturation .setValue', 'on COLORS.create(), beside setRed']
+  ]
+,
   name:  'surfaces'
   title: 'Surfaces'
   lines: [
@@ -130,6 +144,7 @@ SECTIONS = [
     ['COLORS.fromRGB r, g, b',  'channels from 0..1, optional alpha']
     ['COLORS.fromRGB256 r,g,b', 'channels from 0..255, optional alpha']
     ['COLORS.fromHSV h, s, v',  'hue in degrees, the rest 0..1; wraps']
+    ['COLORS.toHSV c',          'and back again']
     ['COLORS.create()',         'builder: .setRed .setGreen .setBlue .setAlpha']
     ['COLORS.names()',          'every name we know']
     ['',                        'anywhere a color is wanted, a number, a name']

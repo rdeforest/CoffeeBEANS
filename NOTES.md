@@ -229,17 +229,24 @@ a restriction on predicates, because with `where` someone will eventually
 write one by accident. It is kept and regrown rather than allocated per
 call, so a fill inside an animation loop does not make a new one each frame.
 
-Still to do, on the paint axis, applied to every fill primitive at once
-rather than to `fill` alone:
+The paint axis is built too, and the second inner loop that was going to
+cost every primitive turned out to cost two functions. Everything that puts
+pixels down already went through `plot` and `span`, so teaching those two
+about paints taught all of them at once; only `cls`, `point` and the flood
+run-loop write outside those, and `flood` stopped knowing about colour
+entirely -- it is handed a writer for a run now.
 
-- `maker (p) -> ...`, taking the same probe the rules take, so the two axes
-  are one concept learned once.
-- `tile surface` and `gradient a, b, angle` as prebuilt makers.
-- `setHue`, `setSaturation`, `setValue` on the colour builder.
+The probe moved out of `fill` into its own module and became fully lazy,
+including `p.color`, which reads the destination only if something asks. A
+`tile` that reads nothing but `p.x` and `p.y` therefore costs no read at
+all. That laziness is what makes one probe serve both axes without the
+cheap cases subsidising the expensive ones.
 
-Every fill primitive grows a second inner loop for the non-solid case, which
-is the real cost and the reason it is its own step. Nothing built for the
-region axis needs revisiting to do it.
+A solid colour stays a plain number all the way down, so `span` still fills
+a run in a single call. Measured after the change: 29M points a second,
+which is not slower than before it. There is a test pinning a floor far
+below that -- a canary for a primitive quietly falling onto the per-pixel
+path, not a benchmark.
 
 ## A line count in the editor
 
@@ -328,17 +335,24 @@ a restriction on predicates, because with `where` someone will eventually
 write one by accident. It is kept and regrown rather than allocated per
 call, so a fill inside an animation loop does not make a new one each frame.
 
-Still to do, on the paint axis, applied to every fill primitive at once
-rather than to `fill` alone:
+The paint axis is built too, and the second inner loop that was going to
+cost every primitive turned out to cost two functions. Everything that puts
+pixels down already went through `plot` and `span`, so teaching those two
+about paints taught all of them at once; only `cls`, `point` and the flood
+run-loop write outside those, and `flood` stopped knowing about colour
+entirely -- it is handed a writer for a run now.
 
-- `maker (p) -> ...`, taking the same probe the rules take, so the two axes
-  are one concept learned once.
-- `tile surface` and `gradient a, b, angle` as prebuilt makers.
-- `setHue`, `setSaturation`, `setValue` on the colour builder.
+The probe moved out of `fill` into its own module and became fully lazy,
+including `p.color`, which reads the destination only if something asks. A
+`tile` that reads nothing but `p.x` and `p.y` therefore costs no read at
+all. That laziness is what makes one probe serve both axes without the
+cheap cases subsidising the expensive ones.
 
-Every fill primitive grows a second inner loop for the non-solid case, which
-is the real cost and the reason it is its own step. Nothing built for the
-region axis needs revisiting to do it.
+A solid colour stays a plain number all the way down, so `span` still fills
+a run in a single call. Measured after the change: 29M points a second,
+which is not slower than before it. There is a test pinning a floor far
+below that -- a canary for a primitive quietly falling onto the per-pixel
+path, not a benchmark.
 
 ## A line count in the editor
 

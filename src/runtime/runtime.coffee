@@ -11,7 +11,7 @@ state =
   u32:        null
   ring:       null
   double:     no
-  native:     0
+  brush:      null
   frameStart: null
   started:    0
 
@@ -94,19 +94,21 @@ screen = (width, height) ->
   undefined
 
 color = (value) ->
-  state.native = toNative toColor value, state.native
+  state.brush = if value instanceof PAINT.Paint then value else solid value
   undefined
 
 cls = (value) ->
-  fill = if value? then toNative toColor value else 0xFF000000
-  target.pixels.fill fill, target.base, target.base + target.width * target.height
+  paint = if value? then brush value else solid COLORS.black
+  if paint.solid?
+    target.pixels.fill paint.solid, target.base, target.base + target.width * target.height
+  else
+    span y, 0, target.width - 1, paint for y in [0...target.height] by 1
   undefined
 
 point = (x, y, value) ->
   x |= 0
   y |= 0
-  return undefined if x < 0 or y < 0 or x >= target.width or y >= target.height
-  target.pixels[target.base + y * target.width + x] = resolve value
+  plot x, y, brush value
   undefined
 
 # --- shapes -----------------------------------------------------------------
@@ -114,20 +116,35 @@ point = (x, y, value) ->
 # All of these write the buffer directly. Going through point() would pay for
 # a bounds check plus a base lookup per pixel, which is the whole reason to
 # have primitives at all.
-resolve = (value) -> if value? then toNative toColor value else state.native
+# A solid colour stays a plain number all the way down, so span can still
+# fill a run in one call. Only a maker pays per pixel, and only where one is
+# used.
+painting = PROBE.create()
 
-plot = (x, y, pixel) ->
+solid = (value) -> {solid: toNative toColor value}
+
+brush = (value) ->
+  return state.brush unless value?
+  return value if value instanceof PAINT.Paint
+  solid value
+
+stroke = (paint, x, y) -> toNative toColor paint.at painting.place target, x, y
+
+plot = (x, y, paint) ->
   return if x < 0 or y < 0 or x >= target.width or y >= target.height
-  target.pixels[target.base + y * target.width + x] = pixel
+  target.pixels[target.base + y * target.width + x] = paint.solid ? stroke paint, x, y
   undefined
 
-span = (y, from, to, pixel) ->
+span = (y, from, to, paint) ->
   return if y < 0 or y >= target.height
   left  = Math.max 0,                 Math.min from, to
   right = Math.min target.width - 1,   Math.max from, to
   return if left > right
-  start = target.base + y * target.width + left
-  target.pixels.fill pixel, start, start + (right - left + 1)
+  start = target.base + y * target.width
+  if paint.solid?
+    target.pixels.fill paint.solid, start + left, start + right + 1
+  else
+    target.pixels[start + x] = stroke paint, x, y for x in [left..right] by 1
   undefined
 
 OUT = {LEFT: 1, RIGHT: 2, BOTTOM: 4, TOP: 8}
@@ -175,7 +192,7 @@ line = (x1, y1, x2, y2, value) ->
   clipped = clipLine {x: x1, y: y1}, {x: x2, y: y2}
   return undefined unless clipped
   [a, b] = clipped
-  pixel  = resolve value
+  paint  = brush value
 
   x  = Math.round a.x
   y  = Math.round a.y
@@ -188,7 +205,7 @@ line = (x1, y1, x2, y2, value) ->
   error = dx + dy
 
   loop
-    plot x, y, pixel
+    plot x, y, paint
     break if x is ex and y is ey
     doubled = 2 * error
     if doubled >= dy
@@ -204,59 +221,59 @@ line = (x1, y1, x2, y2, value) ->
 # is not a row start, it is halfway across one.
 rectFill = (x1, y1, x2, y2, value) ->
   x1 = Math.round x1; y1 = Math.round y1; x2 = Math.round x2; y2 = Math.round y2
-  pixel = resolve value
+  paint = brush value
   top    = Math.max 0,                 Math.min y1, y2
   bottom = Math.min target.height - 1,  Math.max y1, y2
-  span y, x1, x2, pixel for y in [top..bottom] by 1 if top <= bottom
+  span y, x1, x2, paint for y in [top..bottom] by 1 if top <= bottom
   undefined
 
 rect = (x1, y1, x2, y2, value) ->
   x1 = Math.round x1; y1 = Math.round y1; x2 = Math.round x2; y2 = Math.round y2
-  pixel  = resolve value
+  paint  = brush value
   top    = Math.min y1, y2
   bottom = Math.max y1, y2
-  span top,    x1, x2, pixel
-  span bottom, x1, x2, pixel
+  span top,    x1, x2, paint
+  span bottom, x1, x2, paint
   left  = Math.min x1, x2
   right = Math.max x1, x2
   for y in [Math.max(0, top)..Math.min(target.height - 1, bottom)] by 1
-    plot left,  y, pixel
-    plot right, y, pixel
+    plot left,  y, paint
+    plot right, y, paint
   undefined
 
 # Scanline rather than midpoint: the loops are bounded by the screen, so a
 # radius of a million costs nothing extra and cannot spin.
 ellipseFill = (cx, cy, rx, ry, value) ->
   return undefined unless rx > 0 and ry > 0
-  pixel  = resolve value
+  paint  = brush value
   top    = Math.max 0,                Math.ceil  cy - ry
   bottom = Math.min target.height - 1, Math.floor cy + ry
   for y in [top..bottom] by 1
     ratio = (y - cy) / ry
     continue if ratio * ratio > 1
     half = rx * Math.sqrt 1 - ratio * ratio
-    span y, Math.round(cx - half), Math.round(cx + half), pixel
+    span y, Math.round(cx - half), Math.round(cx + half), paint
   undefined
 
 # The union of the extreme x per row and the extreme y per column, which is
 # connected everywhere and clips for free.
 ellipse = (cx, cy, rx, ry, value) ->
   return undefined unless rx > 0 and ry > 0
-  pixel = resolve value
+  paint = brush value
 
   for y in [Math.max(0, Math.ceil cy - ry)..Math.min(target.height - 1, Math.floor cy + ry)] by 1
     ratio = (y - cy) / ry
     continue if ratio * ratio > 1
     half = rx * Math.sqrt 1 - ratio * ratio
-    plot Math.round(cx - half), y, pixel
-    plot Math.round(cx + half), y, pixel
+    plot Math.round(cx - half), y, paint
+    plot Math.round(cx + half), y, paint
 
   for x in [Math.max(0, Math.ceil cx - rx)..Math.min(target.width - 1, Math.floor cx + rx)] by 1
     ratio = (x - cx) / rx
     continue if ratio * ratio > 1
     half = ry * Math.sqrt 1 - ratio * ratio
-    plot x, Math.round(cy - half), pixel
-    plot x, Math.round(cy + half), pixel
+    plot x, Math.round(cy - half), paint
+    plot x, Math.round(cy + half), paint
   undefined
 
 circle     = (cx, cy, r, value) -> ellipse     cx, cy, r, r, value
@@ -269,10 +286,13 @@ circleFill = (cx, cy, r, value) -> ellipseFill cx, cy, r, r, value
 # middle to say "the colour I already set".
 fill = (x, y, first, second) ->
   [value, rule] = if first instanceof FILL.Rule then [undefined, first] else [first, second]
-  FILL.flood target, Math.round(x), Math.round(y), resolve(value), rule
+  paint = brush value
+  FILL.flood target, Math.round(x), Math.round(y),
+    ((row, left, right) -> span row, left, right, paint), rule
   undefined
 
-{where, matching, border} = FILL
+{where, matching, border}        = FILL
+{maker, tile, gradient, radial}  = PAINT
 
 # --- surfaces ---------------------------------------------------------------
 
@@ -367,26 +387,28 @@ cursor =
 cellWidth  = -> FONT.width  * cursor.scale
 cellHeight = -> FONT.height * cursor.scale
 
-drawGlyph = (character, x, y, pixel, background) ->
+drawGlyph = (character, x, y, ink, paper) ->
   rows  = FONT.rows character
   scale = cursor.scale
   for gy in [0...FONT.height] by 1
     bits = rows[gy]
     for gx in [0...FONT.width] by 1
-      value = if (bits >> gx) & 1 then pixel else background
-      continue unless value?
+      paint = if (bits >> gx) & 1 then ink else paper
+      continue unless paint?
       if scale is 1
-        plot x + gx, y + gy, value
+        plot x + gx, y + gy, paint
       else
         left = x + gx * scale
-        span y + gy * scale + row, left, left + scale - 1, value for row in [0...scale] by 1
+        span y + gy * scale + row, left, left + scale - 1, paint for row in [0...scale] by 1
   undefined
 
-writeAt = (x, y, string, pixel, background) ->
+writeAt = (x, y, string, ink, paper) ->
   for character in string
-    drawGlyph character, x, y, pixel, background
+    drawGlyph character, x, y, ink, paper
     x += cellWidth()
   undefined
+
+paperBrush = -> if cursor.background? then brush cursor.background else null
 
 locate = (col, row) ->
   cursor.col = col | 0
@@ -405,8 +427,8 @@ textWidth = (string) -> String(string).length * cellWidth()
 
 text = (parts...) ->
   string     = parts.join ' '
-  pixel      = state.native
-  background = if cursor.background? then toNative toColor cursor.background else null
+  ink        = brush()
+  paper      = paperBrush()
   columns    = Math.max 1, Math.floor target.width / cellWidth()
 
   for character in string
@@ -417,13 +439,12 @@ text = (parts...) ->
     if cursor.col >= columns
       cursor.col = 0
       cursor.row += 1
-    drawGlyph character, cursor.col * cellWidth(), cursor.row * cellHeight(), pixel, background
+    drawGlyph character, cursor.col * cellWidth(), cursor.row * cellHeight(), ink, paper
     cursor.col += 1
   undefined
 
 textAt = (x, y, parts...) ->
-  background = if cursor.background? then toNative toColor cursor.background else null
-  writeAt x, y, parts.join(' '), state.native, background
+  writeAt x, y, parts.join(' '), brush(), paperBrush()
   undefined
 
 pget = (x, y) ->
@@ -490,7 +511,7 @@ globalThis.attach = (sab) ->
   state.u32  = new Uint32Array sab
   state.ring = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
   display.pixels = state.u32
-  state.native = toNative COLORS.white
+  state.brush = solid COLORS.white
   installMath()
   {keys, mouse} = INPUT.attach state
   Object.assign globalThis, {
@@ -499,6 +520,7 @@ globalThis.attach = (sab) ->
     surface, get, put, stamp, drawTo, overlaps, display
     locate, text, textAt, textScale, textBackground, textWidth, load
     fill, where, matching, border
+    maker, tile, gradient, radial
   }
   Object.defineProperty globalThis, 'elapsed', get: -> (performance.now() - state.started) / 1000
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME
