@@ -218,6 +218,15 @@ stop-or-continue, defaulting to "not the seed colour", plus a few named
 rules so the common cases read like BASIC. Not designed yet; workshop the
 argument shape before writing the walk.
 
+## A line count in the editor
+
+The sixty-line wall on the lander sketch worked, and the count was done by
+hand in a separate REPL. The editor should show it: non-blank, non-comment
+lines, in the status area, updated as you type. Pico-8's token counter is
+the precedent, and it is the reason a generation of people finished games
+there. A configurable limit that turns the count red is the natural second
+step; refusing to run past it is a third, and probably a step too far.
+
 ## Known defects, queued
 
 Found by a code review on 2026-09-12 and deliberately left out of the worker
