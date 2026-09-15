@@ -58,6 +58,37 @@ flushConsole = ->
   queued = []
   output.scrollTop = output.scrollHeight
 
+# Drained on a timer rather than an animation frame: an occluded window gets
+# no animation frames, and its console should still fill in.
+decoder   = new TextDecoder()
+printRing = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
+
+readRing = (position, length) ->
+  taken = new Uint8Array length
+  first = Math.min length, LAYOUT.PRINT_BYTES - position
+  taken.set printRing.subarray(position, position + first), 0
+  taken.set printRing.subarray(0, length - first), first if first < length
+  taken
+
+drainPrints = ->
+  head = Atomics.load i32, H.PRINT_HEAD
+  tail = Atomics.load i32, H.PRINT_TAIL
+  while tail isnt head
+    length = new DataView(readRing(tail, 4).buffer).getUint32 0, true
+    # A length that cannot fit means the ring is not saying what we think it
+    # is. Resynchronise rather than loop on garbage forever.
+    if length > LAYOUT.PRINT_BYTES - 4
+      say '*** console ring lost sync ***', 'err'
+      tail = head
+      break
+    tail = (tail + 4) % LAYOUT.PRINT_BYTES
+    say decoder.decode readRing tail, length
+    tail = (tail + length) % LAYOUT.PRINT_BYTES
+  Atomics.store i32, H.PRINT_TAIL, tail
+  lost = Atomics.exchange i32, H.PRINT_LOST, 0
+  say "*** #{lost} line#{if lost is 1 then '' else 's'} dropped, console ring full ***", 'sys' if lost > 0
+  undefined
+
 say = (text, kind = '') ->
   queued.push {text, kind}
   # Trim in chunks so a flood costs amortised constant time per line.
@@ -289,7 +320,6 @@ messages =
     return unless pending
     send pending
     pending = null
-  print:   (data) -> say line for line in data.lines
   load:    (data) -> answerLoad data.url
   done:    -> setStatus 'ready'
   stopped: -> say '*** stopped ***', 'sys'; setStatus 'ready'
@@ -336,6 +366,10 @@ send = ({source, name}) ->
 
 start = (thenRun = null) ->
   worker?.terminate()
+  drainPrints()                       # anything the old worker already wrote
+  Atomics.store i32, H.PRINT_HEAD, 0
+  Atomics.store i32, H.PRINT_TAIL, 0
+  Atomics.store i32, H.PRINT_LOST, 0
   Atomics.store i32, H.INTERRUPT, 0
   Atomics.store i32, H.SKETCH_US, 0
   Atomics.store i32, H.SWAP,      0
@@ -419,6 +453,8 @@ listenForInput()
 
 dragPanel document.getElementById('splitEditor'),  'editor'
 dragPanel document.getElementById('splitConsole'), 'console'
+
+setInterval drainPrints, CONSOLE_EVERY
 
 new ResizeObserver(resize).observe stage
 window.addEventListener 'resize', reflowPanels

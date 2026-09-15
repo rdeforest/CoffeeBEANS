@@ -333,50 +333,58 @@ lifecycle fix, so they do not get lost:
 - The rainbow in `curve.coffee` had to be hand-built from a hue ramp. A
   `COLORS.fromHSV` beside `fromRGB` would have saved the detour.
 
-## Why the tail of a print burst can lag
+## The console goes through shared memory
 
-Prints batch: the first in a 16ms window goes immediately and the rest ride
-along, flushed at the next print, the next swap, or the end of the run. So
-`print 'a'` then `print 'b'` then ten seconds of computation with no swap
-shows `a` at once and `b` ten seconds later.
+Printing used to batch into `postMessage`, which meant the tail of a burst
+could sit invisible for as long as the sketch stayed busy. Neither `yield`
+nor `setTimeout` could have fixed that: a timer only runs when the worker's
+event loop is free, and while parked in `Atomics.wait` the thread is blocked
+outright so timers do not fire at all. Generators would work, but only by
+making every sketch a generator driven by the runner, which is a different
+execution model than the blocking design is built on.
 
-Neither `yield` nor `setTimeout` fixes this. A timer only runs when the
-worker's event loop is free, and during a long synchronous stretch it is
-not; while parked in `Atomics.wait` the thread is blocked outright and
-timers do not fire either. Generators would work, but only by making every
-sketch a generator and having the runner drive it, which is a different
-execution model than the one the blocking design is built on.
+So prints go into a single-producer single-consumer ring in the SAB: a
+little-endian length then UTF-8, the worker moving HEAD, the renderer moving
+TAIL, which is what makes it safe without a lock. A line is readable the
+instant it is written, whatever the sketch does next. The renderer drains on
+a timer rather than an animation frame, because an occluded window gets no
+animation frames and its console should still fill in.
 
-The real fix is to stop routing prints through `postMessage` at all and put
-them in a ring buffer in the SAB: the worker writes UTF-8 at print time and
-the renderer drains the ring every frame regardless of what the worker does
-next. That is the same mechanism audio will want for sample data, so it is
-worth building once, for both.
+A full ring drops lines and counts them rather than blocking: a sketch
+should never stall because its console is behind. The renderer reports the
+count. Audio will want the same mechanism for sample data.
 
-## Ending global collisions, properly
+## Global collisions are over
 
-Sketches compile bare on purpose -- their top-level `var`s land on
-globalThis, which is how definitions survive between eval-region runs. The
-live image *is* that sharing, which is also why collisions are possible.
-Wrapping sketch code in a function would end the collisions and end the
-live image with it.
+Sketches no longer run at global scope. Each run is wrapped in a function,
+so its names cannot touch globalThis and cannot collide with the runtime
+API or with anything the worker owns. The live image -- the thing bare
+compilation was buying -- comes instead from copying names in and out of a
+per-worker object:
 
-There is a way to have both. CoffeeScript emits its declarations as a
-single leading `var a, b, c;`, so the runner can read that list without a
-full parse, run the sketch inside a function, and copy the declared names
-in and out of a persistent object:
+    var a = image.a, b = image.b;     // restore; a later bare `var a` does not clear it
+    try { <compiled sketch> }
+    finally { image.a = a; image.b = b; }   // harvest what this unit declared
 
-    var a = image.a, b = image.b;     // restore (re-declaring does not clear)
-    <compiled sketch>                 // its own `var a, b, c;` is harmless
-    image.a = a; image.b = b;         // harvest
+Restoring injects every name the image holds, not only the ones this unit
+declares, or a region could not call a function an earlier region defined.
+Harvesting runs in `finally`, so a sketch that throws half way keeps
+whatever it managed to define, the way a REPL does.
 
-Free variables like `line` and `point` still resolve outward to the runtime
-API on globalThis, so nothing about the API changes. Sketch names would stop
-touching globalThis entirely, which closes the class for good.
+The harvest list comes from the single leading `var` statement CoffeeScript
+emits for a compilation unit, which is enough without parsing the program.
+Block comments can precede it; nothing else can.
 
-Two things to decide first. It shifts compiled line numbers, so it has to
-land together with the source-map work rather than after it. And shadowing
-becomes impossible: today `line = 5` in a sketch really does replace the
-drawing command until a restart, which is arguably correct for a BASIC and
-would stop being possible. Worth choosing deliberately rather than
-inheriting.
+Shadowing survives and improves. `line = 5` in a sketch still hides the
+drawing command, because the restored `var line` shadows the outward lookup
+-- but it now lives in the image instead of overwriting the runtime, so the
+command itself is never damaged and `:restart` reliably gives back a clean
+API. Tests cover both halves, and both fail against the previous design.
+
+Two things worth knowing. The wrapper adds three lines ahead of the sketch,
+so the source map lookup subtracts them; that constant and the wrapper are
+edited together or line numbers go quietly wrong. And the image collects
+CoffeeScript's own loop and comprehension temporaries (`i`, `ref`,
+`results`) alongside real names. Harmless, since every one of them is
+assigned before it is read, but it is why the image is larger than the set
+of names anyone typed.

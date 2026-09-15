@@ -23,6 +23,9 @@ HEADER =
   LOAD_W:     34     # width, or the error message length when state is 3
   LOAD_H:     35
   LOAD_ID:    36
+  PRINT_HEAD: 37     # bytes; written only by the worker
+  PRINT_TAIL: 38     # bytes; written only by the renderer
+  PRINT_LOST: 39     # lines dropped because the ring was full
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
@@ -35,6 +38,12 @@ BUFFERS      = 2
 # wants to be blitting around.
 TRANSFER_PIXELS = 2048 * 2048
 
+# Console text, as a single-producer single-consumer ring. postMessage could
+# not work here: a worker busy in a loop, or parked in Atomics.wait, delivers
+# nothing until it yields, so a print could sit invisible for as long as the
+# sketch was busy. Shared memory is readable whatever the worker is doing.
+PRINT_BYTES = 1 << 20
+
 globalThis.LAYOUT =
   HEADER:       HEADER
   KEY_WORDS:    8
@@ -45,5 +54,7 @@ globalThis.LAYOUT =
   BUFFERS:      BUFFERS
   TRANSFER_PIXELS: TRANSFER_PIXELS
   transferWords:   HEADER_WORDS + BUFFERS * MAX_PIXELS
-  TOTAL_BYTES:  (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
+  PRINT_BYTES:     PRINT_BYTES
+  printOffset:    (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
+  TOTAL_BYTES:    (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4 + PRINT_BYTES
   bufferWords:  (index) -> HEADER_WORDS + index * MAX_PIXELS

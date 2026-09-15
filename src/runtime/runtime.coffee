@@ -9,6 +9,7 @@ class Interrupted extends Error
 state =
   i32:        null
   u32:        null
+  ring:       null
   double:     no
   native:     0
   frameStart: null
@@ -45,7 +46,6 @@ setDouble = (value) ->
   undefined
 
 doSwap = ->
-  flushPrint()
   checkInterrupt()
   # Time from the previous swap returning to this one being asked for: the
   # cost of the sketch's own frame, which is the number worth tuning.
@@ -420,28 +420,35 @@ pget = (x, y) ->
   return 0 if x < 0 or y < 0 or x >= target.width or y >= target.height
   fromNative target.pixels[target.base + y * target.width + x]
 
-# Prints are batched. One message per line was fine until a sketch printed
-# every iteration of a tight loop and the renderer drowned in messages it
-# could not append fast enough. A lone print still goes out at once; a burst
-# rides in one message per frame. The batch also flushes at every swap and
-# when the run ends, so nothing is held past a point the console could have
-# shown it, and a flood keeps only its most recent lines.
-PRINT_CAP   = 2000
-PRINT_EVERY = 16           # ms, about one frame
-printed     = []
-printedAt   = -Infinity
+# Printing writes straight into shared memory, so a line is visible to the
+# renderer the instant it is written no matter what the sketch does next --
+# a long computation, or parking in Atomics.wait, neither of which would
+# ever have delivered a postMessage. Each record is a little-endian length
+# followed by UTF-8. Only the worker moves HEAD, only the renderer moves
+# TAIL, which is what makes the ring safe without a lock.
+RING    = LAYOUT.PRINT_BYTES
+encoder = new TextEncoder()
+sizing  = new Uint8Array 4
+sizingView = new DataView sizing.buffer
 
-flushPrint = ->
-  return unless printed.length
-  postMessage type: 'print', lines: printed
-  printed   = []
-  printedAt = performance.now()
-  undefined
+writeRing = (position, bytes) ->
+  first = Math.min bytes.length, RING - position
+  state.ring.set bytes.subarray(0, first), position
+  state.ring.set bytes.subarray(first), 0 if first < bytes.length
+  (position + bytes.length) % RING
 
 print = (args...) ->
-  printed.push args.join ' '
-  printed.splice 0, PRINT_CAP >> 1 if printed.length > PRINT_CAP
-  flushPrint() if performance.now() - printedAt >= PRINT_EVERY
+  bytes = encoder.encode args.join ' '
+  head  = Atomics.load state.i32, H.PRINT_HEAD
+  tail  = Atomics.load state.i32, H.PRINT_TAIL
+  free  = RING - 1 - ((head - tail + RING) % RING)
+  # Dropping and counting beats blocking: a sketch should never stall
+  # because its console is behind.
+  if bytes.length + 4 > free
+    Atomics.add state.i32, H.PRINT_LOST, 1
+    return undefined
+  sizingView.setUint32 0, bytes.length, true
+  Atomics.store state.i32, H.PRINT_HEAD, writeRing writeRing(head, sizing), bytes
   undefined
 
 wait = (frames = 1) ->
@@ -468,7 +475,8 @@ installMath = ->
 
 globalThis.attach = (sab) ->
   state.i32 = new Int32Array  sab, 0, LAYOUT.HEADER_WORDS
-  state.u32 = new Uint32Array sab
+  state.u32  = new Uint32Array sab
+  state.ring = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
   display.pixels = state.u32
   state.native = toNative COLORS.white
   installMath()
@@ -483,7 +491,6 @@ globalThis.attach = (sab) ->
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME
   globalThis.Interrupted = Interrupted
   state.started = performance.now()
-  globalThis.RUNTIME     = {flushPrint}   # for worker-boot, at the end of a run
   setDouble no          # a restart must not inherit the last sketch's mode
   screen 320, 200
   undefined

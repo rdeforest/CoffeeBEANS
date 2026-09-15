@@ -130,6 +130,11 @@ Ctrl-Enter and `:run` evaluate into the *live* worker, so definitions persist
 between runs -- define a function in one region, call it from another. That is
 BASIC's immediate mode. `:restart` is `RUN`: a clean scope.
 
+A sketch runs in its own scope, so its names cannot collide with the drawing
+commands or with anything the app owns. You can still shadow a command --
+`line = 5` hides `line` for as long as the session lives -- but the command
+itself is never damaged, and `:restart` gives it back.
+
 Ctrl-r stays bound to redo in normal mode; the run binding only takes it in
 visual mode, where vim leaves it free.
 

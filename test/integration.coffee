@@ -698,11 +698,11 @@ catch error
   await wait 300
 
   # 36. a flood of prints is capped, and the last line still arrives
-  await setDoc "print i for i in [1..5000]\nprint 'LAST'\n"
+  await setDoc "print i for i in [1..200000]\nprint 'LAST'\n"
   await wait 500
   await clearConsole()
   await runAll()
-  await wait 800
+  await wait 2500
   count = await js "return document.getElementById('console').childElementCount"
   text  = await consoleText()
   check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines"
@@ -813,6 +813,72 @@ catch error
   await wait 700
   strays = (await fsp.readdir paths.sketches).filter (name) -> not name.endsWith '.coffee'
   check 'atomic save leaves nothing behind', strays.length is 0, strays.join ', '
+
+  # 46. a print is visible while the sketch is still busy. postMessage could
+  # never do this: a worker in a tight loop delivers nothing until it yields.
+  await setDoc "print 'EARLY'\nstart = elapsed\nspun = 0\nwhile elapsed - start < 1.5\n  spun += 1\nprint 'LATE'\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  midRun  = await consoleText()
+  running = await status()
+  await wait 1600
+  after = await consoleText()
+  check 'a print arrives while the sketch is still running',
+    midRun.includes('EARLY') and not midRun.includes('LATE') and running is 'running' and after.includes('LATE'),
+    "mid=#{JSON.stringify midRun.trim()} status=#{running}"
+
+  # 47. a sketch's own names never reach globalThis
+  await setDoc "mySketchThing = 42\nprint 'local=' + mySketchThing\nprint 'leaked=' + globalThis.mySketchThing?\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'sketch names stay out of globalThis',
+    text.includes('local=42') and text.includes('leaked=false'), JSON.stringify text.trim()
+
+  # 48. shadowing a command still works, but cannot damage the command
+  await setDoc "line = 5\nprint 'shadowed=' + typeof line\nprint 'apiIntact=' + typeof globalThis.line\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  shadowed = text.includes('shadowed=number') and text.includes('apiIntact=function')
+
+  # the shadow lives in the image, so a later region still sees it
+  await setDoc "print 'persists=' + typeof line\n"
+  await wait 500
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  persists = text.includes('persists=number')
+
+  # and a restart drops the image, leaving the API pristine
+  await setDoc "print 'afterRestart=' + typeof line\n"
+  await wait 500
+  await clearConsole()
+  await click 'restart'
+  await wait 1200
+  text = await consoleText()
+  check 'a shadowed command is restored by a restart',
+    shadowed and persists and text.includes('afterRestart=function'),
+    "shadowed=#{shadowed} persists=#{persists} after=#{JSON.stringify text.trim()}"
+
+  # 49. a sketch that throws keeps whatever it managed to define
+  await setDoc "keeper = 7\nthrow new Error 'halt'\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  await setDoc "print 'kept=' + keeper\n"
+  await wait 500
+  await runAll()
+  await wait 600
+  text = await consoleText()
+  check 'definitions survive a sketch that throws', text.includes('kept=7'), JSON.stringify text.trim()
 
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'

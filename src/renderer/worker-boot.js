@@ -26,12 +26,73 @@
   const runs = new Map()
   let runSeq = 0
 
+  // The live image. A sketch runs inside a function, so its names never
+  // touch globalThis and can never collide with the runtime API or with
+  // anything the worker owns. Persistence -- the thing bare compilation was
+  // buying -- comes from copying names in and out of this object instead.
+  // Shadowing still works: a sketch that says `line = 5` gets a local `line`
+  // that hides the drawing command for as long as the image lives, without
+  // damaging the command itself. A restart drops the image and the API is
+  // pristine again.
+  const image = Object.create(null)
+
+  const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+
+  // CoffeeScript puts every top-level name of a compilation unit into one
+  // leading `var` statement, which is all we need to know what to harvest.
+  // Block comments can precede it; nothing else can.
+  const declaredNames = (js) => {
+    let head = js
+    for (;;) {
+      head = head.replace(/^\s+/, '')
+      if (!head.startsWith('/*')) break
+      const closed = head.indexOf('*/')
+      if (closed < 0) return []
+      head = head.slice(closed + 2)
+    }
+    if (!head.startsWith('var ')) return []
+    const stop = head.indexOf(';')
+    if (stop < 0) return []
+    return head
+      .slice(4, stop)
+      .split(',')
+      .map((part) => part.trim().split('=')[0].trim())
+      .filter((name) => IDENTIFIER.test(name))
+  }
+
+  // Lines the wrapper adds before the sketch's own first line. Stack frames
+  // are mapped back through the source map, so this has to be exact.
+  const PROLOGUE_LINES = 3
+
   const runSketch = (source, name) => {
     const id = `beans-run-${++runSeq}.coffee`
     const compiled = CoffeeScript.compile(source, { bare: true, filename: name, sourceMap: true })
-    runs.set(id, { map: compiled.sourceMap, lines: compiled.js.split('\n'), name })
+
+    // Restoring re-declares: `var a = image.a` followed by the sketch's own
+    // `var a` leaves the restored value in place, because a bare `var` does
+    // not clear anything.
+    const held = Object.keys(image)
+    const restore = held.length
+      ? `var ${held.map((n) => `${n} = __image[${JSON.stringify(n)}]`).join(', ')};`
+      : ';'
+    const harvest = declaredNames(compiled.js)
+      .map((n) => `__image[${JSON.stringify(n)}] = ${n};`)
+      .join('')
+
+    // finally, not a plain suffix: a sketch that throws half way should keep
+    // whatever it managed to define, the way a REPL does.
+    const wrapped =
+      `(function(__image){\n${restore}\ntry{\n${compiled.js}\n}finally{${harvest}}\n})` +
+      `\n//# sourceURL=${id}`
+
+    runs.set(id, {
+      map: compiled.sourceMap,
+      lines: compiled.js.split('\n'),
+      name,
+      offset: PROLOGUE_LINES,
+    })
     for (const stale of [...runs.keys()].slice(0, -RUNS_KEPT)) runs.delete(stale)
-    ;(0, eval)(`${compiled.js}\n//# sourceURL=${id}`)
+    ;(0, eval)(wrapped)(image)
   }
 
   // A stack frame gives a JS line and column; the map turns that back into a
@@ -53,7 +114,7 @@
     for (const [id, entry] of runs) {
       const found = new RegExp(`${id.replace(/\./g, '\\.')}:(\\d+):(\\d+)`).exec(stack)
       if (!found) continue
-      return coffeeLine(entry, Number(found[1]) - 1, Number(found[2]) - 1)
+      return coffeeLine(entry, Number(found[1]) - entry.offset - 1, Number(found[2]) - 1)
     }
     return undefined
   }
@@ -91,14 +152,10 @@
         postMessage({ type: 'ready' })
       },
       run() {
-        // Batched prints have to land before the line that ends the run.
-        const flush = () => globalThis.RUNTIME && globalThis.RUNTIME.flushPrint()
         try {
           runSketch(data.source, data.name || 'sketch.coffee')
-          flush()
           postMessage({ type: 'done' })
         } catch (error) {
-          flush()
           if (error instanceof Interrupted) postMessage({ type: 'stopped' })
           else fail('run', error)
         }
