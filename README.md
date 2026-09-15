@@ -121,9 +121,10 @@ would fire the instant the first ended and look exactly like the sketch
 starting itself again.
 
 Modes persist in the live worker too: the current colour, the draw target,
-double buffering. `screen` resets double buffering, like BASIC's SCREEN
-reset pages, so a sketch starts in the mode it asks for rather than the one
-the last sketch left behind. Put `buffer.on` after `screen`.
+double buffering, any frame cap. `screen` resets buffering and the cap, like
+BASIC's SCREEN reset pages, so a sketch starts in the mode it asks for
+rather than the one the last sketch left behind. Put `buffer.on` and
+`buffer.fps` after `screen`.
 
 Ctrl-Enter and `:run` evaluate into the *live* worker, so definitions persist
 between runs -- define a function in one region, call it from another. That is

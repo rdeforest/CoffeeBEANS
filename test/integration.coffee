@@ -725,12 +725,94 @@ catch error
   await click 'stop'
   await wait 300
   await clearConsole()
-  await setDoc "screen 320, 200\ncls()\npoint 20, 20, COLORS.white\nprint 'onScreen=' + (display.base is LAYOUT.bufferWords display.pixels[LAYOUT.HEADER.FRONT])\nprint 'oldGone=' + (pget(10, 10) isnt COLORS.red)\n"
+  await setDoc "screen 320, 200\ncls()\npoint 20, 20, COLORS.white\nprint 'onScreen=' + display.onScreen\nprint 'oldGone=' + (pget(10, 10) isnt COLORS.red)\n"
   await wait 500
   await runAll()
   await wait 600
   text = await consoleText()
   check 'next sketch after a stopped double-buffered one draws on screen', text.includes('onScreen=true') and text.includes('oldGone=true'), JSON.stringify text.trim()
+
+  # 39. a runtime error reports the CoffeeScript line it happened on
+  await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'a runtime error names its CoffeeScript line',
+    text.includes('line 4') and text.includes('kaboom'), JSON.stringify text.trim()
+
+  # and a compile error still reports its own
+  await setDoc "x = 1\n  y = 2\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'a compile error names its line', /line \d/.test(text), JSON.stringify text.trim()
+
+  # 40. screen refuses dimensions the renderer cannot make an image from
+  await setDoc "try\n  screen 0, 200\n  print 'accepted'\ncatch error\n  print 'refused=' + error.message\nscreen 320, 200\ncls()\nprint 'stillAlive=true'\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text = await consoleText()
+  check 'screen refuses bad dimensions without wedging the renderer',
+    text.includes('refused=') and text.includes('width must be') and text.includes('stillAlive=true'),
+    JSON.stringify text.trim()
+
+  # 41. buffer.fps actually paces swaps instead of only storing a number
+  await setDoc "screen 320, 200\nbuffer.on\nbuffer.fps 10\nbuffer.swap\nstart = elapsed\nn = 0\nwhile elapsed - start < 1\n  buffer.swap\n  n += 1\nprint 'swaps=' + n\nbuffer.fps 0\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 2500
+  text  = await consoleText()
+  swaps = Number /swaps=(\d+)/.exec(text)?[1] ? -1
+  check 'buffer.fps paces swaps', 4 <= swaps <= 25, "#{swaps} swaps in a second at fps 10"
+
+  # 42. display.onScreen tells a sketch where its drawing is landing
+  await setDoc "screen 320, 200\nprint 'single=' + display.onScreen\nbuffer.on\nprint 'doubled=' + display.onScreen\nbuffer.swap\nprint 'afterSwap=' + display.onScreen\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 800
+  text = await consoleText()
+  check 'display.onScreen distinguishes the buffers',
+    text.includes('single=true') and text.includes('doubled=false') and text.includes('afterSwap=false'),
+    JSON.stringify text.trim()
+
+  # 43. fromHSV, in degrees, beside fromRGB
+  await setDoc "print 'red='   + (COLORS.fromHSV(0)   is COLORS.red)\nprint 'lime='  + (COLORS.fromHSV(120) is COLORS.lime)\nprint 'blue='  + (COLORS.fromHSV(240) is COLORS.blue)\nprint 'white=' + (COLORS.fromHSV(0, 0, 1) is COLORS.white)\nprint 'black=' + (COLORS.fromHSV(0, 0, 0) is COLORS.black)\nprint 'wraps=' + (COLORS.fromHSV(370) is COLORS.fromHSV(10))\nprint 'negative=' + (COLORS.fromHSV(-120) is COLORS.fromHSV(240))\n"
+  await wait 500
+  await clearConsole()
+  await runAll()
+  await wait 700
+  text   = await consoleText()
+  wanted = ['red=true', 'lime=true', 'blue=true', 'white=true', 'black=true', 'wraps=true', 'negative=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'COLORS.fromHSV converts and wraps', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '}" else 'all seven'
+
+  # 44. seeding never writes over a sketch already on disk
+  guardDir = path.join sandbox, 'guarded'
+  await fsp.mkdir path.join(guardDir, 'sketches'), recursive: yes
+  await fsp.writeFile path.join(guardDir, 'sketches', 'two.coffee'), "print 'not yours'\n", 'utf8'
+  await fsp.writeFile path.join(guardDir, '.seeded'), "one.coffee\n", 'utf8'
+  guarded2 = await seeding.prepare guardDir, fakeEx
+  survivor = await fsp.readFile path.join(guardDir, 'sketches', 'two.coffee'), 'utf8'
+  recorded = await fsp.readFile path.join(guardDir, '.seeded'), 'utf8'
+  check 'seeding does not overwrite a sketch already on disk',
+    survivor is "print 'not yours'\n" and recorded.includes('two.coffee') and guarded2.added.length is 0,
+    "added=#{guarded2.added.join ','} kept=#{guarded2.kept.join ','}"
+
+  # 45. saving leaves no staging files behind in the sketches folder
+  await js "await Editor.load('scratch'); return true"
+  await setDoc "print 'atomic'\n"
+  await wait 700
+  strays = (await fsp.readdir paths.sketches).filter (name) -> not name.endsWith '.coffee'
+  check 'atomic save leaves nothing behind', strays.length is 0, strays.join ', '
 
   # the suite owns scratch.coffee and nothing else
   after = await fsp.readFile guarded, 'utf8'

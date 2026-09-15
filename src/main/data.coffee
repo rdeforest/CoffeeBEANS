@@ -38,12 +38,17 @@ prepare = (data, examples) ->
   # sketches/ counts as offered, or the next run would clobber edited copies.
   offered = if manifest.found then manifest.names else await coffeeFiles sketches
 
-  fresh = (name for name in await coffeeFiles examples when name not in offered)
+  # Offered but not yet recorded, which on a pre-manifest directory is
+  # everything. A name already on disk is someone's own sketch, so it is
+  # recorded as offered without being written over.
+  onDisk    = await coffeeFiles sketches
+  candidates = (name for name in await coffeeFiles examples when name not in offered)
+  fresh      = (name for name in candidates when name not in onDisk)
   await fsp.copyFile path.join(examples, name), path.join(sketches, name) for name in fresh
 
-  if fresh.length or not manifest.found
-    await fsp.writeFile path.join(data, MANIFEST), offered.concat(fresh).join('\n') + '\n', 'utf8'
+  if candidates.length or not manifest.found
+    await fsp.writeFile path.join(data, MANIFEST), offered.concat(candidates).join('\n') + '\n', 'utf8'
 
-  {sketches, added: fresh}
+  {sketches, added: fresh, kept: (name for name in candidates when name in onDisk)}
 
 module.exports = {home, prepare, MANIFEST}

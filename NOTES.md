@@ -227,6 +227,82 @@ the precedent, and it is the reason a generation of people finished games
 there. A configurable limit that turns the count red is the natural second
 step; refusing to run past it is a third, and probably a step too far.
 
+## Known defects, found 2026-09-12, cleared 2026-09-15
+
+All eight are fixed and each has a test that fails against the code before
+its fix. Kept as a list because the shape of them is instructive: every one
+was a case of state or a guard that was *almost* right.
+
+- Runtime error lines. The stack regex looked for `<anonymous>`, but
+  CoffeeScript emits `//# sourceURL=<the filename we passed>`, so it never
+  matched. Sketches now compile with a real source map under a regex-safe
+  script id, and a stack frame maps back through it. Column matters: at
+  column 0 most compiled lines carry no mapping at all, so a miss walks
+  backwards to the nearest one.
+- `buffer.fps` stored a header word nobody read. The renderer now gates the
+  swap branch on it, which is the branch that serves a swap, so a sketch
+  asking for 30fps spends the rest of its time asleep.
+- `screen` accepted 0, negative and over-sized dimensions and let the
+  renderer throw in `createImageData` once a frame, which reported the
+  mistake as a wall of errors far from the line that caused it. It throws
+  at the call now.
+- Autosave truncated before writing. Saves go to a staging file and rename
+  into place; a rename is atomic, so a watcher can only ever read the old
+  file or the new one, never a half-written one. Ignoring our own writes
+  turned out to be unnecessary once the read cannot be partial.
+- Seeding could write over a sketch of the same name. It now skips anything
+  already on disk while still recording it as offered, so the copy is not
+  made and is never attempted again.
+- `fs.watch` had no error listener, so removing the sketches directory took
+  the main process down with it.
+- The `app://` guard compared with `startsWith ROOT` and no separator.
+- `COLORS.fromHSV` exists, in degrees, beside `fromRGB`.
+
+While fixing the fps cap: `screen` already reset double buffering, and the
+frame cap is a mode in exactly the same sense, so it resets that too. A
+leftover cap from a stopped sketch silently slowing the next one is the
+same failure as a leftover page mode, and it caught me inside a test.
+
+## Scope shadowing, three times now
+
+Worth writing down as a rule, because it has bitten in three different
+contexts with three different symptoms and no error message in any of them:
+
+1. `history` in the renderer silently became `window.history`, because
+   assigning a read-only global fails quietly in sloppy mode.
+2. `onmessage` in a sketch nulled the worker's inbox, because assigning a
+   non-callable to an event handler sets it to null.
+3. `load` declared as a top-level `const` in worker-boot.js shadowed the
+   runtime's `load` for every sketch, because a classic worker's top-level
+   `const` lives in the global *lexical* environment, which indirect eval
+   can see and which wins over globalThis.
+
+The rule that covers all three: **anything that shares a scope with sketch
+code must declare nothing at that scope.** Our modules compile wrapped, the
+bootstrap lives inside an IIFE, and the worker listens with
+addEventListener rather than assigning onmessage. A test asserts the
+runtime globals are still reachable from a bare sketch, which is the
+cheapest way to catch the next one.
+
+## Flood fill
+
+Wanted: `fill x, y[, borderRule[, color]]`. The two cases already asked for
+are "stop at anything that is not the colour under x, y" and "stop at
+anything whose red component is above 0.1". Those are the same walk with a
+different predicate, so the border rule is a function from a pixel colour to
+stop-or-continue, defaulting to "not the seed colour", plus a few named
+rules so the common cases read like BASIC. Not designed yet; workshop the
+argument shape before writing the walk.
+
+## A line count in the editor
+
+The sixty-line wall on the lander sketch worked, and the count was done by
+hand in a separate REPL. The editor should show it: non-blank, non-comment
+lines, in the status area, updated as you type. Pico-8's token counter is
+the precedent, and it is the reason a generation of people finished games
+there. A configurable limit that turns the count red is the natural second
+step; refusing to run past it is a third, and probably a step too far.
+
 ## Known defects, queued
 
 Found by a code review on 2026-09-12 and deliberately left out of the worker
@@ -256,3 +332,51 @@ lifecycle fix, so they do not get lost:
   separator.
 - The rainbow in `curve.coffee` had to be hand-built from a hue ramp. A
   `COLORS.fromHSV` beside `fromRGB` would have saved the detour.
+
+## Why the tail of a print burst can lag
+
+Prints batch: the first in a 16ms window goes immediately and the rest ride
+along, flushed at the next print, the next swap, or the end of the run. So
+`print 'a'` then `print 'b'` then ten seconds of computation with no swap
+shows `a` at once and `b` ten seconds later.
+
+Neither `yield` nor `setTimeout` fixes this. A timer only runs when the
+worker's event loop is free, and during a long synchronous stretch it is
+not; while parked in `Atomics.wait` the thread is blocked outright and
+timers do not fire either. Generators would work, but only by making every
+sketch a generator and having the runner drive it, which is a different
+execution model than the one the blocking design is built on.
+
+The real fix is to stop routing prints through `postMessage` at all and put
+them in a ring buffer in the SAB: the worker writes UTF-8 at print time and
+the renderer drains the ring every frame regardless of what the worker does
+next. That is the same mechanism audio will want for sample data, so it is
+worth building once, for both.
+
+## Ending global collisions, properly
+
+Sketches compile bare on purpose -- their top-level `var`s land on
+globalThis, which is how definitions survive between eval-region runs. The
+live image *is* that sharing, which is also why collisions are possible.
+Wrapping sketch code in a function would end the collisions and end the
+live image with it.
+
+There is a way to have both. CoffeeScript emits its declarations as a
+single leading `var a, b, c;`, so the runner can read that list without a
+full parse, run the sketch inside a function, and copy the declared names
+in and out of a persistent object:
+
+    var a = image.a, b = image.b;     // restore (re-declaring does not clear)
+    <compiled sketch>                 // its own `var a, b, c;` is harmless
+    image.a = a; image.b = b;         // harvest
+
+Free variables like `line` and `point` still resolve outward to the runtime
+API on globalThis, so nothing about the API changes. Sketch names would stop
+touching globalThis entirely, which closes the class for good.
+
+Two things to decide first. It shifts compiled line numbers, so it has to
+land together with the source-map work rather than after it. And shadowing
+becomes impossible: today `line = 5` in a sketch really does replace the
+drawing command until a restart, which is arguably correct for a BASIC and
+would stop being possible. Worth choosing deliberately rather than
+inheriting.

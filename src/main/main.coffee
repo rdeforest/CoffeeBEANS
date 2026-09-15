@@ -41,7 +41,7 @@ protocol.registerSchemesAsPrivileged [
 serve = (request) ->
   {pathname} = new URL request.url
   file       = path.join ROOT, decodeURIComponent pathname
-  return new Response 'forbidden', status: 403 unless file.startsWith ROOT
+  return new Response 'forbidden', status: 403 unless file is ROOT or file.startsWith ROOT + path.sep
 
   source  = await net.fetch url.pathToFileURL(file).toString()
   headers = new Headers
@@ -57,7 +57,17 @@ sketchFile = (name) ->
   file
 
 ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(name), 'utf8'
-ipcMain.handle 'sketch:write', (event, name, text) -> await fsp.writeFile sketchFile(name), text, 'utf8'; true
+# Written beside the target and renamed into place. writeFile truncates
+# first, so a watcher firing mid-write could read an empty file, hand it to
+# the editor, and have the editor autosave the emptiness back. A rename is
+# atomic: a reader sees the old file or the new one. The temp name must not
+# end in .coffee or the watcher would pick it up as a sketch of its own.
+ipcMain.handle 'sketch:write', (event, name, text) ->
+  file    = sketchFile name
+  staging = path.join path.dirname(file), ".#{path.basename file}.saving"
+  await fsp.writeFile staging, text, 'utf8'
+  await fsp.rename staging, file
+  true
 ASSETS = path.join DATA, 'assets'
 
 # Cached on first fetch, and thereafter never touched again. A sketch shown
@@ -97,8 +107,14 @@ ipcMain.handle 'sketch:list',  ->
 # Watch the directory rather than the file: vim writes via a temp file and a
 # rename, which leaves a file watch pointing at a dead inode.
 watchSketches = (win) ->
-  timers = {}
-  fs.watch SKETCHES, (event, filename) ->
+  timers  = {}
+  watcher = fs.watch SKETCHES
+  # Without this, deleting the sketches directory while the app runs throws
+  # out of the main process and takes the window with it.
+  watcher.on 'error', (error) ->
+    console.log "watch stopped: #{error.message}"
+    watcher.close()
+  watcher.on 'change', (event, filename) ->
     return unless filename?.endsWith '.coffee'
     name = filename.replace /\.coffee$/, ''
     clearTimeout timers[name]

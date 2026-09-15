@@ -39,7 +39,31 @@ class ColorBuilder
   setBlue:  (v) -> @b = byte v; this
   valueOf:  -> pack @a, @r, @g, @b
 
+unit = (value) -> Math.min 1, Math.max 0, value
+
+# Which channels carry the chroma, per 60 degree sector. A table rather than
+# a six-armed conditional, because that is all the conditional would encode.
+SECTORS = [
+  (c, x) -> [c, x, 0]
+  (c, x) -> [x, c, 0]
+  (c, x) -> [0, c, x]
+  (c, x) -> [0, x, c]
+  (c, x) -> [x, 0, c]
+  (c, x) -> [c, 0, x]
+]
+
+fromHSV = (hue, saturation = 1, value = 1, alpha = 1) ->
+  hue        = ((hue % 360) + 360) % 360
+  saturation = unit saturation
+  value      = unit value
+  chroma     = value * saturation
+  second     = chroma * (1 - Math.abs(((hue / 60) % 2) - 1))
+  [r, g, b]  = SECTORS[Math.floor(hue / 60) % 6] chroma, second
+  base       = value - chroma
+  pack byte(alpha), byte(r + base), byte(g + base), byte(b + base)
+
 COLORS =
+  fromHSV:     fromHSV
   byName:      (name)          -> rgb = NAMED[name]; pack 255, (rgb >>> 16) & 0xFF, (rgb >>> 8) & 0xFF, rgb & 0xFF
   fromRGB:     (r, g, b, a = 1)-> pack byte(a),  byte(r),  byte(g),  byte(b)
   fromRGB256:  (r, g, b, a = 255) -> pack a, r, g, b

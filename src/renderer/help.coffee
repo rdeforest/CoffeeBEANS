@@ -19,7 +19,7 @@ SECTIONS = [
   name:  'screen'
   title: 'Screen'
   lines: [
-    ['screen w, h',       'set resolution (default 320, 200); resets to single buffering']
+    ['screen w, h',       'resolution; also resets buffering and any fps cap']
     ['cls()',             'clear to black']
     ['cls color',         'clear to a color']
     ['color c',           'set the current drawing color']
@@ -90,7 +90,8 @@ SECTIONS = [
     ['buffer.on',         'draw to the back buffer, show the front']
     ['buffer.off',        'draw straight to the screen (default)']
     ['buffer.swap',       'show what you drew; blocks until it is on screen']
-    ['buffer.fps n',      'pace swaps to n frames per second (0 = display rate)']
+    ['buffer.fps n',      'pace swaps to n per second; 0 is the display rate']
+    ['display.onScreen',  'is drawing landing on the buffer you can see']
     ['wait n',            'wait n presented frames']
   ]
 ,
@@ -114,6 +115,7 @@ SECTIONS = [
     ['COLORS.byName "red"',     'the same, by string']
     ['COLORS.fromRGB r, g, b',  'channels from 0..1, optional alpha']
     ['COLORS.fromRGB256 r,g,b', 'channels from 0..255, optional alpha']
+    ['COLORS.fromHSV h, s, v',  'hue in degrees, the rest 0..1; wraps']
     ['COLORS.create()',         'builder: .setRed .setGreen .setBlue .setAlpha']
     ['COLORS.names()',          'every name we know']
     ['',                        'anywhere a color is wanted, a number, a name']

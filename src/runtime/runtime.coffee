@@ -25,6 +25,12 @@ display =
 
 target = display
 
+# True when drawing lands on the buffer the renderer is showing. Useful for
+# telling "my sketch draws nothing" from "my sketch draws into the buffer it
+# never swaps to", which look identical from the outside.
+Object.defineProperty display, 'onScreen',
+  get: -> display.base is LAYOUT.bufferWords Atomics.load state.i32, H.FRONT
+
 checkInterrupt = ->
   throw new Interrupted() if Atomics.load(state.i32, H.INTERRUPT) is 1
 
@@ -65,11 +71,18 @@ doSwap = ->
 # one would draw into the back buffer, never swap, and show nothing but the
 # old sketch's last frame. Put `buffer.on` after `screen`.
 screen = (width, height) ->
+  width  = Math.round width
+  height = Math.round height
+  # Without this the renderer throws in createImageData every frame, which
+  # reports the mistake as a wall of errors far from the line that made it.
+  throw new Error "screen: width must be 1..#{LAYOUT.MAX_WIDTH}, got #{width}"    unless 1 <= width  <= LAYOUT.MAX_WIDTH
+  throw new Error "screen: height must be 1..#{LAYOUT.MAX_HEIGHT}, got #{height}" unless 1 <= height <= LAYOUT.MAX_HEIGHT
   display.width  = width
   display.height = height
   Atomics.store state.i32, H.WIDTH,  width
   Atomics.store state.i32, H.HEIGHT, height
   setDouble no
+  Atomics.store state.i32, H.FPS, 0   # a frame cap is a mode too
   # A sketch that reads the mouse before it has moved should get somewhere
   # sensible, and a resolution change must not leave it out of bounds.
   centre = (index, limit) ->

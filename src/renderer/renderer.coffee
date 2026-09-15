@@ -241,12 +241,29 @@ updateMeter = ->
   meterState.since = performance.now()
   undefined
 
+# buffer.fps paces swaps, so the gate belongs on the branch that serves one.
+# The worker stays parked until its frame is due, which is the whole point:
+# a sketch asking for 30fps should spend the rest of the time asleep.
+pacing = due: 0
+
+framePending = ->
+  fps = Atomics.load i32, H.FPS
+  unless fps > 0
+    pacing.due = 0
+    return true
+  now = performance.now()
+  # A fresh cap, or one resumed after a long stall, starts counting from now.
+  pacing.due = now if pacing.due is 0 or now - pacing.due > 1000
+  return false if now < pacing.due
+  pacing.due += 1000 / fps
+  true
+
 frame = ->
   requestAnimationFrame frame
   reshape Atomics.load(i32, H.WIDTH), Atomics.load(i32, H.HEIGHT)
   return unless surface.width
 
-  if Atomics.load(i32, H.SWAP) is 1
+  if Atomics.load(i32, H.SWAP) is 1 and framePending()
     # Only double buffering flips. Single buffered, a swap means no more than
     # "wait until this frame is on screen" -- flipping would hand the sketch
     # the other buffer and its drawing would vanish.
