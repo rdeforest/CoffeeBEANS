@@ -15,54 +15,77 @@
 # spiralling and start doing something else.
 ###
 
-MAX_TURN_RATE = 40 * pi # radian per second
-BUG_SPEED     = 0.01    # pixels per second
+MAX_TURN_RATE = 0.001 * pi # radian per millisecond
+BUG_SPEED     = 0.02       # pixels per millisecond
 
 screen SCREEN_WIDTH = 320, SCREEN_HEIGHT = 200
 
 [middleX, middleY] = [SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2]
 
-corners = [ [ middleX - 20, middleY - 20 ]
-            [ middleX + 20, middleY - 20 ]
-            [ middleX + 20, middleY + 20 ]
-            [ middleX - 20, middleY + 20 ] ]
-
-liveBugs = undefined
+radius = 7 / 10 * min middleX, middleY
 
 initBugs = (liveBugs) ->
   [1..liveBugs].map (_, i) ->
-    corner = corners[floor i / liveBugs * 4]
+    theta = pi * 2 * i / liveBugs
 
-    [ corner[0] + 4 - rnd 10
-      corner[1] + 4 - rnd 10
-      rnd pi * 2 ]
+    [ middleX + radius * cos theta
+      middleY + radius * sin theta
+      rnd pi * 2 # heading
+      COLORS.fromHSV theta / pi * 180, 1, 1
+    ]
 
-bugs = []
+bugs = initBugs 3
 
+trailsBuffer = surface SCREEN_WIDTH, SCREEN_HEIGHT
+
+buffer.on
 t = Date.now()
+
+clamp = (least, value, most) -> max least, min most, value
+
+wrapRadians = (angle) -> atan2 sin(angle), cos(angle)
+
+turnRate = MAX_TURN_RATE / 10
+
 loop
-  dt = Date.now() - t
+  cls 'black'
+
+  oldT = t
   t  = Date.now()
+  dt = t - oldT
 
   if mouse.left
-    cls 'black'
-    liveBugs =        3 + floor(10 * mouse.x / SCREEN_WIDTH)
-    bugs = initBugs liveBugs
-    turnSpeed = MAX_TURN_RATE * dt * mouse.y / SCREEN_HEIGHT
+    drawTo trailsBuffer, -> cls 'black'
+    bugs     = initBugs 3 + floor(10 * mouse.x      / SCREEN_WIDTH)
+    turnRate =        MAX_TURN_RATE * (mouse.y + 1) / SCREEN_HEIGHT
 
-  if liveBugs
+  newBugs =
     for bugA, i in bugs
-      bugB = bugs[(i + 1) % liveBugs]
+      [x, y, heading, color] = bugA
+      bugB = bugs[(i + 1) % bugs.length]
 
-      dx = bugB[0] - bugA[0]
-      dy = bugB[1] - bugA[1]
+      dx = bugB[0] - x; dy = bugB[1] - y
 
       angleToB   = atan2 dy, dx
-      turnNeeded = angleToB - bugA[2]
+      turn       = wrapRadians angleToB - heading
+      maxTurn    = turnRate * dt
+      newHeading = heading + clamp -maxTurn, turn, maxTurn
 
-      bugA[2] += max -turnSpeed, min turnNeeded, turnSpeed
+      newX       = x + BUG_SPEED * dt * cos newHeading
+      newY       = y + BUG_SPEED * dt * sin newHeading
 
-      bugA[0] += BUG_SPEED * dt * cos(bugA[2])
-      bugA[1] += BUG_SPEED * dt * sin(bugA[2])
-      point (p = bugA[0..1])...
+      newBug = [newX, newY, newHeading, color]
+
+  bugs = newBugs
+  
+  drawTo trailsBuffer, ->
+    for bug in bugs
+      point bug[0..1]..., bug[3]
+
+  put trailsBuffer, 0, 0
+
+  for bug in bugs
+    line bug[0..1]..., bug[0] + 3 * cos(bug[2]), bug[1] + 3 * sin(bug[2]), 'yellow'
+
+  buffer.swap
 

@@ -293,106 +293,6 @@ frame cap is a mode in exactly the same sense, so it resets that too. A
 leftover cap from a stopped sketch silently slowing the next one is the
 same failure as a leftover page mode, and it caught me inside a test.
 
-## Scope shadowing, three times now
-
-Worth writing down as a rule, because it has bitten in three different
-contexts with three different symptoms and no error message in any of them:
-
-1. `history` in the renderer silently became `window.history`, because
-   assigning a read-only global fails quietly in sloppy mode.
-2. `onmessage` in a sketch nulled the worker's inbox, because assigning a
-   non-callable to an event handler sets it to null.
-3. `load` declared as a top-level `const` in worker-boot.js shadowed the
-   runtime's `load` for every sketch, because a classic worker's top-level
-   `const` lives in the global *lexical* environment, which indirect eval
-   can see and which wins over globalThis.
-
-The rule that covers all three: **anything that shares a scope with sketch
-code must declare nothing at that scope.** Our modules compile wrapped, the
-bootstrap lives inside an IIFE, and the worker listens with
-addEventListener rather than assigning onmessage. A test asserts the
-runtime globals are still reachable from a bare sketch, which is the
-cheapest way to catch the next one.
-
-## Flood fill, and the axis it is not on
-
-Built. The design turned on noticing that two independent things were being
-described as one command: *which pixels* get filled, and *what colour* each
-becomes. Patterns and gradients are entirely the second. Putting them on
-`fill` would have built a special case that `rectFill` and `circleFill` do
-not get; putting them on the paint side gives every fill primitive the same
-power and leaves `fill` a two-argument command forever.
-
-So `fill` owns the region axis only, and the region axis is one predicate
-with a short vocabulary over it: the default, `border`, `matching`, `where`.
-The built-in three compare native pixels directly and skip the probe
-entirely, which is why a plain `fill` does not pay for HSV it never reads.
-
-The trap worth remembering: if the rule still accepts the colour being
-painted -- `fill x, y` where the fill colour equals the seed is the easy way
-to write it -- the walk never terminates. The cure is a visited buffer, not
-a restriction on predicates, because with `where` someone will eventually
-write one by accident. It is kept and regrown rather than allocated per
-call, so a fill inside an animation loop does not make a new one each frame.
-
-The paint axis is built too, and the second inner loop that was going to
-cost every primitive turned out to cost two functions. Everything that puts
-pixels down already went through `plot` and `span`, so teaching those two
-about paints taught all of them at once; only `cls`, `point` and the flood
-run-loop write outside those, and `flood` stopped knowing about colour
-entirely -- it is handed a writer for a run now.
-
-The probe moved out of `fill` into its own module and became fully lazy,
-including `p.color`, which reads the destination only if something asks. A
-`tile` that reads nothing but `p.x` and `p.y` therefore costs no read at
-all. That laziness is what makes one probe serve both axes without the
-cheap cases subsidising the expensive ones.
-
-A solid colour stays a plain number all the way down, so `span` still fills
-a run in a single call. Measured after the change: 29M points a second,
-which is not slower than before it. There is a test pinning a floor far
-below that -- a canary for a primitive quietly falling onto the per-pixel
-path, not a benchmark.
-
-## A line count in the editor
-
-The sixty-line wall on the lander sketch worked, and the count was done by
-hand in a separate REPL. The editor should show it: non-blank, non-comment
-lines, in the status area, updated as you type. Pico-8's token counter is
-the precedent, and it is the reason a generation of people finished games
-there. A configurable limit that turns the count red is the natural second
-step; refusing to run past it is a third, and probably a step too far.
-
-## Known defects, queued
-
-Found by a code review on 2026-09-12 and deliberately left out of the worker
-lifecycle fix, so they do not get lost:
-
-- Runtime error line numbers never show. `worker-boot.js` matches
-  `<anonymous>:N:` in the stack, but CoffeeScript's inline source map adds a
-  `sourceURL`, so frames read `sketch (region):N:` and `line` is always
-  undefined. It would also be a JS line, not a CoffeeScript one; map it back
-  through the source map.
-- `buffer.fps` stores a header word the renderer never reads. Either pace
-  swaps in `frame` or drop it from `:help`.
-- `screen` accepts 0, negative and over-sized dimensions; the renderer then
-  throws in `createImageData` every frame. Clamp or throw in `screen`.
-- Autosave writes with truncate-then-write, and the watcher can fire on the
-  truncate and read a blank file 60ms later, which the editor then accepts
-  and autosaves back. Needs a slow disk or a large file. Write to a temp
-  file and rename, and ignore watcher events while our own write is in
-  flight.
-- Seeding copies an example over a user sketch of the same name if the name
-  is not yet in `.seeded`, and a pre-manifest directory with an emptied
-  `sketches/` gets re-seeded. Skip names already on disk, but still record
-  them.
-- `fs.watch` on the sketches directory has no error listener; removing the
-  directory while the app runs throws in the main process.
-- The `app://` path guard uses `startsWith ROOT` without a trailing
-  separator.
-- The rainbow in `curve.coffee` had to be hand-built from a hue ramp. A
-  `COLORS.fromHSV` beside `fromRGB` would have saved the detour.
-
 ## The console goes through shared memory
 
 Printing used to batch into `postMessage`, which meant the tail of a burst
@@ -448,3 +348,41 @@ CoffeeScript's own loop and comprehension temporaries (`i`, `ref`,
 `results`) alongside real names. Harmless, since every one of them is
 assigned before it is read, but it is why the image is larger than the set
 of names anyone typed.
+
+## A viewport
+
+Requested while watching pursuit bugs wander off the edge of the screen:
+a way to follow them. Every drawing command takes screen pixels today. A
+viewport would make them take world coordinates and map a chosen world
+rectangle onto the screen:
+
+    view x1, y1, x2, y2     # this world rectangle fills the screen
+    view()                  # back to the screen's own pixels
+
+It is a mode, like the current colour and the draw target, and it belongs
+where rounding already happens: at the coordinate entry of each primitive,
+not in the rasteriser. So a line stays one pixel wide however far in you
+zoom; this is a coordinate transform, not a picture scale. That is the
+right call for a drawing toy and it is what makes a camera in a game cheap.
+
+The motivating use, pulling the view out to contain everything:
+
+    pick = (k) -> (o) -> o[k]
+    map  = (fn) -> (xs) -> xs.map fn
+    xs   = (map pick 0) bugs
+    ys   = (map pick 1) bugs
+    view min(xs...), min(ys...), max(xs...), max(ys...)
+
+Decisions to make before writing it:
+
+- Aspect. A world rectangle rarely matches the screen's shape. Letterbox
+  (fit inside, keep proportions) is the obvious default; stretch should be
+  possible but asked for by name.
+- The inverse. `mouse.x` and `mouse.y` should probably stay in screen
+  pixels, with a `toWorld` beside `view` for sketches that want to click
+  on things. `pget` stays in pixels; it reads the buffer.
+- Surfaces. `put` and `stamp` take a position, which transforms, and
+  `stamp` already has a scale, which could pick up the view's. `text`
+  positions transform; glyphs do not scale, they are pixels.
+- A margin argument, so "contain everything" does not put the outermost
+  bug on the very edge.
