@@ -23,7 +23,11 @@ loop
   if down and not wasDown
     hue   = (hue + 57) %% 360
     #paint = COLORS.fromHSV hue, 0.75, 0.95
-    paint = maker (p) -> COLORS.fromHSV (Date.now() % 36) * 10, p.x/w, p.y/h
+    paint = maker (p) ->
+      r = (p.x % 160)/160
+      g = (p.y % 100)/100
+      b = ((p.x + p.y)%260) / 260
+      COLORS.fromRGB r,g,b
 
     if mouse.right
       fill mouse.x, mouse.y, paint, where (p) -> p.value < 0.5
@@ -34,7 +38,3 @@ loop
 
   wasDown = down
   wait 1
-
-print (Date.now() % 1000) / 1000
-
-print Object.keys screen

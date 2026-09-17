@@ -1,8 +1,9 @@
-screen SCREEN_WIDTH = 320, SCREEN_HEIGHT = 200
+screen SCREEN_WIDTH = 600, SCREEN_HEIGHT = 300
 
 SCREEN_SIZE         = min SCREEN_WIDTH, SCREEN_HEIGHT
 
 MAX_TURN_RATE       = 0.002 * pi # radian per millisecond
+BUG_WOBBLE          = MAX_TURN_RATE / 100
 BUG_SPEED           = 0.02       # pixels per millisecond
 BUG_LENGTH          = 5          # pixels
 
@@ -23,22 +24,23 @@ bugs = [1 .. 20].map (_, i) ->
   heading: rnd pi * 2
   c:       COLORS.fromHSV 360 * rnd(), 0.5 + rnd() / 2, 1
 
-#inRange = (x, y, range, bugs) ->
-#  bugs.filter (bug) ->
-#    range > hypot (bug.x - x), (bug.y - y)
+print JSON.stringify bugs, null, 2
 
-averageLocation = (bugs) ->
-  tx = ty = 0
-  (tx += x; ty += y) for {x, y} in bugs
-  x: tx / bugs.length, y: ty / bugs.length
+wrapRadians = (angle)      -> atan2 sin(angle), cos(angle)
+wobblyBug   = (bug)        -> bug.heading + (1 - rnd(2)) * BUG_WOBBLE * dt
+toCart      = (mag, theta) -> [cos, sin].map (f) -> mag * f theta
 
-averageHeading = (bugs) -> averageAngle bugs.map (b) -> b.heading
+print toCart 1, pi / 4
+return
 
-averageAngle = (angles) ->
-  {x, y} = averageLocation angles.map (angle) -> x: cos(angle), y: sin(angle)
-  atan2 y, x
+angleAverager = ->
+  sum:     [0, 0], count: 0,
+  add:     (theta) -> (@count++; [x, y] = toCart 1, theta; @sum[0] += x; @sum[1] += y; @)
+  average:         -> ([x, y] = @sum.map (x) => x/@count; atan2 y, x)
 
 buffer.on
+
+t = Date.now()
 
 loop
   cls 'black'
@@ -52,46 +54,43 @@ loop
     turnRate       = (mouse.y / SCREEN_HEIGHT) * MAX_TURN_RATE
 
   bugs =
-    for {x, y, heading, c}, i in bugs
-      tooClose  = []
-      theRest   = []
-      angles    = [heading + (1 - rnd(2)) * dt * pi / 30]
-      distances = bugs.map ({x, y}) -> hypot x, y
+    for bug, i in bugs
+      {x, y, heading, c} = bug
 
-      for dist, j in distances when j isnt i
-        if dist < MIN_SPACING
-          tooClose.push bugs[j]
-        else if dist < visionDistance
-          theRest .push bugs[j]
+      tooClose = angleAverager()
+      theRest  = angleAverager()
+      angles   = angleAverager().add wobblyBug bug
 
-      if tooClose.length
-        target = averageLocation tooClose
-        angles.push pi + atan2 target.y - y, target.x - x
+      for otherBug, j in bugs when j isnt i
+        dist = hypot (diff = [otherBug.x - x, otherBug.y - y])...
 
-      if theRest.length
-        target = averageLocation theRest
-        angles.push  atan2 target.y - y, target.x - x
-        angles.push  averageHeading theRest
+        switch
+          when dist < MIN_SPACING    then tooClose.add atan2 diff[1], diff[0]
+          when dist < visionDistance then theRest .add atan2 diff[1], diff[0]
 
-      if angles.length
-        headingGoal  = averageAngle angles
-        offCourse    = headingGoal - heading
+      if tooClose.count then angles.add wrapRadians pi + tooClose.average()
+      if theRest .count then angles.add wrapRadians      theRest .average()
 
-        turn         = min abs(offCourse), MAX_TURN_RATE * dt
-        turn         = turn + pi if offCourse < 0
+      headingGoal = angles.average()
+      offCourse   = wrapRadians headingGoal - heading
+      turn        = (if offCourse < 0 then -1 else 1) * min abs(offCourse), turnRate * dt
+      heading    += turn
 
-        heading     += turn
+      vel = toCart BUG_SPEED * dt, heading
+      { x: (x + vel[0] + SCREEN_WIDTH ) % SCREEN_WIDTH
+        y: (y + vel[1] + SCREEN_HEIGHT) % SCREEN_HEIGHT
+        heading, c
+      }
 
-      x += BUG_SPEED * dt * cos heading
-      y += BUG_SPEED * dt * sin heading
-      p = x: (x + SCREEN_WIDTH) % SCREEN_WIDTH, y: (y + SCREEN_HEIGHT) % SCREEN_HEIGHT
-
-      Object.assign p, {heading, c}
-
+  locate 0, 0
   for bug in bugs
     color bug.c
     circle bug.x, bug.y, visionDistance
-    line bug.x, bug.y, bug.x + BUG_LENGTH * cos bug.heading, bug.y + BUG_LENGTH * sin bug.heading
+    text JSON.stringify(bug) + "\n"
+
+    line bug.x, bug.y,
+         bug.x + BUG_LENGTH * cos(bug.heading)
+         bug.y + BUG_LENGTH * sin(bug.heading)
 
   buffer.swap
 
