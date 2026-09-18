@@ -1,96 +1,140 @@
-screen SCREEN_WIDTH = 600, SCREEN_HEIGHT = 300
+screen SCREEN_WIDTH = 640, SCREEN_HEIGHT = 300
 
 SCREEN_SIZE         = min SCREEN_WIDTH, SCREEN_HEIGHT
 
-MAX_TURN_RATE       = 0.002 * pi # radian per millisecond
-BUG_WOBBLE          = MAX_TURN_RATE / 100
-BUG_SPEED           = 0.02       # pixels per millisecond
-BUG_LENGTH          = 5          # pixels
+MAX_TURN_RATE       = 0.008 * pi      # radian per millisecond
+STARTING_BUG_SPEED  = 0.08            # pixels per millisecond
 
-MIN_VISION_DISTANCE = 5               # pixels
+BUG_LENGTH          = 5               # pixels
+MIN_SPACING         = BUG_LENGTH  * 2 # pixels
+MIN_VISION_DISTANCE = MIN_SPACING * 2 # pixels
+BUG_WOBBLE          = MAX_TURN_RATE / 10
+
 MAX_VISION_DISTANCE = SCREEN_SIZE / 2 # pixels
 
-MIN_SPACING         = 20              # pixels
+FLOCK_WEIGHT        = 1
+FLEE_WEIGHT         = 100
+ALIGN_WEIGHT        = 1
 
-turnRate            = MAX_TURN_RATE / 10
-visionDistance      = MIN_VISION_DISTANCE
+liveBugs            = 40
 
-bugs = [1 .. 20].map (_, i) ->
-  theta = rnd() * pi * 2
-  dist  = rnd MAX_VISION_DISTANCE
+class Vector
+  @fromAngle: (theta) -> new Vector cos(theta), sin(theta)
 
-  x:       SCREEN_WIDTH  / 2 + dist * cos theta
-  y:       SCREEN_HEIGHT / 2 + dist * sin theta
-  heading: rnd pi * 2
-  c:       COLORS.fromHSV 360 * rnd(), 0.5 + rnd() / 2, 1
+  constructor: (@x = 0, @y = 0) ->
 
-print JSON.stringify bugs, null, 2
+  angle  :         -> atan2  @y,        @x
+  mag    :         -> hypot  @x,        @y
+  unit   :         -> Vector.fromAngle @angle()
 
-wrapRadians = (angle)      -> atan2 sin(angle), cos(angle)
-wobblyBug   = (bug)        -> bug.heading + (1 - rnd(2)) * BUG_WOBBLE * dt
-toCart      = (mag, theta) -> [cos, sin].map (f) -> mag * f theta
+  plus   : (v2)    -> new Vector @x + v2.x, @y + v2.y
+  minus  : (v2)    -> new Vector @x - v2.x, @y - v2.y
+  times  : (n)     -> new Vector @x *    n, @y *    n
 
-print toCart 1, pi / 4
-return
+  lineTo : (v2, c) -> line @x, @y, v2.x, v2.y, c
 
-angleAverager = ->
-  sum:     [0, 0], count: 0,
-  add:     (theta) -> (@count++; [x, y] = toCart 1, theta; @sum[0] += x; @sum[1] += y; @)
-  average:         -> ([x, y] = @sum.map (x) => x/@count; atan2 y, x)
+class Bug
+  constructor: (oldBug = {}) ->
+    { @pos     = new Vector rnd(SCREEN_WIDTH), rnd(SCREEN_HEIGHT)
+      @heading = rnd pi * 2
+      @c       = COLORS.fromHSV 360 * rnd(), 0.5 + rnd() / 2, 1
+    } = oldBug
+
+  draw: ->
+    @pos.lineTo @pos.plus(Vector.fromAngle(bug.heading).times(BUG_LENGTH)), bug.c
+    circle @pos.x, @pos.y, BUG_LENGTH, bug.c
+    circle @pos.x, @pos.y, visionDistance, 'cyan'
+    circle @pos.x, @pos.y, MIN_SPACING, 'purple'
+    
+wrapScreen   = ([x, y])      -> [ (x + SCREEN_WIDTH ) % SCREEN_WIDTH, (y + SCREEN_HEIGHT) % SCREEN_HEIGHT ]
+
+fold         = (size)        -> (d) -> d - size * round d / size # thank you Claude
+foldX        = fold SCREEN_WIDTH
+foldY        = fold SCREEN_HEIGHT
+
+clamp        = (least, most) -> (value)   -> max least, min most, value
+portionOf    = (begin, end)  -> (portion) -> begin + (end - begin) * portion
+
+visionDial   = portionOf MIN_VISION_DISTANCE, MAX_VISION_DISTANCE
+turnRateDial = portionOf 0, MAX_TURN_RATE
+
+
+bugs           = [1 .. liveBugs].map -> new Bug
+bugSpeed       = STARTING_BUG_SPEED
+
+visionDistance = visionDial   0.5
+turnRate       = turnRateDial 0.5
 
 buffer.on
 
 t = Date.now()
 
+
+scanOtherBugs = (bug) ->
+  flockTo  = new Vector 0, 0
+  fleeFrom = new Vector 0, 0
+  pointTo  = new Vector 0, 0
+
+  for otherBug in bugs when otherBug isnt bug
+    offset = otherBug.pos.minus bug.pos
+    dist   = offset.mag()
+
+    continue if visionDistance < dist
+
+    offset = offset.unit() # normalize to not favor more distant bugs
+
+    if dist < MIN_SPACING
+      portion = (MIN_SPACING - dist) / MIN_SPACING
+      feelFrom = fleeFrom.plus offset.times portion
+      show {portion, fleeFrom, offset}
+    else
+      flockTo  = flockTo .plus offset
+
+    pointTo = pointTo.plus Vector.fromAngle otherBug.heading
+
+  {flockTo, fleeFrom, pointTo}
+
+show = (stuff) -> print JSON.stringify stuff, null, 2
+bugs = []
+bugs.push aBug = new Bug pos: aPos = new Vector 200, 200
+bugs.push bBug = new Bug pos: bPos = new Vector 200, 202
+show "--- debug ---"
+#show scanOtherBugs aBug
+acc = new Vector
+show plus: acc.plus (acc.plus bPos.minus aPos).times 0.8
+show "--- end debug ---"
+
 loop
   cls 'black'
 
-  oldT = t
-  t    = Date.now()
-  dt   = t - oldT
+  [oldT, t] = [t, Date.now()]
+  dt = t - oldT
 
   if mouse.left
-    visionDistance = MIN_VISION_DISTANCE + (mouse.x / SCREEN_WIDTH) * (MAX_VISION_DISTANCE - MIN_VISION_DISTANCE)
-    turnRate       = (mouse.y / SCREEN_HEIGHT) * MAX_TURN_RATE
+    visionDistance =      visionDial   mouse.x / SCREEN_WIDTH
+    turnRate       = dt * turnRateDial mouse.y / SCREEN_HEIGHT
 
-  bugs =
-    for bug, i in bugs
-      {x, y, heading, c} = bug
+  bugs = for bug in bugs
+    {pos, heading, c} = bug
 
-      tooClose = angleAverager()
-      theRest  = angleAverager()
-      angles   = angleAverager().add wobblyBug bug
+    {flockTo, fleeFrom, pointTo} = scanOtherBugs bug
 
-      for otherBug, j in bugs when j isnt i
-        dist = hypot (diff = [otherBug.x - x, otherBug.y - y])...
+    heading += BUG_WOBBLE * (1 - rnd 2)
 
-        switch
-          when dist < MIN_SPACING    then tooClose.add atan2 diff[1], diff[0]
-          when dist < visionDistance then theRest .add atan2 diff[1], diff[0]
+    target = (flockTo .unit().times FLOCK_WEIGHT)
+       .minus(fleeFrom.unit().times  FLEE_WEIGHT)
+       .plus (pointTo .unit().times ALIGN_WEIGHT)
 
-      if tooClose.count then angles.add wrapRadians pi + tooClose.average()
-      if theRest .count then angles.add wrapRadians      theRest .average()
+    headingDiff    = target.angle() - heading
+    heading        = heading + max -turnRate, min turnRate, headingDiff
 
-      headingGoal = angles.average()
-      offCourse   = wrapRadians headingGoal - heading
-      turn        = (if offCourse < 0 then -1 else 1) * min abs(offCourse), turnRate * dt
-      heading    += turn
+    vel            = Vector.fromAngle(heading).times bugSpeed
+    pos            = pos.plus vel.times dt
+    [pos.x, pos.y] = wrapScreen [pos.x, pos.y]
 
-      vel = toCart BUG_SPEED * dt, heading
-      { x: (x + vel[0] + SCREEN_WIDTH ) % SCREEN_WIDTH
-        y: (y + vel[1] + SCREEN_HEIGHT) % SCREEN_HEIGHT
-        heading, c
-      }
+    bug.draw()
 
-  locate 0, 0
-  for bug in bugs
-    color bug.c
-    circle bug.x, bug.y, visionDistance
-    text JSON.stringify(bug) + "\n"
-
-    line bug.x, bug.y,
-         bug.x + BUG_LENGTH * cos(bug.heading)
-         bug.y + BUG_LENGTH * sin(bug.heading)
+    new Bug { pos, heading, c }
 
   buffer.swap
 
@@ -135,5 +179,3 @@ loop
 # the sight radius.
 #
 ###
-
-
