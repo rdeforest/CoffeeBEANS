@@ -28,6 +28,8 @@
   button:disabled { opacity: .35; cursor: default; }
   #status { opacity: .7; min-width: 6rem; text-align: right; }
   #meter  { opacity: .45; font-variant-numeric: tabular-nums; }
+  #lines  { opacity: .6; font-variant-numeric: tabular-nums; }
+  #lines.over { color: #ff6b6b; opacity: 1; }
 
   main { display: grid; grid-template-columns: 1fr var(--grip) var(--editor-w); min-height: 0; }
   main.solo { grid-template-columns: 1fr 0 0; }
@@ -62,6 +64,7 @@
   <button id="stop" class="stop">&#9632; Stop</button>
   <span class="spacer"></span>
   <button id="toggle" class="ghost">Editor</button>
+  <span id="lines"></span>
   <span id="meter"></span>
   <span id="status">booting</span>
 </header>

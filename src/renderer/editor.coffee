@@ -81,6 +81,17 @@ scheduleSave = ->
   clearTimeout saveTimer
   saveTimer = setTimeout save, SAVE_DELAY
 
+# A pending debounced edit is the only "unsaved" state this editor has, and
+# only briefly: switching sketches flushes it first. :e honours it anyway so
+# vim muscle memory holds.
+isDirty = -> view? and view.state.doc.toString() isnt lastWritten
+
+# :e! forgets a pending edit rather than flushing it: call the buffer already
+# written so the reload's save() is a no-op, then let the reload replace it.
+dropPending = ->
+  clearTimeout saveTimer
+  lastWritten = view.state.doc.toString()
+
 # Echoes of our own writes come back through the watcher; ignore those.
 applyExternal = ({name, text}) ->
   return unless name is current and view
@@ -91,6 +102,51 @@ applyExternal = ({name, text}) ->
     changes:   {from: 0, to: view.state.doc.length, insert: text}
     selection: {anchor}
   handlers.onExternal? name
+
+# --- source count + length limit --------------------------------------------
+
+# A source line is one his co-work limits count: not blank, not a comment.
+# The same test he was running by hand in the REPL.
+SOURCE = /^\s*[^ #]/
+
+countSource = (doc) ->
+  n = 0
+  for i in [1..doc.lines] when SOURCE.test doc.line(i).text
+    n += 1
+  n
+
+lineLimit = null
+
+# Where the (limit+1)th source line lives: the first line he went over budget
+# on. null while there is no limit, or while he is still within it.
+overFrom = (doc) ->
+  return null unless lineLimit?
+  n = 0
+  for i in [1..doc.lines] when SOURCE.test doc.line(i).text
+    return doc.line(i).from if (n += 1) > lineLimit
+  null
+
+overMark   = Decoration.line class: 'cm-over-limit'
+buildLimit = (doc) ->
+  from = overFrom doc
+  if from? then Decoration.set [overMark.range from] else Decoration.none
+
+# Asks the field to recompute when the limit changed but the text did not.
+relimit = StateEffect.define()
+
+limitField = StateField.define
+  create:  (state) -> buildLimit state.doc
+  update:  (deco, tr) ->
+    return buildLimit tr.state.doc if tr.docChanged or tr.effects.some (e) -> e.is relimit
+    deco.map tr.changes
+  provide: (field) -> EditorView.decorations.from field
+
+reportLines = -> handlers.onLines? count: countSource(view.state.doc), limit: lineLimit
+
+setLimit = (n) ->
+  lineLimit = if n > 0 then n else null
+  view.dispatch effects: relimit.of null
+  reportLines()
 
 # --- appearance -------------------------------------------------------------
 
@@ -111,6 +167,7 @@ theme = EditorView.theme {
   '.cm-activeLine':           {backgroundColor: '#ffffff08'}
   '.cm-activeLineGutter':     {backgroundColor: 'transparent', color: palette.coffee}
   '.cm-ran':                  {backgroundColor: '#C0FFEE33', transition: 'background-color .2s'}
+  '.cm-over-limit':           {backgroundColor: '#ff6b6b22', boxShadow: 'inset 2px 0 0 #ff6b6b'}
   '.cm-fat-cursor':           {backgroundColor: '#C0FFEE99 !important', outline: 'none !important'}
   '.cm-vim-panel':            {backgroundColor: '#17171b', color: palette.coffee, padding: '0 .4rem'}
   '.cm-vim-panel input':      {color: palette.coffee, fontFamily: 'inherit'}
@@ -145,6 +202,22 @@ restartAll = ->
   handlers.onRestart? view.state.doc.toString(), current
   true
 
+# :e opens a sketch by name, creating it if new -- the app's version of
+# touching a file and reloading. A bare :e reloads the current one. The bang
+# is not a flag this vim build exposes; it stays in the argument string.
+editSketch = (params) ->
+  arg   = ((params?.argString ? '') or (params?.args ? []).join ' ').trim()
+  force = arg[0] is '!'
+  arg   = arg[1..].trim() if force
+  name  = arg.split(/\s+/)[0]?.replace(/\.coffee$/, '') or current
+  return true unless name
+  if isDirty() and not force
+    handlers.onMessage? 'no write since last change (add ! to override)'
+    return true
+  dropPending() if force
+  handlers.onEdit? name
+  true
+
 beansKeymap = [
   {key: 'Ctrl-Enter',       run: runRegion,  preventDefault: yes}
   {key: 'Ctrl-Shift-Enter', run: restartAll, preventDefault: yes}
@@ -158,6 +231,8 @@ installVimCommands = ->
   Vim.defineEx 'run',     'run', -> runAll()
   Vim.defineEx 'restart', 'restart', -> restartAll()
   Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?[0]
+  Vim.defineEx 'edit',    'e',   (cm, params) -> editSketch params
+  Vim.defineEx 'target',  'tar', (cm, params) -> setLimit Number((params?.args ? [])[0] ? 0)
 
 # --- public -----------------------------------------------------------------
 
@@ -179,15 +254,20 @@ Editor =
           history()
           highlightSelectionMatches()
           flashField
+          limitField
           StreamLanguage.define coffeeScript
           syntaxHighlighting highlight
           indentUnit.of '  '
           theme
           Prec.highest keymap.of beansKeymap
           keymap.of [...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]
-          EditorView.updateListener.of (update) -> scheduleSave() if update.docChanged
+          EditorView.updateListener.of (update) ->
+            return unless update.docChanged
+            scheduleSave()
+            reportLines()
         ]
     beans.onChanged applyExternal
+    reportLines()
     view
 
   load: (name) ->

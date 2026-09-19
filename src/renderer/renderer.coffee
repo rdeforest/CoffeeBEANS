@@ -11,6 +11,7 @@ output   = document.getElementById 'console'
 statusEl = document.getElementById 'status'
 picker   = document.getElementById 'sketch'
 meter    = document.getElementById 'meter'
+linesEl  = document.getElementById 'lines'
 main     = document.getElementById 'main'
 ctx      = canvas.getContext '2d'
 
@@ -408,17 +409,36 @@ runSource = (source, name) ->
   return pending = {source, name} if status is 'booting'
   send {source, name}
 
+# Non-comment source lines, the count he used to fish out of the REPL. With a
+# :target set it reads count/limit and turns red once the limit is passed.
+setLines = ({count, limit}) ->
+  linesEl.textContent = if limit? then "#{count}/#{limit} lines" else "#{count} lines"
+  linesEl.classList.toggle 'over', limit? and count > limit
+  undefined
+
 Editor.mount document.getElementById('editor'),
   onRun:      (source, name) -> runSource source, "#{name} (region)"
   onRunAll:   (source, name) -> runSource source, name
   onRestart:  (source, name) -> say '*** restarting worker ***', 'sys'; start {source, name}
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
   onHelp:     showHelp
+  onLines:    setLines
+  onMessage:  (text) -> say text, 'sys'
+  onEdit:     (name) -> openSketch name
 
 selectSketch = (name) ->
   await Editor.load name
   picker.value = name
   Editor.focus()
+
+# :e newfile -- create it if it does not exist yet (an empty sketch, the way a
+# touch would leave it), refresh the picker so it shows, then open it.
+openSketch = (name) ->
+  unless name in await beans.list()
+    await beans.write name, ''
+    await fillPicker()
+    say "created #{name}.coffee", 'sys'
+  await selectSketch name
 
 fillPicker = ->
   names = await beans.list()

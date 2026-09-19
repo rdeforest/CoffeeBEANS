@@ -180,6 +180,64 @@ module.exports = (win, paths) ->
   # current would autosave test content straight over it.
   await js "await Editor.load('scratch'); return true"
 
+  # 13a. the status line counts source lines, and a :target flags the overrun.
+  # Goes through the real ex parser, the same path :help uses.
+  handleEx  = (cmd) -> js "CM.Vim.handleEx(CM.getCM(Editor.view()), #{JSON.stringify cmd}); return true"
+  linesText = -> js "return document.getElementById('lines').textContent"
+  overLine  = -> js "return (document.querySelector('.cm-over-limit') || {}).textContent ?? null"
+  overRed   = -> js "return document.getElementById('lines').classList.contains('over')"
+
+  await setDoc "# a comment\nprint 'one'\n\nprint 'two'\n"
+  await wait 300
+  check 'status line counts only source lines', (await linesText()) is '2 lines', JSON.stringify await linesText()
+
+  await handleEx 'target 3'
+  await wait 200
+  check 'a target above the count reads count/limit', (await linesText()) is '2/3 lines', JSON.stringify await linesText()
+  check 'within the target nothing is flagged', (await overLine()) is null and (await overRed()) is false
+
+  await handleEx 'target 1'
+  await wait 200
+  check 'over the target the count turns red', (await overRed()) is true
+  check 'the first line past the target is flagged', (await overLine()) is "print 'two'", JSON.stringify await overLine()
+
+  await handleEx 'target 0'
+  await wait 200
+  check ':target 0 clears the limit', (await overLine()) is null and (await overRed()) is false
+
+  # 13b. :e switches sketches, creates them when new, and honours the dirty guard.
+  await handleEx 'e hello'
+  await wait 300
+  check ':e switches to an existing sketch', (await js "return Editor.name()") is 'hello'
+
+  created = path.join paths.sketches, 'ecreate.coffee'
+  await fsp.rm created, force: yes
+  await handleEx 'e ecreate.coffee'          # the .coffee he would type is stripped
+  await wait 400
+  made = false
+  try
+    await fsp.access created
+    made = true
+  inPicker = await js "return [...document.getElementById('sketch').options].some((o) => o.value === 'ecreate')"
+  check ':e newname creates, opens, and lists the sketch',
+    (await js "return Editor.name()") is 'ecreate' and made and inPicker,
+    "name=#{await js "return Editor.name()"} disk=#{made} picker=#{inPicker}"
+
+  await js "await Editor.load('scratch'); return true"
+  await setDoc "print 'PENDING'\n"           # dirty: inside the 250ms save debounce
+  await handleEx 'e hello'                    # must refuse and stay put
+  await wait 100
+  check ':e refuses to abandon a pending edit', (await js "return Editor.name()") is 'scratch'
+  await wait 400                             # let that edit flush back to scratch
+  await setDoc "print 'DISCARD ME'\n"
+  await handleEx 'e! hello'                   # the bang drops it and switches
+  await wait 400
+  check ':e! discards the pending edit and switches', (await js "return Editor.name()") is 'hello'
+
+  await fsp.rm created, force: yes
+  # Back to scratch: the setDoc-heavy tests below must not autosave over a real one.
+  await js "await Editor.load('scratch'); return true"
+
   # 14. panels resize, clamp at both ends, and remember the last size
   await js "Panels.set('editor', 400); return true"
   await wait 150

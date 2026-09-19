@@ -13,6 +13,8 @@ SECTIONS = [
     [':run',              'run the whole buffer into the live worker']
     [':restart',          'fresh worker, empty scope -- this is RUN']
     [':w',                'force a save (edits autosave anyway)']
+    [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
+    [':target <n>',       'flag the first source line past n; :target 0 clears']
     [':help <topic>',     'this, or one section of it']
   ]
 ,
