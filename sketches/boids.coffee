@@ -18,6 +18,10 @@ ALIGN_WEIGHT        = 1
 
 liveBugs            = 40
 
+buffer.off
+cls()
+circle 320, 150, 'white'
+
 class Vector
   @fromAngle: (theta) -> new Vector cos(theta), sin(theta)
 
@@ -69,6 +73,7 @@ buffer.on
 
 t = Date.now()
 
+show = (stuff) -> print JSON.stringify stuff, null, 2
 
 scanOtherBugs = (bug) ->
   flockTo  = new Vector 0, 0
@@ -77,6 +82,7 @@ scanOtherBugs = (bug) ->
 
   for otherBug in bugs when otherBug isnt bug
     offset = otherBug.pos.minus bug.pos
+    [offset.x, offset.y] = [foldX(offset.x), foldY(offset.y)]
     dist   = offset.mag()
 
     continue if visionDistance < dist
@@ -85,8 +91,11 @@ scanOtherBugs = (bug) ->
 
     if dist < MIN_SPACING
       portion = (MIN_SPACING - dist) / MIN_SPACING
+      show before: {dist, portion, fleeFrom, offset}
       feelFrom = fleeFrom.plus offset.times portion
-      show {portion, fleeFrom, offset}
+      ff = new Vector
+      ff = ff.plus offset.times portion
+      show after: {dist, portion, fleeFrom, ff, offsetTimesPortion: offset.times portion}
     else
       flockTo  = flockTo .plus offset
 
@@ -94,14 +103,9 @@ scanOtherBugs = (bug) ->
 
   {flockTo, fleeFrom, pointTo}
 
-show = (stuff) -> print JSON.stringify stuff, null, 2
-bugs = []
-bugs.push aBug = new Bug pos: aPos = new Vector 200, 200
-bugs.push bBug = new Bug pos: bPos = new Vector 200, 202
 show "--- debug ---"
-#show scanOtherBugs aBug
-acc = new Vector
-show plus: acc.plus (acc.plus bPos.minus aPos).times 0.8
+bugs.push aBug = new Bug pos: aPos = new Vector 200, 200
+scanOtherBugs aBug
 show "--- end debug ---"
 
 loop

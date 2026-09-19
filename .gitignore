@@ -2,3 +2,7 @@ node_modules/
 tmp/
 test_tmp/
 *.log
+
+# Vim files
+.sw?
+.*.sw?
