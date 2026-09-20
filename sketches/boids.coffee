@@ -1,10 +1,14 @@
-show = (v) -> print JSON.stringify v, null, 2
+#show = (v) -> print JSON.stringify v, null, 2
 
 w = 480; h = 300
 
 screen w, h
 
-crowding = 25
+#ruleColors =
+#  flock  : COLORS.lime
+#  flee   : COLORS.pink
+#  align  : COLORS.cyan
+#  wobble : COLORS.brown
 
 weight =
   flock  :  2
@@ -13,10 +17,11 @@ weight =
   wobble :  1/10
 
 limits =
-  dt:    50
-  speed: 0.02
-  turn:  0.01
-  sight: min(w, h) / 2
+  dt       : 50
+  speed    : 0.02
+  turn     : 0.01
+  sight    : min(w, h) / 2
+  crowding : 25
 
 bugSight = limits.sight /  5
 bugTurn  = limits.turn  / 10
@@ -28,38 +33,44 @@ foldX = fold w; foldY = fold h
 
 foldRadians = (theta) -> atan2(sin(theta), cos(theta))
 
-addVector = (v1, v2, scale = 1) -> v1.map (x, i) -> x + v2[i] * scale
+addVector = (v1, v2, scale = 1) -> (v1 ? [0, 0]).map (x, i) -> x + v2[i] * scale
 
 makeBug = (template = {}) ->
   { x = rnd(w); y = rnd(h); dir = pi * (1 - rnd 2) } = template
   { x, y, dir }
 
-bugs = [1..10].map makeBug
-
 vectToAngle = (v) -> atan2 v[1], v[0]
+
+makeVector = (a, s) -> [cos, sin].map (f) -> s * f(a)
+
+showAngle = (x, y, vect, color) ->
+  angle = vectToAngle vect
+  line x, y, addVector([x, y], makeVector angle, 15), color
 
 scanFlock = (bug) ->
   vectors = {}
 
   for other in bugs when other isnt bug
-    offset = [foldX(other.x - bug.x), foldY(other.y - bug.y)]
-    dist   = hypot offset...
+    offset     = [foldX(other.x - bug.x), foldY(other.y - bug.y)]
+    dist       = hypot       offset...
     dirToOther = vectToAngle offset
 
     continue if dist > bugSight
 
-    vectors.align = addVector vectors.align ? [0, 0], [cos(other.dir ), sin(other.dir )]
-    vectors.flock = addVector vectors.flock ? [0, 0], [cos(dirToOther), sin(dirToOther)]
+    vectors.align   = addVector vectors.align, makeVector other.dir
+
+    if dist < limits.crowding
+      vectors.flee  = addVector vectors.flee , makeVector dirToOther
+    else
+      vectors.flock = addVector vectors.flock, makeVector dirToOther
 
   vectors
 
 buffer.on
 
-t = Date.now()
+bugs = [1..10].map makeBug
 
-showAngle = (x, y, vect, color) ->
-  angle = vectToAngle vect
-  line x, y, x + 15 * cos(angle), y + 15 * sin(angle), color
+t = Date.now()
 
 loop
   cls 'black'
@@ -75,34 +86,28 @@ loop
     for bug, i in bugs
       vectors = scanFlock ({x, y, dir} = bug)
       wobble = dt/10000 * pi * (1 - rnd(2))
-      targetVect = [weight.wobble * cos(dir + wobble), weight.wobble * sin(dir + wobble)]
 
-      if vectors.flock
-        targetVect = addVector targetVect, vectors.flock, weight.flock
-        showAngle x, y, vectors.flock, COLORS.lime
+      targetVect = makeVector dir + wobble, weight.wobble
 
-      if vectors.align
-        targetVect = addVector targetVect, vectors.align, weight.align
-        showAngle x, y, vectors.align, COLORS.cyan
+      for rule, vect of vectors
+        targetVect = addVector targetVect, vect, weight[rule]
+        #showAngle x, y, vectors.flock, ruleColors[rule]
 
-      showAngle x, y, targetVect, COLORS.yellow
+      #showAngle x, y, targetVect, COLORS.yellow
 
       targetAngle = vectToAngle targetVect
       turn = foldRadians(targetAngle - dir)
 
       dir = foldRadians dir + max -bugTurn * dt, min bugTurn * dt, turn
-      
-      dx = dt * limits.speed * cos dir
-      dy = dt * limits.speed * sin dir
 
-      x = (w + x + dx) % w
-      y = (h + y + dy) % h
+      [x, y] = addVector [x, y], makeVector dir, dt * limits.speed
+      [x, y] = [(w + x) % w, y  = (h + y) % h]
       
       circle    x, y,   5, COLORS.white
       showAngle x, y, [5 * cos(dir), 5 * sin(dir)], COLORS.white
 
-      #circle x, y, crowding, 'red'
-      circle x, y, bugSight, COLORS.green
+      #circle x, y, limits.crowding, 'red'
+      #circle x, y, bugSight, COLORS.green
       
       { x, y, dir }
 
