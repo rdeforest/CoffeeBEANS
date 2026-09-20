@@ -21,10 +21,9 @@ status = ''
 setStatus = (text) ->
   status = text
   statusEl.textContent = text
-  # Run means "evaluate into the live worker", which a busy worker cannot
-  # do, so the buttons say so. Restart replaces the worker and always works.
-  for id in ['run', 'runAll']
-    document.getElementById(id).disabled = text is 'running'
+  # Eval means "evaluate into the live worker", which a busy worker cannot
+  # do, so the button says so. Run replaces the worker and always works.
+  document.getElementById('evalRegion').disabled = text is 'running'
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -471,9 +470,9 @@ setLines = ({count, limit}) ->
   undefined
 
 Editor.mount document.getElementById('editor'),
-  onRun:      (source, name) -> runSource source, "#{name} (region)"
-  onRunAll:   (source, name) -> runSource source, name
-  onRestart:  (source, name) -> say '*** restarting worker ***', 'sys'; start {source, name}
+  onEval:     (source, name) -> runSource source, "#{name} (region)"
+  onEvalAll:  (source, name) -> runSource source, name
+  onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; start {source, name}
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
   onHelp:     showHelp
   onLines:    setLines
@@ -508,11 +507,10 @@ toggleEditor = ->
   main.classList.toggle 'solo'
   resize()
 
-document.getElementById('run').onclick     = -> Editor.runRegion()
-document.getElementById('runAll').onclick  = -> runSource Editor.all(), Editor.name()
-document.getElementById('restart').onclick = -> start {source: Editor.all(), name: Editor.name()}
-document.getElementById('stop').onclick    = stop
-document.getElementById('toggle').onclick  = toggleEditor
+document.getElementById('evalRegion').onclick = -> Editor.evalRegion()
+document.getElementById('runFresh').onclick   = -> start {source: Editor.all(), name: Editor.name()}
+document.getElementById('stop').onclick       = stop
+document.getElementById('toggle').onclick     = toggleEditor
 picker.onchange = -> selectSketch picker.value
 
 window.addEventListener 'keydown', (event) ->

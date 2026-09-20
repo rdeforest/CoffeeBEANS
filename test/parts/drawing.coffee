@@ -2,7 +2,7 @@
 # rounding, surfaces, blits, stamps and text.
 
 module.exports = (t) ->
-  {wait, check, setDoc, runAll, consoleText, clearConsole, settled} = t
+  {wait, check, setDoc, evalAll, consoleText, clearConsole, settled} = t
   # 21. the shape primitives put pixels where they claim to
   shapes = """
 screen 320, 200
@@ -24,7 +24,7 @@ print 'discCentre='  + (pget(160, 140) is COLORS.yellow)
   await setDoc shapes
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['lineStart=true', 'lineEnd=true', 'rectEdge=true', 'rectHollow=false',
             'fillCentre=true', 'circleRim=true', 'circleHollow=false', 'discCentre=true']
@@ -35,7 +35,7 @@ print 'discCentre='  + (pget(160, 140) is COLORS.yellow)
   await setDoc "screen 320, 200\ncls()\nt = performance.now()\nline -1e9, -1e9, 1e9, 1e9, COLORS.white\nline 400, 400, 900, 900, COLORS.red\nprint 'ms=' + round(performance.now() - t)\nprint 'diagonal=' + (pget(160, 160) is COLORS.white)\nprint 'offscreen=' + (pget(319, 199) is COLORS.red)\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   elapsed = Number /ms=(\d+)/.exec(text)?[1] ? 9999
   check 'line clips instead of iterating', elapsed < 50 and text.includes('diagonal=true') and text.includes('offscreen=false'), JSON.stringify text.trim()
@@ -88,7 +88,7 @@ print 'pixels=' + overlaps(left, 0, 0, right, -5, -5)
   await setDoc surfaces
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['grabSize=10x10', 'cleared=true', 'restored=true',
             'offscreen=true', 'screenUntouched=true', 'restoredTarget=true',
@@ -102,7 +102,7 @@ print 'pixels=' + overlaps(left, 0, 0, right, -5, -5)
   await setDoc "screen 320, 200\ncls()\ns = surface 8, 8\ndrawTo s, -> cls COLORS.white\nput s, -4, -4\nput s, 316, 196\nput s, -100, -100\nput s, 1000, 1000\nprint 'topLeft=' + (pget(0, 0) is COLORS.white)\nprint 'bottomRight=' + (pget(319, 199) is COLORS.white)\nprint 'survived=true'\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'put clips at the edges', text.includes('topLeft=true') and text.includes('bottomRight=true') and text.includes('survived=true'), JSON.stringify text.trim()
 
@@ -146,7 +146,7 @@ print 'zeroScaleSurvived=true'
   await setDoc stamping
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['identity=true', 'identityCorner=true', 'scaledCorner=true',
             'scaledExtent=true', 'scaledPast=true', 'rotatedSomething=true',
@@ -185,7 +185,7 @@ print 'branched=' + (above > 100 and offAxis > 50)
   await setDoc tree
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'recursive feedback grows branches',
     text.includes('trunk=true') and text.includes('branched=true'),
@@ -242,7 +242,7 @@ print 'timing=' + (elapsed >= 0 and frames >= 0)
   await setDoc texting
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text2  = await settled()
   wanted = ['glyphOn=true', 'glyphOff=true', 'width=40', 'located=true',
             'scaled=true', 'scaledWidth=32', 'wrapped=true',
@@ -255,7 +255,7 @@ print 'timing=' + (elapsed >= 0 and frames >= 0)
   await setDoc "screen 320, 200\ncls()\nrectFill 0, 2.5, 10, 5.5, COLORS.white\nprint 'inside=' + (pget(5, 4) is COLORS.white)\nprint 'rowStart=' + (pget(0, 3) is COLORS.white)\nprint 'wrapped=' + (pget(300, 2) is COLORS.white)\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'rectFill rounds fractional corners', text.includes('inside=true') and text.includes('rowStart=true') and text.includes('wrapped=false'), JSON.stringify text.trim()
 
@@ -294,7 +294,7 @@ print 'paperReset=' + (pget(0, 0) isnt COLORS.red)
   await setDoc modes
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['targetReset=true', 'brushReset=true', 'cursorReset=true',
             'scaleReset=true', 'paperReset=true']

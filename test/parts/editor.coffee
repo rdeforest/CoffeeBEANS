@@ -7,7 +7,7 @@ path    = require 'path'
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
-   settled, runRegion} = t
+   settled, evalRegion} = t
   # 1. editor is mounted and vim is driving it
   mounted = await js "return !!document.querySelector('.cm-editor')"
   fatCursor = await js "return !!document.querySelector('.cm-fat-cursor') || !!document.querySelector('.cm-vim-panel')"
@@ -27,7 +27,7 @@ module.exports = (t) ->
   await wait 500
   await clearConsole()
   await cursorOnLine 3
-  await runRegion()
+  await evalRegion()
   text = await settled()
   check 'region runs paragraph at cursor', text.includes('SECOND') and not text.includes('FIRST'), JSON.stringify text.trim()
 
@@ -36,10 +36,10 @@ module.exports = (t) ->
   await wait 500
   await clearConsole()
   await cursorOnLine 2
-  await runRegion()
+  await evalRegion()
   defined = await settled()
   await cursorOnLine 4
-  await runRegion()
+  await evalRegion()
   text = await settled()
   check 'cursor in a definition runs the definition', defined.trim() is '' and text.includes('CALLED'), JSON.stringify text.trim()
 
@@ -48,7 +48,7 @@ module.exports = (t) ->
   await wait 500
   await clearConsole()
   await selectLines 2, 3
-  await runRegion()
+  await evalRegion()
   text = await settled()
   check 'selected indented region dedents', text.includes('INDENTED') and text.includes('STILL') and not text.toLowerCase().includes('error'), JSON.stringify text.trim()
 

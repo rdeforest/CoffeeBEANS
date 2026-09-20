@@ -2,17 +2,17 @@
 # globalThis, survive a throw, and cannot damage the API by shadowing it.
 
 module.exports = (t) ->
-  {js, wait, check, setDoc, cursorOnLine, runAll, consoleText, clearConsole,
-   click, settled, runRegion} = t
+  {js, wait, check, setDoc, cursorOnLine, evalAll, consoleText, clearConsole,
+   click, settled, evalRegion} = t
   # 6. the worker is a live image: define in one region, call from another
   await setDoc "greet = (who) -> print \"hi \#{who}\"\n\ngreet 'robert'\n"
   await wait 500
   await clearConsole()
   await cursorOnLine 1
-  await runRegion()
+  await evalRegion()
   await wait 400
   await cursorOnLine 3
-  await runRegion()
+  await evalRegion()
   text = await settled()
   check 'worker keeps state between runs', text.includes('hi robert'), JSON.stringify text.trim()
 
@@ -20,11 +20,11 @@ module.exports = (t) ->
   await setDoc "onmessage = 'clobbered'\nprint 'BEFORE'\n"
   await wait 500
   await clearConsole()
-  await runRegion()
+  await evalRegion()
   await wait 400
   await setDoc "print 'AFTER'\n"
   await wait 500
-  await runRegion()
+  await evalRegion()
   text = await settled()
   check 'sketch cannot clobber the worker inbox', text.includes('AFTER'), JSON.stringify text.trim()
 
@@ -32,7 +32,7 @@ module.exports = (t) ->
   await setDoc "print(name + '=' + typeof globalThis[name]) for name in ['load', 'get', 'put', 'text', 'surface', 'stamp', 'line']\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text4 = await settled()
   shadowed = (name for name in ['load', 'get', 'put', 'text', 'surface', 'stamp', 'line'] \
               when not text4.includes "#{name}=function")
@@ -43,7 +43,7 @@ module.exports = (t) ->
   await setDoc "mySketchThing = 42\nprint 'local=' + mySketchThing\nprint 'leaked=' + globalThis.mySketchThing?\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'sketch names stay out of globalThis',
     text.includes('local=42') and text.includes('leaked=false'), JSON.stringify text.trim()
@@ -52,36 +52,36 @@ module.exports = (t) ->
   await setDoc "line = 5\nprint 'shadowed=' + typeof line\nprint 'apiIntact=' + typeof globalThis.line\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   shadowed = text.includes('shadowed=number') and text.includes('apiIntact=function')
 
   # the shadow lives in the image, so a later region still sees it
   await setDoc "print 'persists=' + typeof line\n"
   await wait 500
-  await runAll()
+  await evalAll()
   text = await settled()
   persists = text.includes('persists=number')
 
-  # and a restart drops the image, leaving the API pristine
-  await setDoc "print 'afterRestart=' + typeof line\n"
+  # and a run drops the image, leaving the API pristine
+  await setDoc "print 'afterRun=' + typeof line\n"
   await wait 500
   await clearConsole()
-  await click 'restart'
+  await click 'runFresh'
   await wait 1200
   text = await consoleText()
-  check 'a shadowed command is restored by a restart',
-    shadowed and persists and text.includes('afterRestart=function'),
+  check 'a shadowed command is restored by a run',
+    shadowed and persists and text.includes('afterRun=function'),
     "shadowed=#{shadowed} persists=#{persists} after=#{JSON.stringify text.trim()}"
 
   # 49. a sketch that throws keeps whatever it managed to define
   await setDoc "keeper = 7\nthrow new Error 'halt'\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   await wait 700
   await setDoc "print 'kept=' + keeper\n"
   await wait 500
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'definitions survive a sketch that throws', text.includes('kept=7'), JSON.stringify text.trim()

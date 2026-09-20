@@ -1,20 +1,20 @@
 # Keys and mouse, from a DOM event through shared memory to the sketch.
 
 module.exports = (t) ->
-  {js, wait, check, setDoc, runAll, consoleText, clearConsole, key, settled} = t
+  {js, wait, check, setDoc, evalAll, consoleText, clearConsole, key, settled} = t
   # 15. keyboard state reaches the sketch, and clears on keyup
 
   await setDoc "print 'down=' + keys.down('a')\n"
   await wait 500
   await key 'keydown', 'KeyA'
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'keys.down sees a held key', text.includes('down=true'), JSON.stringify text.trim()
 
   await key 'keyup', 'KeyA'
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'keys.down clears on keyup', text.includes('down=false'), JSON.stringify text.trim()
 
@@ -24,12 +24,12 @@ module.exports = (t) ->
   await key 'keydown', 'KeyB'
   await key 'keyup',   'KeyB'
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'keys.hit catches a tap between frames', text.includes('hit=true'), JSON.stringify text.trim()
 
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'keys.hit is claimed once', text.includes('hit=false'), JSON.stringify text.trim()
 
@@ -42,7 +42,7 @@ module.exports = (t) ->
   # handler; that a real blur fires it is browser behaviour.
   await js "document.getElementById('stage').dispatchEvent(new FocusEvent('blur')); return true"
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'blur releases held keys', text.includes('stuck=false'), JSON.stringify text.trim()
 
@@ -57,6 +57,6 @@ module.exports = (t) ->
     return true
   """
   await clearConsole()
-  await runAll()
+  await evalAll()
   text = await settled()
   check 'mouse maps into screen pixels', text.includes('at=80,100'), JSON.stringify text.trim()

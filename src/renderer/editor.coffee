@@ -202,20 +202,23 @@ highlight = HighlightStyle.define [
 
 # --- commands ---------------------------------------------------------------
 
-runRegion = ->
+# Eval puts code into the worker that is already running, so everything it
+# knows stays. Run throws that worker away first. They are different in kind,
+# not in scope, which is why they do not share a verb.
+evalRegion = ->
   {from, to} = regionAt view.state
   flash from, to
-  handlers.onRun? dedent(view.state.sliceDoc from, to), current
+  handlers.onEval? dedent(view.state.sliceDoc from, to), current
   true
 
-runAll = ->
+evalAll = ->
   save()
-  handlers.onRunAll? view.state.doc.toString(), current
+  handlers.onEvalAll? view.state.doc.toString(), current
   true
 
-restartAll = ->
+runFresh = ->
   save()
-  handlers.onRestart? view.state.doc.toString(), current
+  handlers.onRun? view.state.doc.toString(), current
   true
 
 # :e opens a sketch by name, creating it if new -- the app's version of
@@ -235,17 +238,19 @@ editSketch = (params) ->
   true
 
 beansKeymap = [
-  {key: 'Ctrl-Enter',       run: runRegion,  preventDefault: yes}
-  {key: 'Ctrl-Shift-Enter', run: restartAll, preventDefault: yes}
+  {key: 'Ctrl-Enter',       run: evalRegion, preventDefault: yes}
+  {key: 'Ctrl-Shift-Enter', run: runFresh,   preventDefault: yes}
   {key: 'Ctrl-s',           run: (-> save(); true), preventDefault: yes}
 ]
 
 installVimCommands = ->
-  Vim.defineAction 'beansRunRegion', -> runRegion()
-  Vim.mapCommand '<C-r>', 'action', 'beansRunRegion', {}, context: 'visual'
+  Vim.defineAction 'beansEvalRegion', -> evalRegion()
+  Vim.mapCommand '<C-r>', 'action', 'beansEvalRegion', {}, context: 'visual'
   Vim.defineEx 'write',   'w',   -> save()
-  Vim.defineEx 'run',     'run', -> runAll()
-  Vim.defineEx 'restart', 'restart', -> restartAll()
+  Vim.defineEx 'eval',    'ev',  -> evalAll()
+  Vim.defineEx 'run',     'run', -> runFresh()
+  # Kept because it is exactly what run does, and it was the name for a while.
+  Vim.defineEx 'restart', 'restart', -> runFresh()
   Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?[0]
   Vim.defineEx 'edit',    'e',   (cm, params) -> editSketch params
   Vim.defineEx 'target',  'tar', (cm, params) -> setLimit Number((params?.args ? [])[0] ? 0)
@@ -298,7 +303,7 @@ Editor =
 
   name:      -> current
   all:       -> view.state.doc.toString()
-  runRegion: -> view.focus(); runRegion()
+  evalRegion: -> view.focus(); evalRegion()
   view:      -> view
   save:   save
   focus:  -> view.focus()

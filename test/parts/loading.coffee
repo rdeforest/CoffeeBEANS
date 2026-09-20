@@ -4,7 +4,7 @@ fsp     = require 'fs/promises'
 path    = require 'path'
 
 module.exports = (t) ->
-  {wait, check, setDoc, runAll, consoleText, clearConsole, paths, settled} = t
+  {wait, check, setDoc, evalAll, consoleText, clearConsole, paths, settled} = t
   # 30. load: real bytes, real decode, correct channel order, cached to disk
   assets = path.join paths.data, 'assets'
   await fsp.mkdir assets, recursive: yes
@@ -36,7 +36,7 @@ catch error
   await setDoc loading
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text3  = await settled()
   wanted = ['size=2x2', 'red=true', 'green=true', 'blue=true', 'clear=true',
             'keptUnder=true', 'drewOver=true', 'missing=true']

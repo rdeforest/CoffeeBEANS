@@ -5,13 +5,15 @@ SECTIONS = [
   name:  'running'
   title: 'Running code'
   lines: [
-    ['Ctrl-Enter',        'run the selection, or the paragraph at the cursor']
+    ['Ctrl-Enter',        'eval the selection, or the paragraph at the cursor']
     ['Ctrl-r',            'same, from visual mode (normal mode keeps redo)']
-    ['Ctrl-Shift-Enter',  'restart the worker, then run the whole buffer']
+    ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
     ['Ctrl-e',            'show or hide the editor']
-    [':run',              'run the whole buffer into the live worker']
-    [':restart',          'fresh worker, empty scope -- this is RUN']
+    [':eval',             'eval the whole buffer into the live worker']
+    [':run',              'fresh worker, empty scope -- this is BASIC RUN']
+    ['',                  'eval keeps everything the worker knows;']
+    ['',                  'run throws it away and starts clean']
     [':w',                'force a save (edits autosave anyway)']
     [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
     [':target <n>',       'flag the first source line past n; :target 0 clears']

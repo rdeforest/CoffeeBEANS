@@ -1,12 +1,12 @@
 # The colour and paint axis: fill rules, makers, tiles, gradients, HSV.
 
 module.exports = (t) ->
-  {wait, check, setDoc, runAll, consoleText, clearConsole, settled} = t
+  {wait, check, setDoc, evalAll, consoleText, clearConsole, settled} = t
   # 43. fromHSV, in degrees, beside fromRGB
   await setDoc "print 'red='   + (COLORS.fromHSV(0)   is COLORS.red)\nprint 'lime='  + (COLORS.fromHSV(120) is COLORS.lime)\nprint 'blue='  + (COLORS.fromHSV(240) is COLORS.blue)\nprint 'white=' + (COLORS.fromHSV(0, 0, 1) is COLORS.white)\nprint 'black=' + (COLORS.fromHSV(0, 0, 0) is COLORS.black)\nprint 'wraps=' + (COLORS.fromHSV(370) is COLORS.fromHSV(10))\nprint 'negative=' + (COLORS.fromHSV(-120) is COLORS.fromHSV(240))\n"
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['red=true', 'lime=true', 'blue=true', 'white=true', 'black=true', 'wraps=true', 'negative=true']
   absent = (want for want in wanted when not text.includes want)
@@ -88,7 +88,7 @@ print 'screenClean=' + (pget(8, 8) isnt COLORS.lime)
   await setDoc filling
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['inside=true', 'edgeKept=true', 'outside=true', 'leaked=true',
             'crossedBlue=true', 'crossedLime=true', 'stoppedAtBorder=true',
@@ -189,7 +189,7 @@ print 'solid=' + (pget(5, 5) is COLORS.red)
   await setDoc painting
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['rectFill=true', 'circleFill=true', 'line=true', 'text=true', 'cls=true',
             'asColour=true', 'seesUnder=true', 'sameProbe=true',
@@ -229,7 +229,7 @@ catch error
   await setDoc refusing
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['namesWork=true', 'unknownName=true', 'notAColour=true', 'inherited=refused']
   absent = (want for want in wanted when not text.includes want)
@@ -256,7 +256,7 @@ print 'outerStopped=' + (pget(10, 10) isnt COLORS.red)
   await setDoc nesting
   await wait 500
   await clearConsole()
-  await runAll()
+  await evalAll()
   text   = await settled()
   wanted = ['nestedRan=true', 'outerStarted=true', 'outerFinished=true', 'outerStopped=true']
   absent = (want for want in wanted when not text.includes want)

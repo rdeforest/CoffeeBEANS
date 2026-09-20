@@ -48,12 +48,14 @@ module.exports = (win, paths) ->
   # --- the app around it ------------------------------------------------------
 
   t.click        = (id) -> t.js "document.getElementById('#{id}').click(); return true"
-  t.runAll       = -> t.click 'runAll'
+  # There is no button for the whole buffer any more -- it is `:eval`, through
+  # the real ex parser, the same path :help and :target are tested on.
+  t.evalAll      = -> t.handleEx 'eval'
   t.status       = -> t.js "return document.getElementById('status').textContent"
   t.consoleText  = -> t.js "return document.getElementById('console').textContent"
   t.clearConsole = -> t.js "document.getElementById('console').innerHTML = ''; return true"
 
-  t.runRegion = -> t.js "Editor.runRegion(); return true"
+  t.evalRegion = -> t.js "Editor.evalRegion(); return true"
 
   # The console, once the run that filled it has finished. A fixed sleep was
   # only ever a guess at how long a sketch takes, and on a busy machine the
@@ -95,7 +97,7 @@ module.exports = (win, paths) ->
     await t.js "await Editor.load('scratch'); return true"
     await t.setDoc ''
     await wait 400                   # past the autosave debounce
-    await t.click 'restart'
+    await t.click 'runFresh'
     await t.settle()
     await t.clearConsole()
     undefined

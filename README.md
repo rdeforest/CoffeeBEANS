@@ -152,18 +152,25 @@ The editor pane is CodeMirror with vim keybindings, and the file on disk is
 the only source of truth -- edits autosave, and writes from vim in another
 window reload the pane. Running is an operation on a region:
 
-    Ctrl-Enter          run the selection, or the paragraph under the cursor
+    Ctrl-Enter          eval the selection, or the paragraph under the cursor
     Ctrl-r              same, from visual mode
-    Ctrl-Shift-Enter    restart the worker and run the whole buffer
-    :w                  force a save        :run       run the whole buffer
-    :restart            fresh worker        Ctrl-.     stop
+    Ctrl-Shift-Enter    run -- fresh worker, then the whole buffer
+    :w                  force a save        :eval      eval the whole buffer
+    :run                fresh worker        Ctrl-.     stop
     :help [topic]       quick reference in the console pane
 
-A run pressed while a sketch is still running is refused, not queued: the
-run buttons grey out and the keyboard bindings say so in the console. Stop
-it first, or Restart, which replaces the worker. Otherwise the second run
-would fire the instant the first ended and look exactly like the sketch
-starting itself again.
+**Eval** puts code into the worker you already have, so everything it knows
+stays. **Run** throws that worker away and starts a new one. They are
+different in kind rather than in scope, which is why they do not share a
+verb: there is no "eval all" button, because eval-the-whole-buffer is the
+same operation as eval-this-region with everything selected, and `:eval` is
+there when you want it without reaching for the mouse.
+
+An eval pressed while a sketch is still running is refused, not queued: the
+Eval button greys out and the keyboard binding says so in the console. Stop
+it first, or Run, which replaces the worker and never has to ask. Otherwise
+the second eval would fire the instant the first ended and look exactly like
+the sketch starting itself again.
 
 Modes persist in the live worker too: the current colour, the draw target,
 double buffering, any frame cap. `screen` resets buffering and the cap, like
@@ -171,16 +178,16 @@ BASIC's SCREEN reset pages, so a sketch starts in the mode it asks for
 rather than the one the last sketch left behind. Put `buffer.on` and
 `buffer.fps` after `screen`.
 
-Ctrl-Enter and `:run` evaluate into the *live* worker, so definitions persist
-between runs -- define a function in one region, call it from another. That is
-BASIC's immediate mode. `:restart` is `RUN`: a clean scope.
+Ctrl-Enter and `:eval` evaluate into the *live* worker, so definitions persist
+between evals -- define a function in one region, call it from another. That is
+BASIC's immediate mode. `:run` is `RUN`: a clean scope.
 
 A sketch runs in its own scope, so its names cannot collide with the drawing
 commands or with anything the app owns. You can still shadow a command --
 `line = 5` hides `line` for as long as the session lives -- but the command
-itself is never damaged, and `:restart` gives it back.
+itself is never damaged, and `:run` gives it back.
 
-Ctrl-r stays bound to redo in normal mode; the run binding only takes it in
+Ctrl-r stays bound to redo in normal mode; the eval binding only takes it in
 visual mode, where vim leaves it free.
 
 ## Input
