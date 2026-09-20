@@ -1,6 +1,6 @@
-show = (stuff) -> print JSON.stringify stuff, null, 2
+#show = (stuff) -> print JSON.stringify stuff, null, 2
 
-screen SCREEN_WIDTH = 640, SCREEN_HEIGHT = 300
+screen SCREEN_WIDTH = 320, SCREEN_HEIGHT = 200
 
 SCREEN_SIZE         = min SCREEN_WIDTH, SCREEN_HEIGHT
 
@@ -18,9 +18,9 @@ ALIGN_WEIGHT        = 1
 
 liveBugs            = 40
 
-fold         = (size)        -> (d) -> d - size * round d / size # thank you Claude
-foldX        = fold SCREEN_WIDTH
-foldY        = fold SCREEN_HEIGHT
+fold  = (size) -> (d) -> d - size * round d / size # thank you Claude
+foldX = fold SCREEN_WIDTH
+foldY = fold SCREEN_HEIGHT
 
 class Vector
   @fromAngle: (theta) -> new Vector cos(theta), sin(theta)
@@ -82,8 +82,6 @@ turnRate       = turnRateDial 0.5
 
 buffer.on
 
-t = Date.now()
-
 scanOtherBugs = (bug) ->
   flockTo  = new Vector 0, 0
   fleeFrom = new Vector 0, 0
@@ -114,6 +112,8 @@ scanOtherBugs = (bug) ->
   pointTo = pointTo.times 1/near
   {flockTo, fleeFrom, pointTo}
 
+t = Date.now()
+
 loop
   cls 'black'
 
@@ -127,7 +127,6 @@ loop
   bugs = for bug in bugs
     {flockTo, fleeFrom, pointTo} = scanOtherBugs bug
 
-
     target = (flockTo .unit().times FLOCK_WEIGHT)
        .minus(fleeFrom.unit().times  FLEE_WEIGHT)
        .plus (pointTo .unit().times ALIGN_WEIGHT)
@@ -139,7 +138,7 @@ loop
     bug.turn Vector.fromAngle headingDiff
        .move dt
        .draw()
-
+        
   buffer.swap
 
 ###
