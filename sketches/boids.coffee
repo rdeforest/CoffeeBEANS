@@ -1,184 +1,92 @@
-#show = (stuff) -> print JSON.stringify stuff, null, 2
+#show = (v) -> print JSON.stringify v, null, 2
 
-screen SCREEN_WIDTH = 320, SCREEN_HEIGHT = 200
+w = 320; h = 200
 
-SCREEN_SIZE         = min SCREEN_WIDTH, SCREEN_HEIGHT
+screen w, h
 
-MAX_TURN_RATE       = 0.008 * pi      # radian per millisecond
-STARTING_BUG_SPEED  = 0.08            # pixels per millisecond
+crowding = 15
 
-BUG_LENGTH          = 5               # pixels
-MIN_SPACING         = BUG_LENGTH  * 2 # pixels
-MIN_VISION_DISTANCE = MIN_SPACING * 2 # pixels
-MAX_VISION_DISTANCE = SCREEN_SIZE / 2 # pixels
+weight =
+  flock:  1
+  flee : -10
+  align:  1
 
-FLOCK_WEIGHT        = 1
-FLEE_WEIGHT         = 100
-ALIGN_WEIGHT        = 1
+limits =
+  speed: 0.02
+  turn:  0.01
+  sight: min(w,h) / 2
 
-liveBugs            = 40
+bugSight = limits.sight / 5
+bugTurn  = limits.turn  / 10
 
-fold  = (size) -> (d) -> d - size * round d / size # thank you Claude
-foldX = fold SCREEN_WIDTH
-foldY = fold SCREEN_HEIGHT
+# fold(foo) bar - like bar % foo, except foo/2 .. foo go to -foo .. 0
+# (thank you Claude)
+fold = (size) -> (x) -> x - size * round x / size
+foldX = fold w; foldY = fold h
+foldRadians = (theta) -> atan2(sin(theta), cos(theta))
 
-class Vector
-  @fromAngle: (theta) -> new Vector cos(theta), sin(theta)
+addVector = (v1, v2, scale = 1) -> v1.map (x, i) -> x + v2[i] * scale
 
-  constructor: (@x = 0, @y = 0) ->
+makeBug = (template = {}) ->
+  { x = rnd(w), y = rnd(h), dir = pi * (1 - rnd 2) } = template
+  { x, y, dir }
 
-  angle  :         -> atan2  @y,        @x
-  mag    :         -> hypot  @x,        @y
-  unit   :         -> Vector.fromAngle @angle()
+bugs = [1..10].map makeBug
 
-  plus   : (v2)    -> new Vector @x + v2.x, @y + v2.y
-  minus  : (v2)    -> new Vector @x - v2.x, @y - v2.y
-  times  : (n)     -> new Vector @x *    n, @y *    n
+aspects = "flock flee align".split ' '
 
-  lineTo : (v2, c) -> line @x, @y, v2.x, v2.y, c
+scanFlock = (bug) ->
+  angle = Object.assign (aspects.map (name) -> [name]: [0, 0])...
 
-class Bug
-  constructor: (oldBug = {}) ->
-    { @pos = new Vector rnd(SCREEN_WIDTH), rnd(SCREEN_HEIGHT)
-      @vel = Vector.fromAngle(rnd pi * 2).times bugSpeed
-      @c   = COLORS.fromHSV 360 * rnd(), 0.5 + rnd() / 2, 1
-    } = oldBug
+  for other in bugs when other isnt bug
+    offset = [foldX(other.x - bug.x), foldY(other.y - bug.y)]
+    dist   = hypot offset...
+    dir    = atan2 offset[1], offset[0]
 
-  foldedPos: -> new Vector foldX(@pos.x), foldY(@pos.y)
-  
-  turn: (theta) ->
-    mag         = @vel.mag()
-    angle       = @vel.angle()
-    clampedTurn = clamp MAX_TURN_RATE, theta
-    @vel        = Vector.fromAngle(angle + clampedTurn).times mag
-    this
+    continue if dist > bugSight
 
-  move: (dt) ->
-    {x, y} = @pos.plus @vel.times dt
-    @pos = new Vector (x + SCREEN_WIDTH ) % SCREEN_WIDTH,
-                      (y + SCREEN_HEIGHT) % SCREEN_HEIGHT
-    this
-  
-  draw: ->
-    @pos.lineTo @pos.plus(@vel.unit().times(BUG_LENGTH)), bug.c
-    
-    circle @pos.x, @pos.y, BUG_LENGTH,     bug.c
-    circle @pos.x, @pos.y, visionDistance, 'cyan'
-    circle @pos.x, @pos.y, MIN_SPACING,    'purple'
-    this
-    
+    angle.align   = addVector angle.align, [cos(other.dir), sin(other.dir)]
 
-clamp          = (least, most) -> (value)   -> max least, min most, value
-portionOf      = (begin, end)  -> (portion) -> begin + (end - begin) * portion
+    if dist < crowding
+      angle.flee  = addVector angle.flee , offset, (crowding - dist) / crowding
+    else
+      angle.flock = addVector angle.flock, offset, 1/dist
 
-visionDial     = portionOf MIN_VISION_DISTANCE, MAX_VISION_DISTANCE
-turnRateDial   = portionOf 0, MAX_TURN_RATE
-
-bugs           = [1 .. liveBugs].map -> new Bug
-bugSpeed       = STARTING_BUG_SPEED
-
-visionDistance = visionDial   0.5
-turnRate       = turnRateDial 0.5
+  angle
 
 buffer.on
 
-scanOtherBugs = (bug) ->
-  flockTo  = new Vector 0, 0
-  fleeFrom = new Vector 0, 0
-  pointTo  = new Vector 0, 0
-  near     = 0
-
-  for otherBug in bugs when otherBug isnt bug
-    offset = otherBug.foldedPos().minus bug.foldedPos()
-    dist   = offset.mag()
-
-    continue if visionDistance < dist
-
-    near++
-
-    offset = offset.unit() # normalize to not favor more distant bugs
-
-    if dist < MIN_SPACING
-      portion = (MIN_SPACING - dist) / MIN_SPACING
-      fleeFrom = fleeFrom.plus offset.times portion
-      lineColor = 'red'
-    else
-      flockTo  = flockTo .plus offset
-      lineColor = 'lime'
-
-    bug.pos.lineTo otherBug.pos, lineColor
-    pointTo = (pointTo.plus otherBug.vel)
-
-  pointTo = pointTo.times 1/near
-  {flockTo, fleeFrom, pointTo}
-
-t = Date.now()
+prevT = t = Date.now()
 
 loop
   cls 'black'
-
-  [oldT, t] = [t, Date.now()]
-  dt = t - oldT
+  
+  [prevT, t] = [t, Date.now()]
+  dt = t - prevT
 
   if mouse.left
-    visionDistance =      visionDial   mouse.x / SCREEN_WIDTH
-    turnRate       = dt * turnRateDial mouse.y / SCREEN_HEIGHT
+    bugSight = limits.sight * (mouse.x / w)
+    bugTurn  = limits.turn  * (mouse.y / h)
+    #show {bugSight, bugTurn}
 
-  bugs = for bug in bugs
-    {flockTo, fleeFrom, pointTo} = scanOtherBugs bug
+  bugs =
+  for bug, i in bugs
+    angle = scanFlock ({x, y, dir} = bug)
 
-    target = (flockTo .unit().times FLOCK_WEIGHT)
-       .minus(fleeFrom.unit().times  FLEE_WEIGHT)
-       .plus (pointTo .unit().times ALIGN_WEIGHT)
+    target = [0,0]
+    aspects.forEach (aspect) -> target = addVector target, angle[aspect], weight[aspect]
+    targetAngle = atan2 target[1], target[0]
 
-    headingDiff    =
-      target .angle() -
-      bug.vel.angle()
+    dir = foldRadians dir + max -bugTurn * dt, min bugTurn * dt, targetAngle
 
-    bug.turn Vector.fromAngle headingDiff
-       .move dt
-       .draw()
-        
+    x = (w + x + dt * limits.speed * cos dir) % w
+    y = (h + y + dt * limits.speed * sin dir) % h
+    
+    #circle x, y, 5, 'white'
+    line x, y, x + 5 * cos(dir), y + 5 * sin(dir), 'white'
+    #circle x, y, crowding, 'red'
+    #circle x, y, bugSight, 'green'
+    
+    makeBug { x, y, dir }
+
   buffer.swap
-
-###
-# The challenge is pursuit. Put a handful of bugs on the corners of a regular
-# polygon. Each bug walks at constant speed directly toward the next one
-# around the ring. That's the whole rule. Draw the paths, not just the bugs.
-#
-# The knobs: mouse x sets how many bugs, three to twelve. Mouse y caps how
-# fast a bug can turn, from "instantly" down to "barely", which changes the
-# picture completely.
-#
-# The wall: thirty lines, no objects, three arrays. Every step is one of the
-# five patterns above, and the turn cap is the fourth one.
-#
-# Done means: you've seen the spiral, you can say in one sentence why the bugs
-# never catch each other, and you've found the turn rate where they stop
-# spiralling and start doing something else.
-#
-# ---
-#
-# Challenge part 2: Boids
-#
-# Each bug looks at the others within some distance and follows three rules:
-# steer away from the ones too close, steer toward the average position of the
-# rest, and turn toward their average heading. Wrap the screen so a bug
-# leaving the right edge arrives on the left.
-#
-# The knobs: mouse x sets how far a boid can see, from a few pixels to half
-# the screen. Mouse y is the turn cap again.
-#
-# The wall: forty lines, one array, the three rules fixed at whatever weights
-# you tune by hand. Don't build a rule system.
-#
-# The trap, which is today's lesson wearing a new hat: you cannot average
-# angles. Two boids heading plus and minus 170 degrees average to zero, which
-# is backwards. Average the cosines and sines instead, then atan2 your way
-# back. That's pattern two doing a job you wouldn't have guessed.
-#
-# Done means: you've watched a flock form, split around nothing, and rejoin.
-# And you can say in one sentence what changed in the picture when you doubled
-# the sight radius.
-#
-###
