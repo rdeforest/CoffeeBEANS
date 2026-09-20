@@ -94,6 +94,10 @@ module.exports = (win, paths) ->
     await t.quiet()
     (await t.consoleText())[before..]
 
+  t.pause  = -> t.js "Stepping.pause(); return true"
+  t.step   = -> t.js "Stepping.step(); return true"
+  t.go     = -> t.js "Stepping.go(); return true"
+
   t.key = (kind, code) -> t.js """
     const stage = document.getElementById('stage')
     stage.focus()

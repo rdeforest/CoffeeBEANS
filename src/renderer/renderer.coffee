@@ -19,12 +19,22 @@ ctx      = canvas.getContext '2d'
 surface = width: 0, height: 0, imageData: null, view32: null
 
 status = ''
+# A paused sketch is a busy one: it is parked mid-frame with the whole image
+# in mid-flight. Anything that refuses to run while a sketch is running has to
+# refuse while one is paused too.
+BUSY = ['running', 'paused']
+
 setStatus = (text) ->
   status = text
   statusEl.textContent = text
   # Eval means "evaluate into the live worker", which a busy worker cannot
   # do, so the button says so. Run replaces the worker and always works.
-  document.getElementById('evalRegion').disabled = text is 'running'
+  document.getElementById('evalRegion').disabled = text in BUSY
+  document.getElementById('stepFrame').disabled  = text isnt 'paused'
+  holding = text is 'paused'
+  hold    = document.getElementById 'pauseFrame'
+  hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
+  hold.title       = if holding then 'Let the sketch run on' else 'Hold the sketch at its next frame'
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -380,6 +390,41 @@ updateMeter = ->
   meterState.since = performance.now()
   undefined
 
+# Pausing is not a new mechanism: it is declining to clear the swap. The
+# worker asks for a frame, parks in doSwap's Atomics.wait, and stays there
+# until we say the frame was presented. Which means a paused sketch is still
+# awake every 100ms to check the interrupt flag and answer the prompt -- you
+# can ask a stopped-mid-flight sketch what it is holding.
+#
+# It also means the same limitation Stop has: a sketch that never asks for a
+# frame can never be paused. `loop` with no buffer.swap is not pausable, by
+# construction.
+paused   = no
+stepOnce = no
+resumeTo = 'ready'
+
+pauseFrames = ->
+  return if paused
+  paused   = yes
+  resumeTo = status
+  setStatus 'paused'
+
+goFrames = ->
+  return unless paused
+  paused   = no
+  stepOnce = no
+  setStatus resumeTo
+
+stepFrame = ->
+  pauseFrames() unless paused
+  stepOnce = yes
+
+globalThis.Stepping =
+  pause:  pauseFrames
+  step:   stepFrame
+  go:     goFrames
+  paused: -> paused
+
 # buffer.fps paces swaps, so the gate belongs on the branch that serves one.
 # The worker stays parked until its frame is due, which is the whole point:
 # a sketch asking for 30fps should spend the rest of the time asleep.
@@ -407,7 +452,13 @@ frame = do ->
     reshape Atomics.load(i32, H.WIDTH), Atomics.load(i32, H.HEIGHT)
     return unless surface.width
 
-    if Atomics.load(i32, H.SWAP) is 1 and framePending()
+    # Paused, a frame is served only when a step asks for one, and a step does
+    # not wait on the fps cap -- a frame you asked for by hand should arrive.
+    # Note neither branch flips while paused: flipping without clearing the
+    # swap would show the buffer the sketch is drawing into, and flicker.
+    serve = Atomics.load(i32, H.SWAP) is 1 and (if paused then stepOnce else framePending())
+    if serve
+      stepOnce = no
       # Only double buffering flips. Single buffered, a swap means no more
       # than "wait until this frame is on screen" -- flipping would hand the
       # sketch the other buffer and its drawing would vanish.
@@ -489,7 +540,7 @@ answerLoad = (url) ->
 # a run posted while a sketch is busy would sit there and fire the moment the
 # sketch ended, which looks exactly like the sketch running itself twice.
 send = ({source, name}) ->
-  if status is 'running'
+  if status in BUSY
     say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
     return
   Atomics.store i32, H.INTERRUPT, 0   # a stop leaves the flag raised
@@ -508,6 +559,8 @@ start = (thenRun = null) ->
   Atomics.store i32, H.FRONT,     0
   Atomics.store i32, H.ASK_STATE, 0   # the old worker will never answer now
   clearInput()
+  paused   = no                       # a new sketch does not inherit a pause
+  stepOnce = no
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
@@ -521,6 +574,11 @@ start = (thenRun = null) ->
 
 stop = ->
   pending = null
+  # Stop clears the swap itself and notifies, so it releases a paused worker
+  # without any help. Going through goFrames rather than just dropping the flag
+  # is what puts the status line back: left saying "paused", nothing that reads
+  # it -- the buttons, a test, the next run -- can tell the pause is over.
+  goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
@@ -555,6 +613,9 @@ setLines = ({count, limit}) ->
   undefined
 
 Editor.mount document.getElementById('editor'),
+  onPause:    pauseFrames
+  onStep:     stepFrame
+  onGo:       goFrames
   onEval:     (source, name) -> runSource source, "#{name} (region)"
   onEvalAll:  (source, name) -> runSource source, name
   onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; start {source, name}
@@ -594,6 +655,8 @@ toggleEditor = ->
 
 document.getElementById('evalRegion').onclick = -> Editor.evalRegion()
 document.getElementById('runFresh').onclick   = -> start {source: Editor.all(), name: Editor.name()}
+document.getElementById('pauseFrame').onclick = -> if paused then goFrames() else pauseFrames()
+document.getElementById('stepFrame').onclick  = stepFrame
 document.getElementById('stop').onclick       = stop
 document.getElementById('toggle').onclick     = toggleEditor
 picker.onchange = -> selectSketch picker.value

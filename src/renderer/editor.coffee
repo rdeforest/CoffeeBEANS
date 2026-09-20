@@ -254,6 +254,11 @@ installVimCommands = ->
   Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?[0]
   Vim.defineEx 'edit',    'e',   (cm, params) -> editSketch params
   Vim.defineEx 'target',  'tar', (cm, params) -> setLimit Number((params?.args ? [])[0] ? 0)
+  # Frame at a time. `:step` from a running sketch pauses it first, so you do
+  # not have to catch it.
+  Vim.defineEx 'pause',    'pau',  -> handlers.onPause?()
+  Vim.defineEx 'step',     'st',   -> handlers.onStep?()
+  Vim.defineEx 'continue', 'cont', -> handlers.onGo?()
 
 # --- public -----------------------------------------------------------------
 

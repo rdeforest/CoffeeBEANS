@@ -9,6 +9,8 @@ SECTIONS = [
     ['Ctrl-r',            'same, from visual mode (normal mode keeps redo)']
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
+    [':pause  :step',     'hold a sketch at a frame, then let one through']
+    [':continue',         'let it go again -- the prompt works while paused']
     ['Ctrl-e',            'show or hide the editor']
     [':eval',             'eval the whole buffer into the live worker']
     [':run',              'fresh worker, empty scope -- this is BASIC RUN']

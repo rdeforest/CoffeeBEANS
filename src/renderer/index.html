@@ -22,6 +22,16 @@
     font: inherit; border: 0; border-radius: 3px; padding: .25rem .6rem; cursor: pointer;
     color: var(--ink); background: var(--coffee);
   }
+  /* A button that wraps puts its glyph on one line and its word on the next,
+     which reads as two controls. The header would rather run out of room. */
+  header button, header select, header span { white-space: nowrap; }
+  header button { flex: none; }
+  /* Five buttons is more than the bar comfortably holds, so the two that
+     only matter while a sketch is running wear their glyph alone. */
+  header button.icon { padding: .25rem .5rem; }
+  /* If it still does not fit, the meter is what gives -- the status is the
+     one thing on this bar you cannot guess from looking at the window. */
+  #meter { min-width: 0; overflow: hidden; }
   select { background: #22222a; color: var(--coffee); }
   button.ghost { background: #22222a; color: var(--coffee); }
   button.stop  { background: #ff6b6b; }
@@ -72,6 +82,8 @@
   <select id="sketch"></select>
   <button id="evalRegion">&#9654; Eval</button>
   <button id="runFresh" class="ghost">&#8635; Run</button>
+  <button id="pauseFrame" class="ghost icon" title="Hold the sketch at its next frame">&#10074;&#10074;</button>
+  <button id="stepFrame" class="ghost icon" title="Let exactly one frame through">&#8677;</button>
   <button id="stop" class="stop">&#9632; Stop</button>
   <span class="spacer"></span>
   <button id="toggle" class="ghost">Editor</button>

@@ -72,6 +72,32 @@
   // are mapped back through the source map, so this has to be exact.
   const PROLOGUE_LINES = 3
 
+  // btoa takes a binary string, and a sketch's source is UTF-8. Encode first,
+  // then widen each byte, or an accented character in a comment corrupts the
+  // whole map.
+  const base64 = (text) => {
+    const bytes = new TextEncoder().encode(text)
+    let binary = ''
+    for (const byte of bytes) binary += String.fromCharCode(byte)
+    return btoa(binary)
+  }
+
+  // The map CoffeeScript hands back is already what DevTools wants, except
+  // that its lines are relative to the compiled JS while `wrapped` puts
+  // PROLOGUE_LINES ahead of it. A v3 mappings string is one group per
+  // generated line separated by ';', so shifting the whole thing down is
+  // exactly that many semicolons -- nothing to re-encode.
+  //
+  // With this, DevTools shows the CoffeeScript rather than the generated JS:
+  // breakpoints land on the line you wrote, and the Scope pane names the
+  // sketch's own variables. And because presenting happens on the renderer
+  // thread, the canvas keeps painting while you step.
+  const inlineMap = (v3) => {
+    const map = JSON.parse(v3)
+    map.mappings = ';'.repeat(PROLOGUE_LINES) + map.mappings
+    return `//# sourceMappingURL=data:application/json;charset=utf-8;base64,${base64(JSON.stringify(map))}`
+  }
+
   const runSketch = (source, name) => {
     const id = `beans-run-${++runSeq}.coffee`
     const compiled = CoffeeScript.compile(source, { bare: true, filename: name, sourceMap: true })
@@ -100,7 +126,8 @@
       `(function(__image, __frames){\n` +
       `${restore}__frames.push({harvest:function(){${publish}},restore:function(){${take}}});\n` +
       `try{\n${compiled.js}\n}finally{__frames.pop();${harvest}}\n})` +
-      `\n//# sourceURL=${id}`
+      `\n//# sourceURL=${id}` +
+      `\n${inlineMap(compiled.v3SourceMap)}`
 
     runs.set(id, {
       map: compiled.sourceMap,
