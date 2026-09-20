@@ -9,8 +9,6 @@ SECTIONS = [
     ['Ctrl-r',            'same, from visual mode (normal mode keeps redo)']
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
-    [':pause  :step',     'hold a sketch at a frame, then let one through']
-    [':continue',         'let it go again -- the prompt works while paused']
     ['Ctrl-e',            'show or hide the editor']
     [':eval',             'eval the whole buffer into the live worker']
     [':run',              'fresh worker, empty scope -- this is BASIC RUN']
@@ -24,6 +22,18 @@ SECTIONS = [
     [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
     [':target <n>',       'flag the first source line past n; :target 0 clears']
     [':help <topic>',     'this, or one section of it']
+  ]
+,
+  name:  'debug'
+  title: 'Stopping to look'
+  lines: [
+    ['breakpoint',        'stop here, if something is watching -- BASIC STOP']
+    ['',                  'and nothing at all if nothing is, so a sketch with']
+    ['',                  'one left in still runs at full speed']
+    ['',                  'DevTools sees it today: View -> Toggle Developer']
+    ['',                  'Tools, then Sources, then Run']
+    [':pause  :step',     'hold a sketch at a frame, then let one through']
+    [':continue',         'let it go again; the > prompt works while paused']
   ]
 ,
   name:  'screen'

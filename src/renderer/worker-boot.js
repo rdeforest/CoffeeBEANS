@@ -13,10 +13,26 @@
   // is the live image.
   // Our own modules compile wrapped and are not mapped: they are compile
   // tested, and a stack frame in them is our problem, not a sketch author's.
+  //
+  // They are named, though. Anonymous eval scripts cannot be pointed at, and
+  // a debugger needs to be told to ignore this family so that stepping into
+  // circleFill steps over it instead of landing in a Bresenham loop, and so a
+  // bare pause stops on the author's line rather than six frames down in
+  // doSwap. One pattern, beans-runtime/, covers the lot.
+  //
+  // Except breakpoint.coffee, which must stay outside that pattern -- see the
+  // comment at the top of it. Naming is also why traceback() can keep dropping
+  // these frames: it matches beans-run-N.coffee and nothing else.
+  const moduleUrl = (path) => {
+    const name = path.split('/').pop().replace(/\.coffee$/, '')
+    return name === 'breakpoint' ? 'beans-breakpoint.js' : `beans-runtime/${name}.js`
+  }
+
   const loadModule = async (path) => {
     const response = await fetch(path)
     const source = await response.text()
-    ;(0, eval)(CoffeeScript.compile(source, { bare: false, filename: path }))
+    const js = CoffeeScript.compile(source, { bare: false, filename: path })
+    ;(0, eval)(`${js}\n//# sourceURL=${moduleUrl(path)}`)
   }
 
   // Sketches get a real source map and a script id that is safe to put in a
@@ -290,6 +306,7 @@
   }
 
   const MODULES = [
+    '/src/runtime/breakpoint.coffee',
     '/src/runtime/layout.coffee',
     '/src/runtime/keys.coffee',
     '/src/runtime/colors.coffee',

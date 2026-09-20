@@ -85,3 +85,44 @@ loop
   check 'stop releases a paused sketch and clears the pause',
     idle is 'ready' and after.includes('AFTER') and not after.includes('no yield point'),
     "status=#{idle} #{JSON.stringify after.trim()}"
+
+  # 7. `breakpoint` costs nothing when nobody is watching. A debugger statement
+  # with no debugger attached is a no-op, which is the whole reason the command
+  # can be spelled in the source rather than kept in a list of line numbers --
+  # but if that were ever not true, every sketch carrying one would hang.
+  await setDoc """
+screen 320, 200
+print 'kind=' + typeof Object.getOwnPropertyDescriptor(globalThis, 'breakpoint').get
+breakpoint
+print 'ranOn=true'
+each = (n) ->
+  breakpoint
+  n * 2
+print 'inAFunction=' + each 21
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'breakpoint is free when no debugger is attached',
+    text.includes('kind=function') and text.includes('ranOn=true') and text.includes('inAFunction=42'),
+    JSON.stringify text.trim()
+
+  # 8. the runtime modules are named, so a debugger can be told to ignore them
+  # in one pattern -- and so that breakpoint.coffee can be left out of it.
+  await setDoc """
+screen 320, 200
+try
+  screen 0, 200
+catch error
+  print 'runtimeNamed=' + /beans-runtime\\//.test error.stack
+  print 'sketchNamed='  + /beans-run-\\d+\\.coffee/.test error.stack
+  print 'anonymous='    + /at eval \\(eval/.test error.stack
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'the runtime is named so it can be ignore-listed',
+    text.includes('runtimeNamed=true') and text.includes('sketchNamed=true'),
+    JSON.stringify text.trim()
