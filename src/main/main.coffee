@@ -147,7 +147,15 @@ capture = (win) ->
       ), delay
 
 createWindow = ->
+  # A test run has no business taking the screen while you are working in
+  # another window. Never shown is also the strongest form of background there
+  # is, so a suite that passes this way is one that proves a sketch keeps
+  # running when you alt-tab away from it. BEANS_CAPTURE needs a composited
+  # window to photograph, and BEANS_SHOW is for watching a run go by.
+  hidden = process.env.BEANS_TEST and not (process.env.BEANS_CAPTURE or process.env.BEANS_SHOW)
+
   win = new BrowserWindow
+    show:            not hidden
     width:           1280
     height:          860
     backgroundColor: '#0b0b0d'
@@ -166,12 +174,16 @@ createWindow = ->
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
   win.webContents.on 'console-message', (event) ->
     console.log "[renderer] #{event.message}"
+  # The only way to exercise backgroundThrottling from a test run: a hidden
+  # window is not throttled, a minimised one is. With throttling on, this
+  # makes every buffer.swap in the suite hang until its deadline.
+  win.once 'ready-to-show', -> win.minimize() if process.env.BEANS_MINIMIZE
   capture win
   watchSketches win
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/integration')(win, {root: ROOT, data: DATA, sketches: SKETCHES})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"

@@ -216,3 +216,26 @@ see NOTES.md.
     src/runtime/    the drawing API, runs inside the worker
     examples/       seed sketches, copied out on first run
     test/           integration suite -- npm test
+
+## Tests
+
+`npm test` drives the real app through `executeJavaScript`, in parts:
+
+    npm test                                every part
+    BEANS_TESTS=buffers npm test            one
+    BEANS_TESTS=buffers,lifecycle npm test  a few
+
+The parts are `editor image buffers lifecycle drawing color loading shell
+input perf`. Each starts from a reset app -- scratch loaded, buffer blank,
+worker restarted -- so running one alone means the same thing as running it in
+the middle of everything else, and a part that fails does not take the ones
+after it with it. The whole suite is about a minute; one part is a few seconds.
+
+Add a check to `test/parts/<area>.coffee`; the handles it takes off `t` are
+listed at the top of the file and defined in `test/toolkit.coffee`.
+
+The test window is not shown, so a run never takes focus. `BEANS_SHOW=1` shows
+it if you want to watch one go by, and `BEANS_MINIMIZE=1` minimises it, which
+is how you check that a sketch still runs when the window is not on screen --
+Chromium throttles a minimised window, and the present loop is what wakes a
+sketch parked in `buffer.swap`.
