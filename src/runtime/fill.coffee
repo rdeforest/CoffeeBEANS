@@ -29,8 +29,14 @@ SAME_AS_SEED = new Rule ((p) -> p.color is p.seed), (pixel, seed) -> pixel is se
 # still accepts the colour being painted -- `fill x, y` where the fill colour
 # equals the seed is the easy one to write -- would never terminate.
 scratch = new Uint8Array 0
+walking = no
 
+# A fill started from inside another one -- a maker or a `where` rule that
+# calls fill -- cannot share the array, or the two walks erase each other's
+# marks and neither terminates for the right reason. The nested one pays for
+# its own; the common case still allocates nothing.
 marks = (size) ->
+  return new Uint8Array size if walking
   scratch = new Uint8Array size if scratch.length < size
   scratch.fill 0, 0, size
   scratch
@@ -59,6 +65,15 @@ flood = (view, startX, startY, write, rule = SAME_AS_SEED) ->
     return false if seen[index]
     allowed index
 
+  nested  = walking
+  walking = yes
+  try
+    walkFrom startX, startY, width, height, seen, open, write
+  finally
+    walking = nested
+  undefined
+
+walkFrom = (startX, startY, width, height, seen, open, write) ->
   stack = [startX, startY]
   while stack.length
     y = stack.pop()

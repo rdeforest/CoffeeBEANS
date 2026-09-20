@@ -44,14 +44,18 @@ flushConsole = ->
   clearTimeout flushQueued if flushQueued?
   flushQueued = null
   return unless queued.length
-  queued = queued.slice -CONSOLE_CAP if queued.length > CONSOLE_CAP
+  # Whether lines were actually dropped, rather than whether the count happens
+  # to equal the cap: a batch of exactly CONSOLE_CAP lines is not an overflow,
+  # and replacing the scrollback on one throws away history nobody lost.
+  overflowed = queued.length > CONSOLE_CAP
+  queued = queued.slice -CONSOLE_CAP if overflowed
   fragment = document.createDocumentFragment()
   for {text, kind} in queued
     line = document.createElement 'div'
     line.className   = kind
     line.textContent = text
     fragment.appendChild line
-  if queued.length is CONSOLE_CAP
+  if overflowed
     output.replaceChildren fragment
   else
     output.appendChild fragment
@@ -64,18 +68,26 @@ flushConsole = ->
 decoder   = new TextDecoder()
 printRing = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
 
+# One buffer, grown as needed and handed back as a view of itself. A flood of
+# console lines would otherwise allocate two arrays per line, on the thread
+# that has to keep drawing the window.
+taken = new Uint8Array 256
+
 readRing = (position, length) ->
-  taken = new Uint8Array length
+  taken = new Uint8Array length if taken.length < length
   first = Math.min length, LAYOUT.PRINT_BYTES - position
   taken.set printRing.subarray(position, position + first), 0
   taken.set printRing.subarray(0, length - first), first if first < length
-  taken
+  taken.subarray 0, length
 
 drainPrints = ->
   head = Atomics.load i32, H.PRINT_HEAD
   tail = Atomics.load i32, H.PRINT_TAIL
   while tail isnt head
-    length = new DataView(readRing(tail, 4).buffer).getUint32 0, true
+    size   = readRing tail, 4
+    # Unsigned: a length with the top bit set would otherwise read as negative
+    # and slip straight past the sanity check below.
+    length = (size[0] | (size[1] << 8) | (size[2] << 16) | (size[3] << 24)) >>> 0
     # A length that cannot fit means the ring is not saying what we think it
     # is. Resynchronise rather than loop on garbage forever.
     if length > LAYOUT.PRINT_BYTES - 4
@@ -115,6 +127,18 @@ setKey = (code, isDown) ->
 
 clearKeys = ->
   Atomics.store i32, H.KEYS + word, 0 for word in [0...LAYOUT.KEY_WORDS]
+  undefined
+
+# Blur only releases what is held -- a tap that happened is still a tap, and
+# the sketch should see it. A restart is different: a new sketch must not
+# inherit a key that was down, a hit nobody claimed, or wheel movement nobody
+# read, all of which outlive the worker in shared memory.
+clearInput = ->
+  for word in [0...LAYOUT.KEY_WORDS]
+    Atomics.store i32, H.KEYS     + word, 0
+    Atomics.store i32, H.KEYS_HIT + word, 0
+  Atomics.store i32, H.MOUSE_BTN,   0
+  Atomics.store i32, H.MOUSE_WHEEL, 0
   undefined
 
 toScreen = (event) ->
@@ -353,13 +377,20 @@ answerLoad = (url) ->
     image = await beans.image url
     pixels = image.width * image.height
     throw new Error "image too large: #{image.width}x#{image.height}" if pixels > LAYOUT.TRANSFER_PIXELS
-    source = new Uint8Array image.data
-    into   = new Uint8Array sab, LAYOUT.transferWords * 4, pixels * 4
-    for at in [0...source.length] by 4
-      into[at]     = source[at + 2]
-      into[at + 1] = source[at + 1]
-      into[at + 2] = source[at]
-      into[at + 3] = source[at + 3]
+    bytes  = new Uint8Array image.data
+    # A word at a time rather than a byte at a time: a 2048-square image is 16
+    # million byte writes on the thread that has to keep the window alive.
+    # Little-endian BGRA read as a word is ARGB, and swapping the R and B
+    # bytes of that is the whole conversion. A copy first if the transferred
+    # bytes do not start on a word boundary, which Uint32Array requires.
+    source = if bytes.byteOffset % 4
+      new Uint32Array new Uint8Array(bytes).buffer, 0, pixels
+    else
+      new Uint32Array bytes.buffer, bytes.byteOffset, pixels
+    base = LAYOUT.transferWords
+    for at in [0...pixels] by 1
+      word = source[at]
+      u32[base + at] = (word & 0xFF00FF00) | ((word & 0xFF) << 16) | ((word >>> 16) & 0xFF)
     Atomics.store i32, H.LOAD_W, image.width
     Atomics.store i32, H.LOAD_H, image.height
     Atomics.store i32, H.LOAD_STATE, 2
@@ -392,6 +423,7 @@ start = (thenRun = null) ->
   Atomics.store i32, H.SKETCH_US, 0
   Atomics.store i32, H.SWAP,      0
   Atomics.store i32, H.FRONT,     0
+  clearInput()
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
@@ -446,6 +478,7 @@ Editor.mount document.getElementById('editor'),
   onHelp:     showHelp
   onLines:    setLines
   onMessage:  (text) -> say text, 'sys'
+  onProblem:  (text) -> say text, 'err'
   onEdit:     (name) -> openSketch name
 
 selectSketch = (name) ->

@@ -199,3 +199,66 @@ print 'solid=' + (pget(5, 5) is COLORS.red)
   absent = (want for want in wanted when not text.includes want)
   check 'paints reach every primitive', absent.length is 0,
     if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all nineteen'
+
+  # A colour we cannot make sense of used to come back as opaque black or as
+  # transparent, both of which draw perfectly happily and invisibly.
+  refusing = """
+screen 320, 200
+print 'namesWork=' + (COLORS.byName('red') is COLORS.red)
+try
+  color 'chartreuse'
+  print 'unknownName=accepted'
+catch error
+  print 'unknownName=' + error.message.includes('no colour named')
+try
+  cls true
+  print 'notAColour=' + error.message
+catch error
+  print 'notAColour=' + error.message.includes('not a colour')
+try
+  point 1, 1, null
+  print 'nullColour=accepted'
+catch error
+  print 'nullColour=' + error.message.includes('not a colour')
+try
+  COLORS.byName 'toString'
+  print 'inherited=accepted'
+catch error
+  print 'inherited=refused'
+"""
+  await setDoc refusing
+  await wait 500
+  await clearConsole()
+  await runAll()
+  text   = await settled()
+  wanted = ['namesWork=true', 'unknownName=true', 'notAColour=true', 'inherited=refused']
+  absent = (want for want in wanted when not text.includes want)
+  check 'a colour we cannot read is refused, not drawn black', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all four'
+
+  # A fill started from inside another one shared the marks array, so the
+  # nested walk left the outer walk believing it had already been everywhere.
+  # The surface is big enough that its marks cover the indices the outer walk
+  # uses, which is what makes the damage visible rather than incidental.
+  nesting = """
+screen 320, 200
+sheet = surface 60, 60
+cls COLORS.black
+rectFill 0, 0, 9, 9, COLORS.blue
+fill 5, 5, COLORS.red, where (p) ->
+  drawTo sheet, -> fill 30, 30, COLORS.lime
+  p.color is COLORS.blue
+print 'nestedRan=' + (drawTo(sheet, -> pget 30, 30) is COLORS.lime)
+print 'outerStarted=' + (pget(5, 5) is COLORS.red)
+print 'outerFinished=' + (pget(0, 0) is COLORS.red and pget(9, 9) is COLORS.red)
+print 'outerStopped=' + (pget(10, 10) isnt COLORS.red)
+"""
+  await setDoc nesting
+  await wait 500
+  await clearConsole()
+  await runAll()
+  text   = await settled()
+  wanted = ['nestedRan=true', 'outerStarted=true', 'outerFinished=true', 'outerStopped=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'a fill inside a fill does not eat the outer walk', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all four'

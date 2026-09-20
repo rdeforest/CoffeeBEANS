@@ -258,3 +258,46 @@ print 'timing=' + (elapsed >= 0 and frames >= 0)
   await runAll()
   text = await settled()
   check 'rectFill rounds fractional corners', text.includes('inside=true') and text.includes('rowStart=true') and text.includes('wrapped=false'), JSON.stringify text.trim()
+
+  # screen is a mode reset. Every mode it used to leave set had a way of making
+  # the next sketch draw nothing at all, with no error to say why.
+  modes = """
+screen 320, 200
+
+# a bare drawTo is a mode with no restore
+sheet = surface 64, 64
+drawTo sheet
+screen 320, 200
+cls COLORS.black
+circleFill 160, 100, 40, COLORS.red
+print 'targetReset=' + (pget(160, 100) is COLORS.red)
+
+# a colour outlives the sketch that set it
+color COLORS.black
+screen 320, 200
+cls COLORS.blue
+circleFill 160, 100, 40
+print 'brushReset=' + (pget(160, 100) is COLORS.white)
+
+# and so does the text cursor
+locate 10, 20
+textScale 4
+textBackground COLORS.red
+screen 320, 200
+cls COLORS.black
+color COLORS.white
+text 'A'
+print 'cursorReset=' + (pget(2, 0) is COLORS.white)
+print 'scaleReset=' + (textWidth('A') is 8)
+print 'paperReset=' + (pget(0, 0) isnt COLORS.red)
+"""
+  await setDoc modes
+  await wait 500
+  await clearConsole()
+  await runAll()
+  text   = await settled()
+  wanted = ['targetReset=true', 'brushReset=true', 'cursorReset=true',
+            'scaleReset=true', 'paperReset=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'screen resets every drawing mode', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all five'

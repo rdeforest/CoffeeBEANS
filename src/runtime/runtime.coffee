@@ -66,10 +66,17 @@ doSwap = ->
 
 # --- commands ---------------------------------------------------------------
 
-# Like BASIC's SCREEN, this also resets the page mode. Modes persist in the
-# live worker, so without this a sketch run after a stopped double-buffered
-# one would draw into the back buffer, never swap, and show nothing but the
-# old sketch's last frame. Put `buffer.on` after `screen`.
+# Like BASIC's SCREEN, this also resets every drawing mode. Modes persist in
+# the live worker, so without this a sketch run after a stopped one inherits
+# whatever that one left set -- and each of these has a way of making a sketch
+# draw nothing at all, with no error to say why:
+#
+#   the page mode   draws into the back buffer, never swaps, shows the old frame
+#   the target      a bare `drawTo` sends every command to a surface you cannot see
+#   the colour      black on black
+#   the text cursor text off the bottom of the screen, or at the wrong scale
+#
+# Put `buffer.on`, `color`, `drawTo` and `locate` *after* `screen`.
 screen = (width, height) ->
   width  = Math.round width
   height = Math.round height
@@ -83,6 +90,12 @@ screen = (width, height) ->
   Atomics.store state.i32, H.HEIGHT, height
   setDouble no
   Atomics.store state.i32, H.FPS, 0   # a frame cap is a mode too
+  target             = display
+  state.brush        = solid COLORS.white
+  cursor.col         = 0
+  cursor.row         = 0
+  cursor.scale       = 1
+  cursor.background  = null
   # A sketch that reads the mouse before it has moved should get somewhere
   # sensible, and a resolution change must not leave it out of bounds.
   centre = (index, limit) ->

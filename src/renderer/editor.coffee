@@ -37,9 +37,14 @@ flashField = StateField.define
     marks
   provide: (field) -> EditorView.decorations.from field
 
+# One timer, not one per flash: a second region run inside the delay would
+# otherwise have its highlight cleared by the first run's timer.
+flashTimer = null
+
 flash = (from, to) ->
   view.dispatch effects: flashEffect.of {from, to}
-  setTimeout (-> view.dispatch effects: flashEffect.of null), FLASH_DELAY
+  clearTimeout flashTimer
+  flashTimer = setTimeout (-> view.dispatch effects: flashEffect.of null), FLASH_DELAY
 
 # --- regions ----------------------------------------------------------------
 
@@ -68,14 +73,23 @@ dedent = (text) ->
 
 # --- persistence ------------------------------------------------------------
 
+# lastWritten is set before the write, so the watcher's echo of our own write
+# is recognised and ignored. A write that *fails* has to put it back, or the
+# editor believes an edit reached disk that never did and silently drops it at
+# the next reload.
 save = ->
   clearTimeout saveTimer
   return unless current and view
   text = view.state.doc.toString()
   return if text is lastWritten
+  was         = lastWritten
   lastWritten = text
-  await beans.write current, text
-  handlers.onSave? current
+  try
+    await beans.write current, text
+  catch error
+    lastWritten = was
+    handlers.onProblem? "could not save #{current}: #{error.message}"
+  undefined
 
 scheduleSave = ->
   clearTimeout saveTimer
@@ -106,8 +120,10 @@ applyExternal = ({name, text}) ->
 # --- source count + length limit --------------------------------------------
 
 # A source line is one his co-work limits count: not blank, not a comment.
-# The same test he was running by hand in the REPL.
-SOURCE = /^\s*[^ #]/
+# The same test he was running by hand in the REPL. The character class has to
+# exclude every kind of space, not just the one: `[^ #]` matched a tab, so a
+# tab-indented comment counted as source and so did a line of nothing but tabs.
+SOURCE = /^\s*[^\s#]/
 
 countSource = (doc) ->
   n = 0

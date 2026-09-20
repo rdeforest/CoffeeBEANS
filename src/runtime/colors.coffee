@@ -108,7 +108,14 @@ COLORS =
   toHSV:       (value) ->
     [hue, saturation, brightness] = hsvInto toColor(value), [0, 0, 0]
     {hue, saturation, value: brightness}
-  byName:      (name)          -> rgb = NAMED[name]; pack 255, (rgb >>> 16) & 0xFF, (rgb >>> 8) & 0xFF, rgb & 0xFF
+  byName:      (name)          ->
+    # A name we do not know used to come back as opaque black, which is a
+    # colour, so a typo drew perfectly happily and invisibly. Own property
+    # only: NAMED is a plain object, and `toString` is not a colour.
+    unless Object.prototype.hasOwnProperty.call NAMED, name
+      throw new Error "no colour named \"#{name}\" -- try COLORS.names()"
+    rgb = NAMED[name]
+    pack 255, (rgb >>> 16) & 0xFF, (rgb >>> 8) & 0xFF, rgb & 0xFF
   fromRGB:     (r, g, b, a = 1)-> pack byte(a),  byte(r),  byte(g),  byte(b)
   fromRGB256:  (r, g, b, a = 255) -> pack a, r, g, b
   create:      -> new ColorBuilder
@@ -116,12 +123,22 @@ COLORS =
 
 COLORS[name] = COLORS.byName name for name of NAMED
 
+# Anything that is not a colour says so. It used to coerce: `true` became
+# 0x1, which is transparent, and null threw somewhere inside valueOf with a
+# message about no colour at all.
 toColor = (value, fallback) ->
   switch typeof value
     when 'undefined' then fallback
     when 'number'    then value >>> 0
     when 'string'    then COLORS.byName value
-    else                  (value.valueOf() ) >>> 0
+    else
+      packed = value?.valueOf?()
+      throw new Error "not a colour: #{describe value}" unless typeof packed is 'number'
+      packed >>> 0
+
+describe = (value) ->
+  return 'null' if value is null
+  if typeof value is 'object' then value.constructor?.name ? 'an object' else String value
 
 # Little-endian byte order in the framebuffer is R,G,B,A, so a Uint32 store
 # wants 0xAABBGGRR. Converted once per color, never per pixel.

@@ -43,7 +43,13 @@ serve = (request) ->
   file       = path.join ROOT, decodeURIComponent pathname
   return new Response 'forbidden', status: 403 unless file is ROOT or file.startsWith ROOT + path.sep
 
-  source  = await net.fetch url.pathToFileURL(file).toString()
+  try
+    source = await net.fetch url.pathToFileURL(file).toString()
+  catch error
+    # Rejecting here gives the renderer an opaque network error. A 404 says
+    # which path it was, which is the whole question when a module fails to
+    # load and the worker never comes up.
+    return new Response "not found: #{pathname}", status: 404
   headers = new Headers
   headers.set 'Content-Type', MIME[path.extname file] ? 'application/octet-stream'
   headers.set 'Cross-Origin-Opener-Policy',   'same-origin'
@@ -114,11 +120,17 @@ watchSketches = (win) ->
   watcher.on 'error', (error) ->
     console.log "watch stopped: #{error.message}"
     watcher.close()
+  # The watcher outlives the window otherwise, and sending to a destroyed
+  # webContents throws out of a timer nobody is catching.
+  win.on 'closed', ->
+    clearTimeout timer for name, timer of timers
+    watcher.close()
   watcher.on 'change', (event, filename) ->
     return unless filename?.endsWith '.coffee'
     name = filename.replace /\.coffee$/, ''
     clearTimeout timers[name]
     timers[name] = setTimeout (->
+      return if win.isDestroyed()
       try
         text = await fsp.readFile sketchFile(name), 'utf8'
         win.webContents.send 'sketch:changed', {name, text}
@@ -126,23 +138,32 @@ watchSketches = (win) ->
         console.log "watch: #{name}: #{error.message}"
     ), 60
 
+SHOTS = path.join ROOT, 'tmp'
+
 capture = (win) ->
-  fs    = require 'fs'
   delays = (Number n for n in (process.env.BEANS_CAPTURE ? '').split(',') when n)
   return unless delays.length
+  fs.mkdirSync SHOTS, recursive: yes      # gitignored, so a fresh clone has none
   for delay, i in delays
     do (delay, i) ->
       setTimeout (->
         # capturePage rejects with UnknownVizError when the window is not
         # being composited -- occluded, minimised, or simply not frontmost.
         # That is the developer's desktop, not the app, and it must not
-        # leave the process running forever.
+        # leave the process running forever. Reported apart from the write,
+        # which fails for entirely different reasons and used to be blamed
+        # on the window being invisible.
         try
           image = await win.webContents.capturePage()
-          fs.writeFileSync "tmp/capture-#{i}.png", image.toPNG()
-          console.log "captured #{i} at #{delay}ms"
         catch error
           console.log "capture #{i} failed: #{error.message} (is the window visible?)"
+        if image
+          shot = path.join SHOTS, "capture-#{i}.png"
+          try
+            fs.writeFileSync shot, image.toPNG()
+            console.log "captured #{i} at #{delay}ms to #{shot}"
+          catch error
+            console.log "could not write #{shot}: #{error.message}"
         app.quit() if i is delays.length - 1
       ), delay
 

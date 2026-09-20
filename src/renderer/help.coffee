@@ -21,7 +21,8 @@ SECTIONS = [
   name:  'screen'
   title: 'Screen'
   lines: [
-    ['screen w, h',       'resolution; also resets buffering and any fps cap']
+    ['screen w, h',       'resolution; also resets every drawing mode --']
+    ['',                  'buffering, fps cap, drawTo, colour, text cursor']
     ['cls()',             'clear to black']
     ['cls color',         'clear to a color']
     ['color c',           'set the current drawing color']

@@ -92,6 +92,16 @@ module.exports = (t) ->
   await wait 300
   check 'status line counts only source lines', (await linesText()) is '2 lines', JSON.stringify await linesText()
 
+  # A comment is a comment however it is indented. `[^ #]` matched a tab, so a
+  # tab-indented comment counted as source and so did a line of only tabs.
+  await setDoc "print 'one'\n\t# tabbed comment\n\t\nprint 'two'\n"
+  await wait 300
+  check 'a tab-indented comment is not a source line',
+    (await linesText()) is '2 lines', JSON.stringify await linesText()
+
+  await setDoc "# a comment\nprint 'one'\n\nprint 'two'\n"
+  await wait 300
+
   await handleEx 'target 3'
   await wait 200
   check 'a target above the count reads count/limit', (await linesText()) is '2/3 lines', JSON.stringify await linesText()
