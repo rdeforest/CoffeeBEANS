@@ -158,6 +158,7 @@ window reload the pane. Running is an operation on a region:
     :w                  force a save        :eval      eval the whole buffer
     :run                fresh worker        Ctrl-.     stop
     :help [topic]       quick reference in the console pane
+    > at the console    one line, evaluated in the live worker
 
 **Eval** puts code into the worker you already have, so everything it knows
 stays. **Run** throws that worker away and starts a new one. They are
@@ -181,6 +182,19 @@ rather than the one the last sketch left behind. Put `buffer.on` and
 Ctrl-Enter and `:eval` evaluate into the *live* worker, so definitions persist
 between evals -- define a function in one region, call it from another. That is
 BASIC's immediate mode. `:run` is `RUN`: a clean scope.
+
+The `>` prompt under the console is the same live worker again, one line at a
+time. It goes through shared memory rather than `postMessage`, for the reason
+printing does: a worker busy in a loop, or asleep in `Atomics.wait`, receives
+no messages, but it can still read memory at a yield point. So the prompt
+answers *between frames of a running sketch* -- you can ask a flying flock how
+many boids it has, and set `step = 100` without stopping it. A sketch's names
+live in its own scope and only reach the image when the run ends, which for a
+`loop` is never, so the running frame lends them for the length of the
+question and takes back whatever the answer changed.
+
+A sketch that never reaches a yield point never answers, the same way it never
+stops. Up and Down walk earlier lines.
 
 A sketch runs in its own scope, so its names cannot collide with the drawing
 commands or with anything the app owns. You can still shadow a command --

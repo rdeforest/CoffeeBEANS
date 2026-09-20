@@ -32,7 +32,13 @@ target = display
 Object.defineProperty display, 'onScreen',
   get: -> display.base is LAYOUT.bufferWords Atomics.load state.i32, H.FRONT
 
+# A yield point is where a sketch can be told to stop, and it is the same
+# place it can be asked a question. The renderer cannot postMessage a worker
+# parked in Atomics.wait, so a console line arrives through shared memory and
+# gets picked up here -- which is why the prompt answers between frames of a
+# running sketch instead of waiting for it to finish.
 checkInterrupt = ->
+  REPL?.serve?()
   throw new Interrupted() if Atomics.load(state.i32, H.INTERRUPT) is 1
 
 refreshBase = ->

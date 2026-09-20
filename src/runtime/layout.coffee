@@ -26,11 +26,13 @@ HEADER =
   PRINT_HEAD: 37     # bytes; written only by the worker
   PRINT_TAIL: 38     # bytes; written only by the renderer
   PRINT_LOST: 39     # lines dropped because the ring was full
+  ASK_STATE:  40     # 0 idle, 1 a question is waiting, 2 answered, 3 threw
+  ASK_LEN:    41     # bytes of the question, then of the answer
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 37..63 spare: gamepads, audio, whatever comes
+HEADER_WORDS = 64        # 42..63 spare: gamepads, audio, whatever comes
 BUFFERS      = 2
 
 # Where a loaded image lands on its way from the main process to the worker.
@@ -44,6 +46,17 @@ TRANSFER_PIXELS = 2048 * 2048
 # sketch was busy. Shared memory is readable whatever the worker is doing.
 PRINT_BYTES = 1 << 20
 
+# A console line on its way to the worker and its answer on its way back.
+# Its own region rather than a corner of the transfer one: a sketch can be
+# parked inside `load` when a question arrives, and the two must not share a
+# buffer. Shared memory for the same reason printing uses it -- a worker busy
+# in a loop, or asleep in Atomics.wait, receives no messages, but it can still
+# read memory at a yield point.
+ASK_BYTES = 1 << 16
+
+PRINT_OFFSET = (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
+ASK_OFFSET   = PRINT_OFFSET + PRINT_BYTES
+
 globalThis.LAYOUT =
   HEADER:       HEADER
   KEY_WORDS:    8
@@ -55,6 +68,8 @@ globalThis.LAYOUT =
   TRANSFER_PIXELS: TRANSFER_PIXELS
   transferWords:   HEADER_WORDS + BUFFERS * MAX_PIXELS
   PRINT_BYTES:     PRINT_BYTES
-  printOffset:    (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
-  TOTAL_BYTES:    (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4 + PRINT_BYTES
+  printOffset:     PRINT_OFFSET
+  ASK_BYTES:       ASK_BYTES
+  askOffset:       ASK_OFFSET
+  TOTAL_BYTES:     ASK_OFFSET + ASK_BYTES
   bufferWords:  (index) -> HEADER_WORDS + index * MAX_PIXELS

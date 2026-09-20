@@ -61,10 +61,38 @@ module.exports = (win, paths) ->
   # only ever a guess at how long a sketch takes, and on a busy machine the
   # guess is wrong: every check then reads the *previous* test's output, which
   # is a suite that lies rather than one that fails.
+  #
+  # "The run finished" is still not "everything it printed is on screen": the
+  # ring drains on one 16ms timer and the console flushes on another. Asking
+  # whether anything is still in flight beats watching the text stop moving,
+  # which cannot tell a finished console from a late one -- and on a busy
+  # machine a late one reads as empty.
+  t.quiet = (limit = 5000) ->
+    deadline = Date.now() + limit
+    loop
+      return true unless await t.js "return Printing.pending()"
+      return false if Date.now() > deadline
+      await wait 20
+
   t.settled = (limit = 30000) ->
     await t.settle limit
-    await wait 60                  # the console flushes on a 16ms timer
+    await t.quiet()
     await t.consoleText()
+
+  # Asks, then waits for the answer however long the sketch takes to reach a
+  # yield point, and hands back only what the console gained. Through
+  # Prompt.ask rather than the keystroke, except where the keystroke is the
+  # thing under test.
+  t.ask = (line, limit = 15000) ->
+    before = (await t.consoleText()).length
+    await t.js "Prompt.ask(#{JSON.stringify line}); return true"
+    deadline = Date.now() + limit
+    loop
+      break unless await t.js "return Prompt.pending()"
+      break if Date.now() > deadline
+      await wait 25
+    await t.quiet()
+    (await t.consoleText())[before..]
 
   t.key = (kind, code) -> t.js """
     const stage = document.getElementById('stage')

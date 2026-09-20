@@ -10,6 +10,7 @@ stage    = document.getElementById 'stage'
 output   = document.getElementById 'console'
 statusEl = document.getElementById 'status'
 picker   = document.getElementById 'sketch'
+promptLine = document.getElementById 'promptLine'
 meter    = document.getElementById 'meter'
 linesEl  = document.getElementById 'lines'
 main     = document.getElementById 'main'
@@ -107,6 +108,89 @@ say = (text, kind = '') ->
   queued.splice 0, queued.length - CONSOLE_CAP if queued.length > 2 * CONSOLE_CAP
   flushQueued ?= setTimeout flushConsole, CONSOLE_EVERY
 
+# --- the prompt -------------------------------------------------------------
+
+# A line typed here goes to the same worker the sketch runs in, so it sees
+# what the sketch defined and the sketch sees what it defines. It goes through
+# shared memory rather than postMessage, because the whole point is to ask a
+# question of a sketch that is still running -- and a busy worker receives no
+# messages. It answers at the sketch's next yield point.
+#
+# Not `history`: at this scope that is window.history, which is the first
+# entry in the NOTES.md list of names that looked free.
+askBytes  = new Uint8Array sab, LAYOUT.askOffset, LAYOUT.ASK_BYTES
+entered   = []
+enteredAt = 0
+
+askLine = (source) ->
+  return unless source.trim()
+  say "> #{source}", 'echo'
+  entered.push source
+  enteredAt = entered.length
+  return say '*** no worker -- press Run ***', 'err' unless worker
+  if Atomics.load(i32, H.ASK_STATE) isnt 0
+    return say '*** still waiting on the last line ***', 'sys'
+  bytes = new TextEncoder().encode source
+  return say '*** line too long ***', 'err' if bytes.length > LAYOUT.ASK_BYTES
+  askBytes.set bytes
+  Atomics.store i32, H.ASK_LEN,   bytes.length
+  Atomics.store i32, H.ASK_STATE, 1
+  # An idle worker is parked in its event loop and will never look at shared
+  # memory unaided. A busy one cannot receive this, and has already been told
+  # where to look; the message then arrives to find nothing left to do.
+  worker.postMessage type: 'ask'
+  undefined
+
+drainAsk = ->
+  state = Atomics.load i32, H.ASK_STATE
+  return unless state is 2 or state is 3
+  # Copied out first: TextDecoder refuses a view onto shared memory, and the
+  # state is cleared before we decode so a bad answer cannot wedge the prompt
+  # by throwing here every 16ms forever.
+  answer = new Uint8Array askBytes.subarray 0, Atomics.load i32, H.ASK_LEN
+  Atomics.store i32, H.ASK_STATE, 0
+  say decoder.decode(answer), (if state is 3 then 'err' else 'value')
+  undefined
+
+recall = (step) ->
+  return unless entered.length
+  enteredAt = Math.min entered.length, Math.max 0, enteredAt + step
+  promptLine.value = entered[enteredAt] ? ''
+  promptLine.setSelectionRange promptLine.value.length, promptLine.value.length
+
+listenForPrompt = ->
+  promptLine.addEventListener 'keydown', (event) ->
+    return if event.ctrlKey or event.metaKey or event.altKey
+    switch event.key
+      when 'Enter'
+        askLine promptLine.value
+        promptLine.value = ''
+        enteredAt = entered.length
+      when 'ArrowUp'   then recall -1
+      when 'ArrowDown' then recall  1
+      else return
+    event.preventDefault()
+
+  # Clicking the log to read it should not cost you the prompt, but clicking
+  # to select text should not steal it back either.
+  document.getElementById('consolePane').addEventListener 'click', ->
+    promptLine.focus() unless String(window.getSelection())
+  undefined
+
+# Is anything printed still on its way to the screen -- bytes the ring has not
+# handed over, or lines queued but not yet in the DOM. Both are read in one
+# go on the one thread that moves either, so a false here means everything a
+# sketch printed is on screen. The suite waits on this instead of guessing an
+# interval; a loaded machine makes every guess wrong eventually.
+globalThis.Printing =
+  pending: ->
+    Atomics.load(i32, H.PRINT_HEAD) isnt Atomics.load(i32, H.PRINT_TAIL) or queued.length > 0
+
+globalThis.Prompt =
+  ask:     askLine
+  pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0
+  entered: -> entered.slice()
+
 # --- input ------------------------------------------------------------------
 
 # Keys reach the sketch only while the screen has focus, so the editor keeps
@@ -192,7 +276,7 @@ PANELS =
     min:      32
     room:     -> window.innerHeight - 260
     measure:  (event) -> window.innerHeight - event.clientY
-    current:  -> document.getElementById('console').getBoundingClientRect().height
+    current:  -> document.getElementById('consolePane').getBoundingClientRect().height
 
 applyPanel = (name, px) ->
   panel = PANELS[name]
@@ -422,6 +506,7 @@ start = (thenRun = null) ->
   Atomics.store i32, H.SKETCH_US, 0
   Atomics.store i32, H.SWAP,      0
   Atomics.store i32, H.FRONT,     0
+  Atomics.store i32, H.ASK_STATE, 0   # the old worker will never answer now
   clearInput()
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
@@ -523,11 +608,12 @@ window.addEventListener 'keydown', (event) ->
     handled[event.key]()
 
 listenForInput()
+listenForPrompt()
 
 dragPanel document.getElementById('splitEditor'),  'editor'
 dragPanel document.getElementById('splitConsole'), 'console'
 
-setInterval drainPrints, CONSOLE_EVERY
+setInterval (-> drainPrints(); drainAsk()), CONSOLE_EVERY
 
 new ResizeObserver(resize).observe stage
 window.addEventListener 'resize', reflowPanels
@@ -549,7 +635,7 @@ do ->
   restorePanels()
   start()
   frame()
-  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter runs the block under the cursor, :help for the rest', 'sys'
+  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, :help for the rest', 'sys'
 
   try
     names  = await fillPicker()
