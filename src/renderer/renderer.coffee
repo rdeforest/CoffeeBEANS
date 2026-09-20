@@ -290,25 +290,31 @@ framePending = ->
   pacing.due += 1000 / fps
   true
 
-frame = ->
-  requestAnimationFrame frame
-  reshape Atomics.load(i32, H.WIDTH), Atomics.load(i32, H.HEIGHT)
-  return unless surface.width
+# Re-armed through `tick`, which is private to this closure rather than a
+# name at file scope. Losing this loop is the worst failure the window has:
+# nothing presents, and every buffer.swap after it blocks forever, with no
+# error anywhere the user can see. It must not be one stray assignment away.
+frame = do ->
+  tick = ->
+    requestAnimationFrame tick
+    reshape Atomics.load(i32, H.WIDTH), Atomics.load(i32, H.HEIGHT)
+    return unless surface.width
 
-  if Atomics.load(i32, H.SWAP) is 1 and framePending()
-    # Only double buffering flips. Single buffered, a swap means no more than
-    # "wait until this frame is on screen" -- flipping would hand the sketch
-    # the other buffer and its drawing would vanish.
-    if Atomics.load(i32, H.DOUBLE) is 1
-      Atomics.store i32, H.FRONT, 1 - Atomics.load i32, H.FRONT
-    present Atomics.load i32, H.FRONT
-    Atomics.store  i32, H.SWAP, 0
-    Atomics.notify i32, H.SWAP
-  else
-    present Atomics.load i32, H.FRONT
+    if Atomics.load(i32, H.SWAP) is 1 and framePending()
+      # Only double buffering flips. Single buffered, a swap means no more
+      # than "wait until this frame is on screen" -- flipping would hand the
+      # sketch the other buffer and its drawing would vanish.
+      if Atomics.load(i32, H.DOUBLE) is 1
+        Atomics.store i32, H.FRONT, 1 - Atomics.load i32, H.FRONT
+      present Atomics.load i32, H.FRONT
+      Atomics.store  i32, H.SWAP, 0
+      Atomics.notify i32, H.SWAP
+    else
+      present Atomics.load i32, H.FRONT
 
-  Atomics.add i32, H.FRAME, 1
-  updateMeter()
+    Atomics.add i32, H.FRAME, 1
+    updateMeter()
+  tick
 
 # --- worker lifecycle -------------------------------------------------------
 
@@ -327,6 +333,17 @@ messages =
   error:   (data) ->
     where = if data.line? then " (line #{data.line})" else ''
     say "#{data.stage}#{where}: #{data.message}", 'err'
+    # The frames span more than one sketch only when a region defined a helper
+    # another region calls; then say which sketch each frame belongs to.
+    frames = data.frames ? []
+    multi  = (new Set(step.name for step in frames)).size > 1
+    # Not `for frame in frames`: at this scope that is the present loop, and
+    # a comprehension variable would quietly reassign it. See NOTES.md.
+    for step in frames
+      site = step.fn ? 'top level'
+      site = "#{site} in #{step.name}" if multi and step.name
+      code = if step.text then ":  #{step.text}" else ''
+      say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
     setStatus 'error'
 
 # nativeImage hands back BGRA; the framebuffer wants RGBA. One swizzle here
@@ -378,6 +395,11 @@ start = (thenRun = null) ->
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
+  # A worker that dies on the way up posts nothing, and without this the
+  # status sits on 'booting' forever while every run is silently queued.
+  worker.onerror = (event) ->
+    say "worker: #{event.message ? 'failed to start'}", 'err'
+    setStatus 'error'
   worker.postMessage type: 'boot', sab: sab
   setStatus 'booting'
 
@@ -478,6 +500,14 @@ setInterval drainPrints, CONSOLE_EVERY
 
 new ResizeObserver(resize).observe stage
 window.addEventListener 'resize', reflowPanels
+
+# The console pane is the only one he is looking at. Without these, an
+# uncaught renderer error goes to the terminal -- or nowhere -- and the window
+# just quietly stops doing things.
+window.addEventListener 'error', (event) ->
+  say "renderer: #{event.message}", 'err'
+window.addEventListener 'unhandledrejection', (event) ->
+  say "renderer: #{event.reason?.message ? event.reason}", 'err'
 
 # --- boot -------------------------------------------------------------------
 

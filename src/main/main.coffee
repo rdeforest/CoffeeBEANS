@@ -155,6 +155,12 @@ createWindow = ->
       contextIsolation: yes
       nodeIntegration:  no
       preload:          path.join __dirname, 'preload.js'
+      # Chromium stops animation frames for a window it is not compositing --
+      # behind another window, minimised, on another Space. The present loop
+      # is the only thing that clears the swap flag, so without this a sketch
+      # parked in buffer.swap never wakes up and the app looks wedged until
+      # you Stop it. Alt-tabbing away from a running sketch must not do that.
+      backgroundThrottling: no
   query = process.env.BEANS_QUERY ? ''
   win.loadURL "app://beans/src/renderer/index.html#{query}"
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS

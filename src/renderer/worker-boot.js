@@ -88,6 +88,7 @@
     runs.set(id, {
       map: compiled.sourceMap,
       lines: compiled.js.split('\n'),
+      src: source.split('\n'),
       name,
       offset: PROLOGUE_LINES,
     })
@@ -109,25 +110,43 @@
     return undefined
   }
 
-  const locate = (error) => {
+  // Every sketch frame in the stack, innermost first: a real traceback rather
+  // than only the line the error surfaced on. Frames inside our own runtime
+  // modules are unmapped and left out -- a frame in them is our problem, not
+  // the author's -- so what remains is the author's own chain of calls.
+  const traceback = (error) => {
     const stack = (error && error.stack) || ''
-    for (const [id, entry] of runs) {
-      const found = new RegExp(`${id.replace(/\./g, '\\.')}:(\\d+):(\\d+)`).exec(stack)
+    const frames = []
+    for (const raw of stack.split('\n')) {
+      const found = /at (?:(.+?) \()?(beans-run-\d+\.coffee):(\d+):(\d+)\)?/.exec(raw)
       if (!found) continue
-      return coffeeLine(entry, Number(found[1]) - entry.offset - 1, Number(found[2]) - 1)
+      const entry = runs.get(found[2])
+      if (!entry) continue
+      const line = coffeeLine(entry, Number(found[3]) - entry.offset - 1, Number(found[4]) - 1)
+      // A sketch's top-level code runs inside an indirect eval, which V8 names
+      // 'eval'; that reads as top level to the author, so drop it.
+      const fn = found[1] && found[1] !== 'eval' && found[1] !== '<anonymous>' ? found[1] : null
+      frames.push({
+        fn,
+        name: entry.name,
+        line,
+        text: line ? (entry.src[line - 1] || '').trim() : null,
+      })
     }
-    return undefined
+    return frames
   }
 
   const fail = (stage, error) => {
     // A compile error carries its own CoffeeScript location; a runtime error
     // carries a stack that has to be mapped back through the source map.
     const location = error && error.location
+    const frames = location ? [] : traceback(error)
     postMessage({
       type: 'error',
       stage,
       message: String((error && error.message) || error),
-      line: location ? location.first_line + 1 : locate(error),
+      line: location ? location.first_line + 1 : (frames[0] && frames[0].line),
+      frames,
     })
   }
 
