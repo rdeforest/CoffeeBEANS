@@ -24,3 +24,8 @@ been told to do so by a human.
 
 I take full responsibility for the contents of my project. If the AI code
 hurts anyone, that's on me.
+
+Supporting links
+
+* [Bun in Rust](https://bun.com/blog/bun-in-rust) - Translating Bun's half a
+  million lines of code from Zig to Rust with Claude took 11 days.
