@@ -1,7 +1,8 @@
+screen 480, 300
 tau = pi * 2
 
-a = -pi/6
-b =  pi/6
+a = -pi/8
+b =  pi/8
 c =  pi/2
 
 transform =
@@ -9,13 +10,10 @@ transform =
   y: [cos(b), sin(b)]
   z: [cos(c), sin(c)]
 
-offset = [0, 0]
-
-show = (value) -> print JSON.stringify value, null, 2
-
+offset = [50, 50]
 scale = 1
 
-translate = (x, y, z) ->
+translate = ([x, y, z]) ->
   point = {x, y, z}
   [0, 1].map (transformDim) ->
     "xyz"
@@ -23,31 +21,36 @@ translate = (x, y, z) ->
       .map (axis) -> scale * point[axis] * transform[axis][transformDim] + offset[transformDim]
       .reduce (a, b) -> a + b
 
-drawBlock = (x, y, z) ->
-  line 160, 100, (p1 = translate [x    , y    , z])..., 'gray'
-  line 160, 100, (p2 = translate [x + 1, y    , z])..., 'gray'
-  line 160, 100, (p3 = translate [x + 1, y + 1, z])..., 'gray'
-  line 160, 100, (p4 = translate [x    , y + 1, z])..., 'gray'
+boxCorners = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]
+              [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]]
 
-  line 160, 100, (p5 = translate [x    , y    , z + 1])..., 'gray'
-  p6 = null # irrelevant, never visible
-  line 160, 100, (p7 = translate [x + 1, y + 1, z + 1])..., 'gray'
-  line 160, 100, (p8 = translate [x    , y + 1, z + 1])..., 'gray'
+addVectors = (vs...) ->
+  for x, i in vs[0]
+    t = 0
+    t += v[i] for v in vs
+    t
 
-  line p1..., p2...
-  line p2..., p3...
-  line p3..., p4...
-  line p4..., p1...
+zLayers = {}
 
-  line p1..., p5...
-  line p3..., p7...
-  line p4..., p8...
+queuePoint = (p) ->
+  screenPoint = translate p
+  z = floor screenPoint[2]
+  (zLayers[z] ?= []).push [p[0], p[1], p[3]]
 
-  line p7..., p8...
-  line p8..., p5...
+drawAll = ->
+  zLayerNames = Object
+    .keys zLayers
+    .map (s) -> parseFloat s
+    .sort (a, b) -> b - a
 
-for x in [1..10]
+  for zLayer in zLayerNames.map (name) -> zLayers[name]
+    for p in zLayer
+      point p...
+
+for z in [1..10]
   for y in [1..10]
-    for z in [1..10]
-      color COLORS.fromRGB x/10, y/10, z/10
-      drawBlock x, y, z
+    for x in [1..10]
+      c = COLORS.fromRGB (x + 0)/10, (y + 0)/10, (z + 0)/10
+      queuePoint [x, y, z, c]
+
+drawAll()
