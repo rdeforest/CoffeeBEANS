@@ -19,6 +19,24 @@ GENERATIONS = 20
 
 canvas = surface 320, 200
 
+copies = (shrink, spread) -> [
+    [ BASE_X, TRUNK_TOP,
+      scale:   shrink
+      angle:   spread
+      anchorX: BASE_X
+      anchorY: BASE_Y ]
+    [ BASE_X, TRUNK_TOP,
+      scale:   shrink
+      angle:   spread * -1
+      anchorX: BASE_X
+      anchorY: BASE_Y ]
+    [ BASE_X, TRUNK_TOP,
+      scale:   shrink
+      angle:   1
+      anchorX: BASE_X
+      anchorY: BASE_Y ]
+  ]
+
 loop
   spread = 0.15 + mouse.x / 320 * 0.75
   shrink = 0.62 + mouse.y / 200 * 0.22
@@ -29,12 +47,16 @@ loop
 
     for generation in [1..GENERATIONS]
       whole = get 0, 0, 319, 199
-      for side in [-1, 1]
-        stamp whole, BASE_X, TRUNK_TOP,
-          scale:   shrink
-          angle:   spread * side
-          anchorX: BASE_X
-          anchorY: BASE_Y
+
+      for copy in copies shrink, spread
+        stamp whole, copy...
+
+      #for side in [-1, 1]
+        #stamp whole, BASE_X, TRUNK_TOP,
+        #  scale:   shrink
+        #  angle:   spread * side
+        #  anchorX: BASE_X
+        #  anchorY: BASE_Y
 
   cls 0xFF07070C
   put canvas, 0, 0
