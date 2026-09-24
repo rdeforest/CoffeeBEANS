@@ -1,7 +1,7 @@
-screen w = 320, h = 200
+screen w = 640, h = 400
 
 G             = 0.0000001
-MAX_DT        = 100
+MAX_DT        = 10
 velocityScale = 0.0002
 timeScale     = 0.1
 launchMass    = 100

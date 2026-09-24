@@ -33,16 +33,31 @@ ART =
     """
   ship: """
           x
-         xxx 
-         x x 
-         x x 
-         xxx 
+         xxx
+         x x
+         x x
+         xxx
         xxxxx
        xxxxxxx
       xxxxxxxxx
       xx xxx xx
           x
     """
+
+
+main = ->
+  world = init()
+
+  loop
+    drawWorld    world
+    handleInput  world
+    processWorld world
+
+init = ->
+  for name, value of ART
+    ART[name] = convertArt value
+
+  return makeWorld()
 
 convertArt = (artStr) ->
   artStr
@@ -53,17 +68,6 @@ convertArt = (artStr) ->
         .map (char, x) -> {char, x, y}
         .filter ({char}) -> char isnt ' '
         .map ({x, y}) -> [x, y]
-
-for name, value of ART
-  ART[name] = convertArt value
-
-main = ->
-  world = makeWorld()
-
-  loop
-    drawWorld    world
-    handleInput  world
-    processWorld world
 
 drawWorld = (world) ->
   cls()

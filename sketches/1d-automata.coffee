@@ -1,6 +1,5 @@
-jprint = (args...) -> print args.map(JSON.stringify)...
+#show = (args...) -> print args.map(JSON.stringify)...
 
-  
 screen w = 320, h = 200
 
 cls   'black'
@@ -14,7 +13,7 @@ nextStateMaker = (rule) ->
     .map (d) -> parseInt d
     .reverse()
 
-  #jprint {rule}
+  #show {rule}
 
   (state) ->
     newState = (
@@ -25,7 +24,7 @@ nextStateMaker = (rule) ->
         
         n = (bits[0] << 2) + (bits[1] << 1) + bits[2]
             
-        #jprint {bits, n, r: rule[n]}
+        #show {bits, n, r: rule[n]}
         rule[n]
         )[1 .. -2]
 
@@ -39,7 +38,7 @@ freshState = (seed = 1) ->
 
 print "..."
 
-#jprint nextState [0, 0, 0, 1, 0, 0, 0]
+#show nextState [0, 0, 0, 1, 0, 0, 0]
 
 drawState = (state, y) ->
   for cell, x in state when cell
