@@ -1,3 +1,12 @@
+# Challenge: DONE!
+# In dynamic stability situations, shark populations peak after fish
+# population peaks because the shark population is limited by available fish.
+# Both fish and sharks grow exponentially when they can, and fish outnumber
+# sharks because sharks are f'n hungry, right?! Er. Anyway. Fish grow until
+# they run out of space, sharks grow until they run out of fish. When sharks
+# catch up with fish, fish die off, and then sharks die off, lather, rinse,
+# repeat.
+
 screen w = 320, h = 200
 
 W = w
@@ -151,13 +160,42 @@ iterateOcean = (ocean) ->
 
   newOcean
 
+waitForRelease = no
+
+processInput = ->
+  if waitForRelease
+    if not keys.any
+      waitForRelease = no
+
+  else if keys.any
+    delta = if keys.down 'shift' then -1 else 1
+
+    if keys.down 'h'
+      SHARK_FOOD_TIMER = SHARK_FOOD_TIMER + delta
+      print "Shark hunger: 1/#{SHARK_FOOD_TIMER}"
+      waitForRelease = yes
+    else
+      target = no
+      target = FISH  if keys.down 'f'
+      target = SHARK if keys.down 's'
+
+      if target
+        updated = SPAWN_TIMER[target] = SPAWN_TIMER[target] - delta
+        print "#{target} spawn every #{updated}"
+        waitForRelease = yes
+
 lastTurn = 0
 turn     = 0
 ocean    = makeOcean()
 
 buffer.on
 
+print "Keys: (s)hark spawn, (f)ish spawn, shark (h)unger"
+print "shift to reduce value/increase rate"
+
 loop
+  processInput()
+
   if TURN_DURATION <= Date.now() - lastTurn
     lastTurn = Date.now()
     turn++
