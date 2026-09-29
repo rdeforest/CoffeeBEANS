@@ -19,6 +19,10 @@ screen. That is what makes a plain `loop` work as an animation loop.
       point 160 + 50 * cos(t), 100 + 50 * sin(t), COLORS.coffee
       buffer.swap
 
+`wait n` also blocks until frames reach the screen, but it is a sleep, not a
+swap: it never flips, so a loop can wait between draws without showing its
+back buffer.
+
 Stop sets an interrupt flag. A sketch that reaches `buffer.swap` unwinds
 cleanly and keeps its definitions; one with no yield point gets terminated.
 

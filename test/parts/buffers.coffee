@@ -62,3 +62,24 @@ module.exports = (t) ->
   check 'display.onScreen distinguishes the buffers',
     text.includes('single=true') and text.includes('doubled=false') and text.includes('afterSwap=false'),
     JSON.stringify text.trim()
+
+  # 53. wait sleeps, it never flips. When it did, an odd wait left the sketch
+  # drawing into the other buffer, and a loop that waited between swaps
+  # showed its two buffers in turn.
+  await setDoc "screen 320, 200\nbuffer.on\ncls()\nbuffer.swap\ncls()\npoint 20, 20, COLORS.white\nwait 3\nprint 'kept=' + (pget(20, 20) is COLORS.white)\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'wait does not flip a double-buffered sketch', text.includes('kept=true'), JSON.stringify text.trim()
+
+  # 54. the meter counts frames served, not the display's refresh rate
+  await setDoc "screen 320, 200\nbuffer.on\nbuffer.fps 10\nloop\n  buffer.swap\n"
+  await wait 500
+  await evalAll()
+  await wait 1500
+  meter = await t.js "return document.getElementById('meter').textContent"
+  await click 'stop'
+  await wait 300
+  fps = Number /(\d+)fps/.exec(meter)?[1] ? -1
+  check 'fps meter counts frames served', 5 <= fps <= 15, "meter read #{JSON.stringify meter} at buffer.fps 10"

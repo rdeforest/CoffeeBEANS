@@ -19,7 +19,6 @@ held = (word) -> Atomics.load state.i32, H.KEYS + word
 keys =
   down: (name) -> anySet held,               KEYTABLE.bitsFor name
   hit:  (name) -> anySet ((w) -> hits[w]),   KEYTABLE.bitsFor name
-  any:  -> (held(word) isnt 0 for word in [0...WORDS]).some Boolean
 
 # Hits are sticky in shared memory until claimed, so a tap that begins and
 # ends between two frames still registers. Claiming is per frame: swap does
@@ -29,6 +28,9 @@ claimHits = ->
   undefined
 
 Object.defineProperty keys, 'poll', get: -> claimHits()
+# A getter, like poll: as a method, `if not keys.any` tests the function
+# object, which is always there, and the branch never runs.
+Object.defineProperty keys, 'any',  get: -> (held(word) isnt 0 for word in [0...WORDS]).some Boolean
 
 mouse = {}
 

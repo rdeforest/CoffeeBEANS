@@ -60,3 +60,19 @@ module.exports = (t) ->
   await evalAll()
   text = await settled()
   check 'mouse maps into screen pixels', text.includes('at=80,100'), JSON.stringify text.trim()
+
+  # 55. keys.any is a property, like keys.poll. As a method, `not keys.any`
+  # tested the function object and was always false.
+  await setDoc "print 'any=' + keys.any\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'keys.any is false with nothing held', text.includes('any=false'), JSON.stringify text.trim()
+
+  await key 'keydown', 'KeyD'
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  await key 'keyup', 'KeyD'
+  check 'keys.any sees a held key', text.includes('any=true'), JSON.stringify text.trim()

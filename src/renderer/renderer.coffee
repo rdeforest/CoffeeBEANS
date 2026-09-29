@@ -373,13 +373,14 @@ present = (index) ->
   surface.view32.set u32.subarray base, base + surface.width * surface.height
   ctx.putImageData surface.imageData, 0, 0
 
-# You cannot tune what you cannot see. fps is how often a frame reaches the
-# screen; the second number is what the sketch spent building one, which is
-# the half a sketch can do something about.
+# You cannot tune what you cannot see. fps is how often a new frame reaches
+# the screen -- counted where one is served, not on every animation frame,
+# which would only measure the display's refresh rate. The second number is
+# what the sketch spent building one, the half a sketch can do something
+# about.
 meterState = presented: 0, shown: 0, since: performance.now()
 
 updateMeter = ->
-  meterState.presented += 1
   span = performance.now() - meterState.since
   return if span < 500
   fps    = (meterState.presented - meterState.shown) * 1000 / span
@@ -456,15 +457,21 @@ frame = do ->
     # not wait on the fps cap -- a frame you asked for by hand should arrive.
     # Note neither branch flips while paused: flipping without clearing the
     # swap would show the buffer the sketch is drawing into, and flicker.
-    serve = Atomics.load(i32, H.SWAP) is 1 and (if paused then stepOnce else framePending())
+    request = Atomics.load i32, H.SWAP
+    serve   = request isnt 0 and (if paused then stepOnce else framePending())
     if serve
       stepOnce = no
-      # Only double buffering flips. Single buffered, a swap means no more
-      # than "wait until this frame is on screen" -- flipping would hand the
-      # sketch the other buffer and its drawing would vanish.
-      if Atomics.load(i32, H.DOUBLE) is 1
+      # Only a double-buffered swap flips. Single buffered, a swap means no
+      # more than "wait until this frame is on screen" -- flipping would hand
+      # the sketch the other buffer and its drawing would vanish. A wait
+      # (request 2) never flips, whatever the mode.
+      double = Atomics.load(i32, H.DOUBLE) is 1
+      if double and request is 1
         Atomics.store i32, H.FRONT, 1 - Atomics.load i32, H.FRONT
       present Atomics.load i32, H.FRONT
+      # Single buffered, what is on screen is what the sketch drew, so every
+      # frame served is new; double buffered, only a flip brings one.
+      meterState.presented += 1 if request is 1 or not double
       Atomics.store  i32, H.SWAP, 0
       Atomics.notify i32, H.SWAP
     else

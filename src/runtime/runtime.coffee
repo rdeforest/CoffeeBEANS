@@ -51,16 +51,19 @@ setDouble = (value) ->
   refreshBase()
   undefined
 
-doSwap = ->
+# `flip` is what separates buffer.swap from wait. Both block until a frame is
+# on screen; only a swap may hand the sketch the other buffer.
+doSwap = (flip = yes) ->
   checkInterrupt()
   # Time from the previous swap returning to this one being asked for: the
   # cost of the sketch's own frame, which is the number worth tuning.
   now = performance.now()
   Atomics.store state.i32, H.SKETCH_US, Math.round (now - state.frameStart) * 1000 if state.frameStart?
-  Atomics.store state.i32, H.SWAP, 1
+  request = if flip then 1 else 2
+  Atomics.store state.i32, H.SWAP, request
   try
-    while Atomics.load(state.i32, H.SWAP) is 1
-      Atomics.wait state.i32, H.SWAP, 1, 100
+    while Atomics.load(state.i32, H.SWAP) is request
+      Atomics.wait state.i32, H.SWAP, request, 100
       checkInterrupt()
   finally
     # Whether the frame landed or a stop got there first, the renderer may
@@ -503,8 +506,11 @@ print = (args...) ->
   Atomics.store state.i32, H.PRINT_HEAD, writeRing writeRing(head, sizing), bytes
   undefined
 
+# A sleep measured in frames, never a flip. When wait flipped, a
+# double-buffered loop that waited between draws showed its two buffers in
+# turn, the back one holding whatever was drawn two swaps ago.
 wait = (frames = 1) ->
-  doSwap() for i in [1..frames] by 1
+  doSwap no for i in [1..frames] by 1
   undefined
 
 buffer = {}

@@ -4,7 +4,7 @@
 HEADER =
   CONTROL:     0
   FRONT:       1     # which buffer index is currently on screen
-  SWAP:        2     # 1 = worker is waiting for a frame to be presented
+  SWAP:        2     # 1 = worker is waiting for a frame to be presented, 2 = the same without a flip
   INTERRUPT:   3     # 1 = unwind the sketch at the next yield point
   WIDTH:       4
   HEIGHT:      5

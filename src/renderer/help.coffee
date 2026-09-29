@@ -141,7 +141,7 @@ SECTIONS = [
     ['buffer.swap',       'show what you drew; blocks until it is on screen']
     ['buffer.fps n',      'pace swaps to n per second; 0 is the display rate']
     ['display.onScreen',  'is drawing landing on the buffer you can see']
-    ['wait n',            'wait n presented frames']
+    ['wait n',            'sleep n frames; never flips, only buffer.swap does']
   ]
 ,
   name:  'input'
