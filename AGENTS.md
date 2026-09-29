@@ -44,6 +44,16 @@ and took forty tests with it. Before naming anything at file scope, check it.
 brush, text cursor. Each of those, left set, makes the next sketch draw
 nothing with no error.
 
+## Priorities
+
+Robert's order, set 2026-09-28:
+
+1. **Debugging** -- line stepping and the variables pane, below.
+2. **Sound.** Not designed yet; NOTES.md only notes that audio will want the
+   same shared-memory mechanism for sample data that the prompt uses.
+3. **Tab completion at the console** -- designed and parked, at the bottom of
+   this file. Do not start it ahead of the other two.
+
 ## Where the debugger work stands
 
 Committed: `dd834d2` (frame stepping + source maps), `e1260d0` (`breakpoint`
@@ -169,3 +179,27 @@ Out, each needing a fresh reason: clickable gutter breakpoints, conditional
 breakpoints (`breakpoint if angle > pi` is already just code), watch
 expressions (the prompt is one, and better), a clickable call stack (a one-line
 breadcrumb, maybe), editing values in the pane, stepping into the runtime.
+
+## Tab completion (parked, lowest priority)
+
+Estimated at ~150 lines plus ~5 checks in `repl`. Decided:
+
+- **Bash style.** Tab completes as far as every candidate agrees, and beeps
+  when that is ambiguous; a second Tab lists the candidates in the console.
+  No popup -- it would fight the prompt history for Up/Down.
+- **Only the CoffeeBEANS vocabulary.** Candidates are the image, the running
+  sketch's harvested locals, and the runtime API. Worker globals (`Atomics`,
+  `postMessage`, `WebAssembly`...) are left out: anyone who wants those is not
+  using them from the console.
+- **The worker answers, over the ask channel.** Only the worker knows the
+  names worth completing. A new header word marks a completion question;
+  `drainAsk` routes the answer to the completer instead of printing it, and
+  drops an answer that arrives after the line has changed. A sketch with no
+  yield point cannot answer, same as the prompt: Tab does nothing.
+- **Never invoke an accessor to find members.** Resolve `a.b.` by walking
+  property descriptors and refuse to pass through a getter -- `buffer.swap`
+  draws a frame, `keys.poll` claims hits, `mouse.wheel` consumes. Same rule as
+  the variables pane.
+- **Share one "ask the worker" path with the prompt**, so the line-stepping
+  fix that routes the prompt to `Debugger.evaluateOnCallFrame` while paused
+  covers completion too, rather than completion wedging on its own.
