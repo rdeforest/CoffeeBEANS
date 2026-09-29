@@ -251,7 +251,7 @@ installVimCommands = ->
   Vim.defineEx 'run',     'run', -> runFresh()
   # Kept because it is exactly what run does, and it was the name for a while.
   Vim.defineEx 'restart', 'restart', -> runFresh()
-  Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?[0]
+  Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?.join ' '
   Vim.defineEx 'edit',    'e',   (cm, params) -> editSketch params
   Vim.defineEx 'target',  'tar', (cm, params) -> setLimit Number((params?.args ? [])[0] ? 0)
   # Frame at a time. `:step` from a running sketch pauses it first, so you do

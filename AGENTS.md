@@ -7,7 +7,7 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 97 checks, ~95s
+    npm test                                 all 101 checks, ~95s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping lifecycle drawing color loading

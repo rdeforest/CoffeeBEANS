@@ -161,7 +161,8 @@ window reload the pane. Running is an operation on a region:
     Ctrl-Shift-Enter    run -- fresh worker, then the whole buffer
     :w                  force a save        :eval      eval the whole buffer
     :run                fresh worker        Ctrl-.     stop
-    :help [topic]       quick reference in the console pane
+    :help [word]        quick reference in the console pane: a section,
+                        an object (keys, mouse, buffer), or a search
     > at the console    one line, evaluated in the live worker
 
 **Eval** puts code into the worker you already have, so everything it knows

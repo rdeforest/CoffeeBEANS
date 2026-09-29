@@ -1,5 +1,6 @@
 # Quick reference, shown by :help in the editor. Data rather than prose so
-# `:help colors` can pick one section out without reformatting anything.
+# `:help colors` can pick one section out, and `:help wheel` can pick lines
+# out of every section, without reformatting anything.
 
 SECTIONS = [
   name:  'running'
@@ -21,7 +22,8 @@ SECTIONS = [
     [':w',                'force a save (edits autosave anyway)']
     [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
     [':target <n>',       'flag the first source line past n; :target 0 clears']
-    [':help <topic>',     'this, or one section of it']
+    [':help <word>',      'this, or one section, or an object like keys,']
+    ['',                  'or else every line that mentions the word']
   ]
 ,
   name:  'debug'
@@ -182,9 +184,78 @@ SECTIONS = [
   ]
 ]
 
+# The longer story for the objects a sketch pokes at: every member, and what
+# the section line had no room for. Asked for by the object's own name.
+OBJECTS = [
+  name:  'keys'
+  title: 'keys -- the keyboard, polled'
+  lines: [
+    ["keys.down 'left'",  'true while that key is held']
+    ["keys.hit 'space'",  'went down since the last frame; sticky until then,']
+    ['',                  'so a tap that starts and ends between frames counts']
+    ['keys.any',          'true while any key is held -- no (), like poll']
+    ['keys.poll',         'claim hits by hand; buffer.swap and wait already do,']
+    ['',                  'so only a loop that does neither needs it']
+    ['names',             'a..z  0..9  f1..f12  left right up down  space']
+    ['',                  'enter return  esc escape  tab  backspace  del']
+    ['',                  'home end pageup pagedown']
+    ['',                  'shift ctrl control alt -- either side of the keyboard']
+    ['',                  "or a raw KeyboardEvent code: 'Minus' 'Slash' 'ShiftLeft'"]
+    ['',                  'click the screen first, or the editor keeps the keys']
+  ]
+,
+  name:  'mouse'
+  title: 'mouse -- the pointer, polled'
+  lines: [
+    ['mouse.x  mouse.y',  'in screen pixels, not window pixels']
+    ['mouse.left',        'true while that button is held; .right .middle too']
+    ['mouse.down',        'true while any button is held']
+    ['mouse.wheel',       'movement since you last read it -- reading consumes,']
+    ['',                  'so read it once a frame into a variable']
+  ]
+,
+  name:  'buffer'
+  title: 'buffer -- what you see while you draw'
+  lines: [
+    ['buffer.off',        'the default: drawing lands on screen as it happens']
+    ['buffer.on',         'draw into a back buffer while the front one shows']
+    ['buffer.swap',       'show the back buffer, and draw into the old front;']
+    ['',                  'blocks until the frame is on screen']
+    ['buffer.fps n',      'pace swaps to n per second; 0 is the display rate']
+    ['wait n',            'sleep n frames; never flips, in either mode']
+    ['display.onScreen',  'is drawing landing on the buffer you can see']
+    ['',                  'screen turns buffering off, so put buffer.on after it']
+  ]
+]
+
+# A line whose syntax is blank continues the entry above it, so a search
+# keeps the whole entry rather than half a sentence.
+entriesOf = (lines) ->
+  entries = []
+  for line in lines
+    if line[0] or not entries.length
+      entries.push [line]
+    else
+      entries[entries.length - 1].push line
+  entries
+
+search = (wanted) ->
+  found = []
+  for section in SECTIONS
+    hits = (entry for entry in entriesOf(section.lines) when entry.some (line) -> line.join(' ').toLowerCase().includes wanted)
+    found.push title: section.title, lines: [].concat hits... if hits.length
+  found
+
 globalThis.HELP =
   sections: SECTIONS
+  objects:  OBJECTS
+  # An object by its exact name, then sections by prefix (so `:help col` is
+  # still Colors), then a search of every line.
   match: (topic) ->
     return SECTIONS unless topic
     wanted = topic.toLowerCase()
-    (section for section in SECTIONS when section.name.startsWith wanted)
+    object = (entry for entry in OBJECTS when entry.name is wanted)
+    return object if object.length
+    sections = (section for section in SECTIONS when section.name.startsWith wanted)
+    return sections if sections.length
+    search wanted

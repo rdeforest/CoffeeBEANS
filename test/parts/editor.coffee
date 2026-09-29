@@ -73,6 +73,29 @@ module.exports = (t) ->
   check ':help <topic> narrows to one section',
     text.includes('Colors') and not text.includes('Running code')
 
+  # 56. :help takes an object's name for its long form, and anything else
+  # that is not a section is searched for, line by line
+  helpFor = (topic) ->
+    await clearConsole()
+    await js "CM.Vim.handleEx(CM.getCM(Editor.view()), #{JSON.stringify "help #{topic}"}); return true"
+    await wait 300
+    consoleText()
+
+  text = await helpFor 'keys'
+  check ':help keys is the long form', text.includes('keys -- the keyboard') and text.includes('pagedown') and not text.includes('mouse.x'),
+    JSON.stringify text.trim()[..200]
+
+  text = await helpFor 'wheel'
+  check ':help searches lines when no section matches',
+    text.includes('mouse.wheel') and text.includes('Input') and not text.includes('keys.down'), JSON.stringify text.trim()
+
+  text = await helpFor 'where fn'
+  check ':help search keeps continuation lines and takes spaces',
+    text.includes('where fn') and text.includes('p.hue'), JSON.stringify text.trim()
+
+  text = await helpFor 'zzzz'
+  check ':help with no match says so', text.includes('no help for "zzzz"'), JSON.stringify text.trim()
+
   # 13. switching sketches must not drop an edit the autosave has not flushed
   await js "await Editor.load('scratch'); return true"
   await setDoc "print 'PENDING EDIT'\n"
