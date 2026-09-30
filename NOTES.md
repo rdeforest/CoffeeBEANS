@@ -71,8 +71,6 @@ something needs it, not before.
 
 Also missing on purpose, in rough order of likely demand:
 
-- `keys.released`, the falling edge. Same sticky-bit trick as `hit`, one
-  more bank of 8 words.
 - Key repeat. The bitmap has no notion of it; a sketch that wants repeat
   can count frames itself, which is usually what you want anyway.
 - Gamepads. The Gamepad API is polled already, so it maps onto this design

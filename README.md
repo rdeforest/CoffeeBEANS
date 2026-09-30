@@ -221,8 +221,14 @@ That is also how BASIC felt.
 
 `down` is held right now; `hit` went down since the last frame and is sticky
 in shared memory until claimed, so a tap that starts and ends between two
-frames is still caught. `buffer.swap` claims them; `keys.poll` does it by
-hand for code that never swaps.
+frames is still caught. `up` is the other edge, sticky the same way.
+`buffer.swap` claims them; `keys.poll` does it by hand for code that never
+swaps.
+
+With no name, each lists the keys it would say yes to -- so to find out what
+a key is called, hold it and ask: `keys.down()` at the prompt. Punctuation
+answers to its character or a word (`';'` or `'semicolon'`), and a name
+nobody knows is an error rather than a quiet `false`.
 
 **Click the screen to send it keys.** Otherwise the editor keeps them, which
 is what you want while you are typing. The canvas gets a coffee-coloured

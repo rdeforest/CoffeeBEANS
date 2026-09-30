@@ -76,3 +76,65 @@ module.exports = (t) ->
   text = await settled()
   await key 'keyup', 'KeyD'
   check 'keys.any sees a held key', text.includes('any=true'), JSON.stringify text.trim()
+
+  # 56. with no name, each lists the keys it would say yes to -- how you find
+  # out what a key is called
+  await key 'keydown', 'KeyA'
+  await key 'keydown', 'Semicolon'
+  await setDoc "print 'held=' + keys.down().join(',')\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'keys.down() lists what is held, by name', text.includes('held=a,semicolon'), JSON.stringify text.trim()
+
+  # 57. punctuation answers to its character, its word, or the browser's code
+  await setDoc """
+names = [';', 'semicolon', 'Semicolon', 'SEMICOLON']
+print 'semi=' + (keys.down(n) for n in names).join(',')
+print 'quote=' + keys.down("'") + ',' + keys.down('apostrophe') + ',' + keys.down('quote')
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'punctuation has names', text.includes('semi=true,true,true,true') and text.includes('quote=false,false,false'),
+    JSON.stringify text.trim()
+  await key 'keyup', 'KeyA'
+  await key 'keyup', 'Semicolon'
+
+  # 58. keys.up is the falling edge: sticky until the next frame, like hit
+  await setDoc "keys.poll\nprint 'up=' + keys.up('b') + ' ups=' + keys.up().join(',') + ' hits=' + keys.hit().join(',')\n"
+  await wait 500
+  await evalAll()                  # claims taps left over from earlier checks
+  await settled()
+  await key 'keydown', 'KeyB'
+  await key 'keyup',   'KeyB'
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'keys.up catches a release between frames, and the lists agree',
+    text.includes('up=true ups=b hits=b'), JSON.stringify text.trim()
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'keys.up is claimed once', text.includes('up=false ups= hits='), JSON.stringify text.trim()
+
+  # 59. losing focus lets go of held keys, and says so
+  await key 'keydown', 'KeyC'
+  await js "document.getElementById('stage').dispatchEvent(new FocusEvent('blur')); return true"
+  await setDoc "keys.poll\nprint 'upOnBlur=' + keys.up('c')\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'blur counts as letting go', text.includes('upOnBlur=true'), JSON.stringify text.trim()
+
+  # 60. a name nobody knows is an error, not a quiet false
+  await setDoc "print keys.down 'semi-colon'\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text = await settled()
+  check 'an unknown key name says so', text.includes('no key called "semi-colon"') and text.includes('keys.down()'),
+    JSON.stringify text.trim()

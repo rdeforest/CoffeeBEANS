@@ -244,10 +244,14 @@ setKey = (code, isDown) ->
     Atomics.or  i32, H.KEYS_HIT + word, mask
   else
     Atomics.and i32, H.KEYS     + word, ~mask
+    Atomics.or  i32, H.KEYS_UP  + word, mask
   true
 
+# A key let go by losing focus is still a key let go. Without the up, a note
+# held while a key is down would ring on after you clicked away.
 clearKeys = ->
-  Atomics.store i32, H.KEYS + word, 0 for word in [0...LAYOUT.KEY_WORDS]
+  for word in [0...LAYOUT.KEY_WORDS]
+    Atomics.or    i32, H.KEYS_UP + word, Atomics.exchange i32, H.KEYS + word, 0
   undefined
 
 # Blur only releases what is held -- a tap that happened is still a tap, and
@@ -258,6 +262,7 @@ clearInput = ->
   for word in [0...LAYOUT.KEY_WORDS]
     Atomics.store i32, H.KEYS     + word, 0
     Atomics.store i32, H.KEYS_HIT + word, 0
+    Atomics.store i32, H.KEYS_UP  + word, 0
   Atomics.store i32, H.MOUSE_BTN,   0
   Atomics.store i32, H.MOUSE_WHEEL, 0
   undefined

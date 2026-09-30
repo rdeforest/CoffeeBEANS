@@ -36,11 +36,12 @@ HEADER =
   SOUND_PEAK: 47     # loudest sample of the last render quantum, in millionths
   SOUND_BUSY: 48     # how many voices have a note sounding
   SOUND_RATE: 49     # the audio thread's sample rate, once it is running
+  KEYS_UP:    50     # 50..57, sticky: went up since the sketch last looked
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 50..63 spare: gamepads, whatever comes
+HEADER_WORDS = 64        # 58..63 spare: gamepads, whatever comes
 BUFFERS      = 2
 
 # Where a loaded image lands on its way from the main process to the worker.

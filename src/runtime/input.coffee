@@ -8,23 +8,33 @@ WORDS = LAYOUT.KEY_WORDS
 
 state = null
 hits  = new Uint32Array WORDS
+ups   = new Uint32Array WORDS
 
-anySet = (read, bits) ->
-  for bit in bits
-    return true if (read(bit >>> 5) & (1 << (bit & 31))) isnt 0
-  false
+isSet = (read, bit) -> (read(bit >>> 5) & (1 << (bit & 31))) isnt 0
 
 held = (word) -> Atomics.load state.i32, H.KEYS + word
 
-keys =
-  down: (name) -> anySet held,               KEYTABLE.bitsFor name
-  hit:  (name) -> anySet ((w) -> hits[w]),   KEYTABLE.bitsFor name
+# Each asks about one key by name, or with no name lists every key it would
+# say yes to -- which is also how to find out what a key is called: hold it
+# and ask.
+asker = (read) -> (name) ->
+  if name?
+    KEYTABLE.bitsFor(name).some (bit) -> isSet read, bit
+  else
+    KEYTABLE.namesFor (bit) -> isSet read, bit
 
-# Hits are sticky in shared memory until claimed, so a tap that begins and
-# ends between two frames still registers. Claiming is per frame: swap does
-# it, and a sketch that never swaps can do it by hand.
+keys =
+  down: asker held                  # held right now
+  hit:  asker (word) -> hits[word]  # went down since the last frame
+  up:   asker (word) -> ups[word]   # went up since the last frame
+
+# Hits and ups are sticky in shared memory until claimed, so a tap that
+# begins and ends between two frames still registers both. Claiming is per
+# frame: swap does it, and a sketch that never swaps can do it by hand.
 claimHits = ->
-  hits[word] = Atomics.exchange state.i32, H.KEYS_HIT + word, 0 for word in [0...WORDS]
+  for word in [0...WORDS]
+    hits[word] = Atomics.exchange state.i32, H.KEYS_HIT + word, 0
+    ups[word]  = Atomics.exchange state.i32, H.KEYS_UP  + word, 0
   undefined
 
 Object.defineProperty keys, 'poll', get: -> claimHits()
