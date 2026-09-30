@@ -152,10 +152,32 @@ module.exports = (t) ->
   try
     await fsp.access created
     made = true
-  inPicker = await js "return [...document.getElementById('sketch').options].some((o) => o.value === 'ecreate')"
+  listed = await js "return (await beans.list()).includes('ecreate')"
   check ':e newname creates, opens, and lists the sketch',
-    (await js "return Editor.name()") is 'ecreate' and made and inPicker,
-    "name=#{await js "return Editor.name()"} disk=#{made} picker=#{inPicker}"
+    (await js "return Editor.name()") is 'ecreate' and made and listed,
+    "name=#{await js "return Editor.name()"} disk=#{made} listed=#{listed}"
+
+  # Names are paths under sketches/, so folders work end to end.
+  nested = path.join paths.sketches, 'sub', 'nested.coffee'
+  await fsp.rm path.join(paths.sketches, 'sub'), recursive: yes, force: yes
+  await handleEx 'e sub/nested'
+  await wait 400
+  onDisk = false
+  try
+    await fsp.access nested
+    onDisk = true
+  listed = await js "return (await beans.list()).includes('sub/nested')"
+  check ':e sub/name creates the folder and lists the sketch by its path',
+    (await js "return Editor.name()") is 'sub/nested' and onDisk and listed,
+    "name=#{await js "return Editor.name()"} disk=#{onDisk} listed=#{listed}"
+  await fsp.writeFile nested, "print 'NESTED FROM VIM'\n", 'utf8'
+  await wait 700
+  doc = await js "return Editor.all()"
+  check 'an outside write in a folder reloads too', doc is "print 'NESTED FROM VIM'\n", JSON.stringify doc
+  escaped = await js "try { await beans.read('../../escape'); return 'read' } catch (e) { return 'refused' }"
+  check 'a name cannot climb out of sketches/', escaped is 'refused', escaped
+  await js "await Editor.load('scratch'); return true"
+  await fsp.rm path.join(paths.sketches, 'sub'), recursive: yes, force: yes
 
   await js "await Editor.load('scratch'); return true"
   await setDoc "print 'PENDING'\n"           # dirty: inside the 250ms save debounce

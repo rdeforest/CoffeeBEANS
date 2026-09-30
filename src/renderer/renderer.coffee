@@ -9,7 +9,6 @@ canvas   = document.getElementById 'screen'
 stage    = document.getElementById 'stage'
 output   = document.getElementById 'console'
 statusEl = document.getElementById 'status'
-picker   = document.getElementById 'sketch'
 promptLine = document.getElementById 'promptLine'
 meter    = document.getElementById 'meter'
 linesEl  = document.getElementById 'lines'
@@ -633,28 +632,31 @@ Editor.mount document.getElementById('editor'),
   onProblem:  (text) -> say text, 'err'
   onEdit:     (name) -> openSketch name
 
+# The open sketch's name lives in the window title, which costs the header
+# nothing, and is remembered so the next launch reopens it instead of
+# whichever sketch sorts first.
 selectSketch = (name) ->
   await Editor.load name
-  picker.value = name
+  document.title = "#{name} \u2014 CoffeeBEANS"
+  localStorage.setItem 'lastSketch', name
   Editor.focus()
 
 # :e newfile -- create it if it does not exist yet (an empty sketch, the way a
-# touch would leave it), refresh the picker so it shows, then open it.
+# touch would leave it), then open it.
 openSketch = (name) ->
   unless name in await beans.list()
     await beans.write name, ''
-    await fillPicker()
     say "created #{name}.coffee", 'sys'
   await selectSketch name
 
-fillPicker = ->
-  names = await beans.list()
-  picker.innerHTML = ''
-  for name in names
-    option = document.createElement 'option'
-    option.value = option.textContent = name
-    picker.appendChild option
-  names
+pickSketch = ->
+  choice = await beans.pick()
+  if choice.outside
+    say "#{choice.outside} is outside your sketches folder -- copy it in first", 'err'
+  else if choice.name
+    await selectSketch choice.name
+  else
+    Editor.focus()
 
 toggleEditor = ->
   main.classList.toggle 'solo'
@@ -666,7 +668,8 @@ document.getElementById('pauseFrame').onclick = -> if paused then goFrames() els
 document.getElementById('stepFrame').onclick  = stepFrame
 document.getElementById('stop').onclick       = stop
 document.getElementById('toggle').onclick     = toggleEditor
-picker.onchange = -> selectSketch picker.value
+document.getElementById('open').onclick = pickSketch
+beans.onOpen pickSketch
 
 window.addEventListener 'keydown', (event) ->
   return unless event.ctrlKey
@@ -708,13 +711,17 @@ do ->
   say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, :help for the rest', 'sys'
 
   try
-    names  = await fillPicker()
+    names  = await beans.list()
     wanted = params.get 'sketch'
     if wanted and wanted not in names
       say "no sketch named \"#{wanted}\" -- opening #{names[0]}", 'err'
       wanted = null
+    last = localStorage.getItem 'lastSketch'
+    # The URL is how the suite drives the app, so it must not inherit
+    # whatever the last hand-run session had open.
+    wanted ?= if last in names and not params.has 'sketch' then last else names[0]
     if names.length
-      await selectSketch (wanted ? names[0])
+      await selectSketch wanted
     else
       say "no sketches in your data folder (File -> Open Data Folder)", 'err'
   catch error

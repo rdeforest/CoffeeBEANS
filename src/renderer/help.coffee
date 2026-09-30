@@ -21,6 +21,8 @@ SECTIONS = [
     ['Up / Down',         'earlier lines, at the prompt']
     [':w',                'force a save (edits autosave anyway)']
     [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
+    ['',                  'folders are part of the name: :e challenges/ocean']
+    ['Cmd/Ctrl-O',        'open a sketch with the system file picker']
     [':target <n>',       'flag the first source line past n; :target 0 clears']
     [':help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']

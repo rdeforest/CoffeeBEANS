@@ -7,7 +7,7 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 101 checks, ~95s
+    npm test                                 all 104 checks, ~95s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping lifecycle drawing color loading
@@ -80,7 +80,8 @@ Next, in order:
 1. `src/main/debugger.coffee` — attach, a session per worker, arm/disarm, a
    whitelisted IPC surface. Nothing user-visible.
 2. Line-paused state, the four verbs, and the two fixes below.
-3. The variables pane.
+3. The variables pane, to the right of the console, showing only while
+   line paused.
 
 ## Must fix as part of line stepping
 
@@ -143,8 +144,11 @@ Verified against a real CDP session in Electron 44; do not re-derive.
 - **No mode toggle.** Both step buttons mean something in both states: from a
   frame pause, step-line resumes and breaks on the next sketch line; from a
   line pause, step-frame runs to the next frame boundary.
-- **Ctrl-Z is the line pause** (suspend *now*, like the shell). The ❚❚ button
-  is the frame pause (stop at a boundary). The means of pausing picks the kind.
+- **Cmd/Ctrl-\ (and F8) is the line pause** -- suspend *now*. Ctrl-Z was the
+  first choice and was dropped 2026-09-29: it is undo on Windows, and Steam
+  means Windows. `\` and F8 are DevTools' own pause/resume keys, and Ctrl-\
+  is the shell's other stop key. The ❚❚ button is the frame pause (stop at a
+  boundary). The means of pausing picks the kind.
   Clicking outside the canvas was considered and rejected — that is how you get
   to the editor.
 - **Arm from the buffer**: attach when the buffer contains `breakpoint`,
@@ -179,6 +183,13 @@ Out, each needing a fresh reason: clickable gutter breakpoints, conditional
 breakpoints (`breakpoint if angle > pi` is already just code), watch
 expressions (the prompt is one, and better), a clickable call stack (a one-line
 breadcrumb, maybe), editing values in the pane, stepping into the runtime.
+
+## Open for discussion
+
+- **What the canvas does on zoom.** Cmd-minus / Cmd-equals (View menu
+  roles) rescale the whole window, canvas included. Should the canvas follow
+  the UI zoom, scale itself up to fill the stage on its own, or have an
+  option? Raised 2026-09-29; nothing decided.
 
 ## Tab completion (parked, lowest priority)
 

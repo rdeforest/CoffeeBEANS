@@ -1,4 +1,4 @@
-{app, BrowserWindow, Menu, nativeImage, protocol, net, ipcMain, shell} = require 'electron'
+{app, BrowserWindow, Menu, dialog, nativeImage, protocol, net, ipcMain, shell} = require 'electron'
 crypto = require 'crypto'
 fs   = require 'fs'
 fsp  = require 'fs/promises'
@@ -14,6 +14,11 @@ EXAMPLES = path.join ROOT, 'examples'
 data     = require './data'
 DATA     = data.home()
 SKETCHES = path.join DATA, 'sketches'
+
+# The renderer's localStorage (panel sizes, the last sketch opened) lives in
+# userData. A run with its own data home gets its own, or a test run leaves
+# the real app reopening a test fixture.
+app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOME
 
 prepareDataHome = ->
   {added} = await data.prepare DATA, EXAMPLES
@@ -57,10 +62,16 @@ serve = (request) ->
   headers.set 'Cross-Origin-Resource-Policy', 'same-origin'
   new Response source.body, {status: source.status, headers}
 
+# A sketch's name is its path under sketches/ without the extension, always
+# with forward slashes, so `challenges/ocean` means the same thing on every
+# platform and in every place a name is typed or shown.
 sketchFile = (name) ->
-  file = path.join SKETCHES, "#{path.basename name}.coffee"
+  file = path.resolve SKETCHES, "#{name}.coffee"
   throw new Error "sketch outside sketches/: #{name}" unless file.startsWith SKETCHES + path.sep
   file
+
+sketchName = (file) ->
+  path.relative(SKETCHES, file).split(path.sep).join('/').replace /\.coffee$/, ''
 
 ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(name), 'utf8'
 # Written beside the target and renamed into place. writeFile truncates
@@ -70,6 +81,7 @@ ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(na
 # end in .coffee or the watcher would pick it up as a sketch of its own.
 ipcMain.handle 'sketch:write', (event, name, text) ->
   file    = sketchFile name
+  await fsp.mkdir path.dirname(file), recursive: yes     # :e sub/new makes sub/
   staging = path.join path.dirname(file), ".#{path.basename file}.saving"
   await fsp.writeFile staging, text, 'utf8'
   await fsp.rename staging, file
@@ -107,14 +119,32 @@ ipcMain.handle 'image:load', (event, url) ->
 
 ipcMain.handle 'beans:paths', -> {data: DATA, sketches: SKETCHES, assets: ASSETS}
 ipcMain.handle 'sketch:list',  ->
-  entries = await fsp.readdir SKETCHES
-  (entry.replace /\.coffee$/, '' for entry in entries when entry.endsWith '.coffee').sort()
+  entries = await fsp.readdir SKETCHES, recursive: yes
+  (sketchName path.join(SKETCHES, entry) for entry in entries when entry.endsWith '.coffee').sort()
+
+# The native picker, so the header does not carry a list that stops being
+# usable past a dozen sketches. It opens in sketches/ and answers a name; a
+# file picked from anywhere else is refused rather than opened, because every
+# other path a name travels -- read, write, the watcher -- is confined there.
+ipcMain.handle 'sketch:pick', (event) ->
+  win = BrowserWindow.fromWebContents event.sender
+  {canceled, filePaths} = await dialog.showOpenDialog win,
+    title:       'Open a sketch'
+    defaultPath: SKETCHES
+    properties:  ['openFile']
+    filters:     [{name: 'CoffeeScript', extensions: ['coffee']}]
+  return {canceled: yes} if canceled or not filePaths.length
+  # Compared as real paths: the dialog may hand back /private/tmp for /tmp.
+  root = await fsp.realpath SKETCHES
+  file = await fsp.realpath filePaths[0]
+  return {outside: filePaths[0]} unless file.startsWith root + path.sep
+  {name: sketchName path.join SKETCHES, path.relative root, file}
 
 # Watch the directory rather than the file: vim writes via a temp file and a
 # rename, which leaves a file watch pointing at a dead inode.
 watchSketches = (win) ->
   timers  = {}
-  watcher = fs.watch SKETCHES
+  watcher = fs.watch SKETCHES, recursive: yes
   # Without this, deleting the sketches directory while the app runs throws
   # out of the main process and takes the window with it.
   watcher.on 'error', (error) ->
@@ -127,7 +157,7 @@ watchSketches = (win) ->
     watcher.close()
   watcher.on 'change', (event, filename) ->
     return unless filename?.endsWith '.coffee'
-    name = filename.replace /\.coffee$/, ''
+    name = sketchName path.join SKETCHES, filename
     clearTimeout timers[name]
     timers[name] = setTimeout (->
       return if win.isDestroyed()
@@ -217,6 +247,13 @@ installMenu = ->
   Menu.setApplicationMenu Menu.buildFromTemplate [
     label: 'File'
     submenu: [
+      {
+        # Handed to the renderer, which owns the console that says why a
+        # pick was refused.
+        label:       'Open Sketch…'
+        accelerator: 'CmdOrCtrl+O'
+        click: (item, win) -> win?.webContents.send 'sketch:open'
+      }
       {
         label:       'Open Data Folder'
         accelerator: 'CmdOrCtrl+Shift+D'
