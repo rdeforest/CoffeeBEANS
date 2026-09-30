@@ -31,13 +31,16 @@ SECTIONS = [
   name:  'debug'
   title: 'Stopping to look'
   lines: [
-    ['breakpoint',        'stop here, if something is watching -- BASIC STOP']
-    ['',                  'and nothing at all if nothing is, so a sketch with']
-    ['',                  'one left in still runs at full speed']
-    ['',                  'DevTools sees it today: View -> Toggle Developer']
-    ['',                  'Tools, then Sources, then Run']
-    [':pause  :step',     'hold a sketch at a frame, then let one through']
-    [':continue',         'let it go again; the > prompt works while paused']
+    ['breakpoint',        'stop here -- BASIC STOP. The line about to run lights']
+    ['',                  'up, and the names it can see appear beside the console']
+    ['',                  'the > prompt asks the paused call, and can change it']
+    ['Cmd/Ctrl-\\  F8',    'stop right now on whatever line is running;']
+    ['',                  'pressed again, carry on']
+    ['F10  :line',        'step to the next line that runs, wherever it is']
+    [':pause  :step',     'hold a sketch at a frame, then let one through;']
+    ['',                  'from a stopped line, :step runs on to the next frame']
+    [':continue',         'let it go again, from either kind of pause']
+    ['',                  'with DevTools open, breakpoint does nothing']
   ]
 ,
   name:  'screen'

@@ -332,7 +332,9 @@
         // How the runtime reaches us from a yield point. A property on
         // globalThis rather than a name at this scope, which is the rule the
         // whole file is built around.
-        globalThis.REPL = { serve: serveAsk }
+        // `show` is for the debugger, which answers the prompt against a
+        // paused frame and wants the answer to read like any other.
+        globalThis.REPL = { serve: serveAsk, show }
         postMessage({ type: 'ready' })
       },
       // An idle worker is sitting in this queue and will never look at shared

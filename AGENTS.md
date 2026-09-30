@@ -7,11 +7,11 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 104 checks, ~95s
+    npm test                                 all 120 checks, ~110s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
-Parts: `editor image repl buffers stepping lifecycle drawing color loading
-shell input perf`. Each starts from a reset app, so running one alone means
+Parts: `editor image repl buffers stepping debugging lifecycle drawing color
+loading shell input perf`. Each starts from a reset app, so running one alone means
 the same thing as running it in the middle of everything else.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
@@ -75,24 +75,53 @@ Done:
 - **Named runtime modules.** `beans-runtime/<name>.js`, so a debugger can be
   told to ignore the family in one pattern.
 
-Next, in order:
+- **Line stepping** (`src/main/debugger.coffee`, the `line stepping` and
+  `variables pane` sections of `renderer.coffee`, test part `debugging`).
+  The buffer arms it; `breakpoint`, Cmd/Ctrl-\ / F8, F10 / `:line`, the ↧
+  button; the pane beside the console; the prompt against the paused frame.
+  Both must-fixes are in: Stop lets a line-paused sketch go with pauses
+  skipped and only then starts its deadline, and the prompt goes through
+  `Debugger.evaluateOnCallFrame` while line paused.
+- **Region line numbers are buffer line numbers.** A region is padded with
+  blank lines down to where it sits, so errors, tracebacks and pauses all
+  name the line in the file.
 
-1. `src/main/debugger.coffee` — attach, a session per worker, arm/disarm, a
-   whitelisted IPC surface. Nothing user-visible.
-2. Line-paused state, the four verbs, and the two fixes below.
-3. The variables pane, to the right of the console, showing only while
-   line paused.
+Not done, each waiting on a reason:
 
-## Must fix as part of line stepping
+- **Click-to-run for a getter in the pane.** It shows `(getter, not run)`;
+  the prompt can run it (`o.boom`), which is the escape hatch for now.
+- **Pausing on uncaught errors** -- still blocked, see Decisions.
 
-- **The Stop watchdog will shoot a V8-paused worker.** `stop()` terminates
-  after 250ms if status is still running; a paused worker can never reach
-  `checkInterrupt`, so it *always* misses, destroys the live image, and blames
-  it on "no yield point", which is a lie. Freeze the deadline while paused.
-- **`Prompt.ask` wedges against a V8-paused worker.** It sets `ASK_STATE = 1`
-  and nothing serves it, so every later line says "still waiting on the last
-  one". Route the prompt to `Debugger.evaluateOnCallFrame` while paused —
-  better anyway, since you get the paused frame rather than the image.
+## Facts line stepping established
+
+Verified in Electron 44 while building it; do not re-derive.
+
+- **Never re-attach to a worker you have detached from.** `Debugger.enable`
+  on the new session hangs forever -- even with `Debugger.disable` and
+  `Target.detachFromTarget` first. So the page stays attached once armed,
+  and arm/disarm is `Debugger.enable`/`disable` on the live session, which
+  re-enables fine. DevTools forces a detach, so after it closes breakpoints
+  work from the next Run (a fresh worker), and the app says so.
+- **`Debugger.pause` stops inside ignore-listed code** -- `doSwap`, for a
+  sketch parked on a frame -- and a `stepInto` from there never stops on the
+  way back to the sketch; V8 only stops a step-in at a call. `stepOut`
+  carries past every ignored frame to the author's line. The same goes for
+  the wrapper's `harvest`/`restore` and the prompt's compiled line.
+- **A local scope object is a snapshot.** After the prompt assigns to a
+  local, `Runtime.getProperties` on the old scope still shows the old value;
+  re-read each local with `evaluateOnCallFrame` (`throwOnSideEffect: true`).
+  Closure scopes are live.
+- **CoffeeScript's `modulo` and `boundMethodCheck` helpers** live in the
+  sketch's own script and map to its first line; they are stepped out of,
+  recognised by name and by their body sitting on their header's line. The
+  other helpers (`slice`, `indexOf`, `hasProp`, `splice`) are natives.
+- **A `breakpoint` pause shows the line after it** -- the line about to run,
+  which is what the highlight means everywhere. That comes from the one
+  `stepOut` needed to leave `beans-breakpoint.js`.
+- **`Target.setAutoAttach` answers after attaching the existing worker**, so
+  the session is known when it resolves; no polling.
+- **`t.settle()` counts both pauses as settled.** A check that waits for a
+  Stop to finish has to wait for `ready` itself.
 
 ## Facts the spikes established
 
@@ -151,9 +180,14 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   boundary). The means of pausing picks the kind.
   Clicking outside the canvas was considered and rejected — that is how you get
   to the editor.
-- **Arm from the buffer**: attach when the buffer contains `breakpoint`,
-  detach when it does not, debounced off the keystroke stream the line counter
-  already uses. Zero ceremony, and it cannot be armed-when-you-forgot.
+- **Arm from the buffer**: armed while the buffer (or the source being run)
+  contains `breakpoint`, disarmed when it does not, debounced off the
+  keystroke stream the line counter already uses; a run checks for itself
+  first. Zero ceremony, and it cannot be armed-when-you-forgot. Armed means
+  the Debugger domain is on, not attached -- see the re-attach fact above.
+- **A line step is a step *into*:** the next line that runs, wherever it is.
+  The runtime is ignore-listed, so `print` and `buffer.swap` are one step.
+  There is no separate step-over; the scope wall has room for four verbs.
 - **Variables get their own pane**, not printed into the console, so a value
   can be watched changing as you step.
 - **Never auto-invoke accessors in the pane.** `buffer.swap` is a getter that

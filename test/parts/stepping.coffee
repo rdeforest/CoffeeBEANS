@@ -34,7 +34,7 @@ loop
   await wait 500
   same  = count await ask 'ticks'
   check 'pause holds a running sketch at a frame',
-    went is 'running' and held is 'paused' and first > 0 and same is first,
+    went is 'running' and held is 'frame paused' and first > 0 and same is first,
     "status=#{held} ticks=#{first} then #{same}"
 
   # 2. the prompt answers a paused sketch -- it is parked in Atomics.wait, and
@@ -89,14 +89,17 @@ loop
   # 7. `breakpoint` costs nothing when nobody is watching. A debugger statement
   # with no debugger attached is a no-op, which is the whole reason the command
   # can be spelled in the source rather than kept in a list of line numbers --
-  # but if that were ever not true, every sketch carrying one would hang.
+  # but if that were ever not true, every sketch carrying one would hang (with
+  # DevTools open, say, which keeps our debugger out). Spelled in pieces here,
+  # because a buffer that says the word arms the debugger.
   await setDoc """
 screen 320, 200
-print 'kind=' + typeof Object.getOwnPropertyDescriptor(globalThis, 'breakpoint').get
-breakpoint
+word = 'break' + 'point'
+print 'kind=' + typeof Object.getOwnPropertyDescriptor(globalThis, word).get
+globalThis[word]
 print 'ranOn=true'
 each = (n) ->
-  breakpoint
+  globalThis[word]
   n * 2
 print 'inAFunction=' + each 21
 """

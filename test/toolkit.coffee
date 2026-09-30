@@ -113,7 +113,7 @@ module.exports = (win, paths) ->
     deadline = Date.now() + limit
     loop
       state = await t.status()
-      return state unless state in ['booting', 'running']
+      return state unless state in ['arming', 'booting', 'running']
       return state if Date.now() > deadline
       await wait 50
 

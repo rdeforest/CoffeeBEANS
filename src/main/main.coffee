@@ -12,6 +12,7 @@ EXAMPLES = path.join ROOT, 'examples'
 # The user's work lives outside the repo, so running the app never collides
 # with working on it. BEANS_DATA_HOME is how the test suite gets its own.
 data     = require './data'
+debugSketches = require './debugger'
 DATA     = data.home()
 SKETCHES = path.join DATA, 'sketches'
 
@@ -231,6 +232,7 @@ createWindow = ->
   win.once 'ready-to-show', -> win.minimize() if process.env.BEANS_MINIMIZE
   capture win
   watchSketches win
+  debugSketches win
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try

@@ -46,6 +46,29 @@ flash = (from, to) ->
   clearTimeout flashTimer
   flashTimer = setTimeout (-> view.dispatch effects: flashEffect.of null), FLASH_DELAY
 
+# --- the line a sketch is paused on ------------------------------------------
+
+# Set from outside: the debugger says which line, the editor only draws it.
+# Mapped through edits like the other marks, so typing above a paused line
+# does not leave the highlight on the wrong one.
+pausedEffect = StateEffect.define()
+pausedMark   = Decoration.line class: 'cm-paused-line'
+
+pausedField = StateField.define
+  create:  -> Decoration.none
+  update:  (marks, tr) ->
+    marks = marks.map tr.changes
+    for effect in tr.effects when effect.is pausedEffect
+      marks = if effect.value? then Decoration.set [pausedMark.range effect.value] else Decoration.none
+    marks
+  provide: (field) -> EditorView.decorations.from field
+
+showLine = (n) ->
+  return view.dispatch effects: pausedEffect.of null unless n? and 1 <= n <= view.state.doc.lines
+  from = view.state.doc.line(n).from
+  view.dispatch
+    effects: [pausedEffect.of(from), EditorView.scrollIntoView from, y: 'center']
+
 # --- regions ----------------------------------------------------------------
 
 # A bare selection is what you asked for. A bare cursor means the paragraph
@@ -183,6 +206,7 @@ theme = EditorView.theme {
   '.cm-activeLine':           {backgroundColor: '#ffffff08'}
   '.cm-activeLineGutter':     {backgroundColor: 'transparent', color: palette.coffee}
   '.cm-ran':                  {backgroundColor: '#C0FFEE33', transition: 'background-color .2s'}
+  '.cm-paused-line':          {backgroundColor: '#e8c37e2e', boxShadow: 'inset 3px 0 0 #e8c37e'}
   '.cm-over-limit':           {backgroundColor: '#ff6b6b22', boxShadow: 'inset 2px 0 0 #ff6b6b'}
   '.cm-fat-cursor':           {backgroundColor: '#C0FFEE99 !important', outline: 'none !important'}
   '.cm-vim-panel':            {backgroundColor: '#17171b', color: palette.coffee, padding: '0 .4rem'}
@@ -208,7 +232,11 @@ highlight = HighlightStyle.define [
 evalRegion = ->
   {from, to} = regionAt view.state
   flash from, to
-  handlers.onEval? dedent(view.state.sliceDoc from, to), current
+  # Padded down to where the region sits, so every line number a run reports
+  # -- an error, a traceback, the line a breakpoint stopped on -- is a line
+  # of the buffer rather than of the region.
+  above = '\n'.repeat view.state.doc.lineAt(from).number - 1
+  handlers.onEval? above + dedent(view.state.sliceDoc from, to), current
   true
 
 evalAll = ->
@@ -259,6 +287,8 @@ installVimCommands = ->
   Vim.defineEx 'pause',    'pau',  -> handlers.onPause?()
   Vim.defineEx 'step',     'st',   -> handlers.onStep?()
   Vim.defineEx 'continue', 'cont', -> handlers.onGo?()
+  # Line at a time: to the next line that runs, wherever it is.
+  Vim.defineEx 'line',     'li',   -> handlers.onLine?()
 
 # --- public -----------------------------------------------------------------
 
@@ -280,6 +310,7 @@ Editor =
           history()
           highlightSelectionMatches()
           flashField
+          pausedField
           limitField
           StreamLanguage.define coffeeScript
           syntaxHighlighting highlight
@@ -309,6 +340,7 @@ Editor =
   name:      -> current
   all:       -> view.state.doc.toString()
   evalRegion: -> view.focus(); evalRegion()
+  showLine: showLine
   view:      -> view
   save:   save
   focus:  -> view.focus()

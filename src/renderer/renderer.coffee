@@ -18,10 +18,15 @@ ctx      = canvas.getContext '2d'
 surface = width: 0, height: 0, imageData: null, view32: null
 
 status = ''
-# A paused sketch is a busy one: it is parked mid-frame with the whole image
-# in mid-flight. Anything that refuses to run while a sketch is running has to
-# refuse while one is paused too.
-BUSY = ['running', 'paused']
+# A paused sketch is a busy one: it is parked mid-frame, or mid-line, with the
+# whole image in mid-flight. Anything that refuses to run while a sketch is
+# running has to refuse while one is paused too.
+#
+# Two kinds of pause, named apart: `frame paused` holds at a buffer.swap and
+# still answers the prompt through the worker; `line paused` is stopped in V8
+# on a line the author wrote, and everything goes through the debugger.
+PAUSED = ['frame paused', 'line paused']
+BUSY   = ['running', PAUSED...]
 
 setStatus = (text) ->
   status = text
@@ -29,11 +34,12 @@ setStatus = (text) ->
   # Eval means "evaluate into the live worker", which a busy worker cannot
   # do, so the button says so. Run replaces the worker and always works.
   document.getElementById('evalRegion').disabled = text in BUSY
-  document.getElementById('stepFrame').disabled  = text isnt 'paused'
-  holding = text is 'paused'
+  document.getElementById('stepFrame').disabled  = text not in PAUSED
+  document.getElementById('stepLine').disabled   = text not in BUSY
+  holding = text in PAUSED
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
-  hold.title       = if holding then 'Let the sketch run on' else 'Hold the sketch at its next frame'
+  hold.title       = if holding then 'Let the sketch run on (F8)' else 'Hold the sketch at its next frame'
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -137,6 +143,10 @@ askLine = (source) ->
   entered.push source
   enteredAt = entered.length
   return say '*** no worker -- press Run ***', 'err' unless worker
+  # A sketch stopped in V8 cannot serve the shared-memory question -- nothing
+  # runs to look at it -- so the line goes to the paused frame instead. That
+  # is also the better answer: this call's `angle`, not the image's.
+  return askPaused source if linePaused
   if Atomics.load(i32, H.ASK_STATE) isnt 0
     return say '*** still waiting on the last line ***', 'sys'
   bytes = new TextEncoder().encode source
@@ -148,6 +158,21 @@ askLine = (source) ->
   # memory unaided. A busy one cannot receive this, and has already been told
   # where to look; the message then arrives to find nothing left to do.
   worker.postMessage type: 'ask'
+  undefined
+
+debugAsking = 0
+
+askPaused = (source) ->
+  debugAsking += 1
+  try
+    reply = await beans.debug.evaluate source
+    return say '*** it moved on before it could answer ***', 'sys' unless reply
+    showVars reply.pane if reply.pane and reply.pane.seq is linePaused
+    say reply.text, reply.kind
+  catch error
+    say String(error.message ? error), 'err'
+  finally
+    debugAsking -= 1
   undefined
 
 drainAsk = ->
@@ -182,7 +207,8 @@ listenForPrompt = ->
 
   # Clicking the log to read it should not cost you the prompt, but clicking
   # to select text should not steal it back either.
-  document.getElementById('consolePane').addEventListener 'click', ->
+  document.getElementById('consolePane').addEventListener 'click', (event) ->
+    return if event.target.closest '#vars'    # opening a value is not typing
     promptLine.focus() unless String(window.getSelection())
   undefined
 
@@ -197,7 +223,7 @@ globalThis.Printing =
 
 globalThis.Prompt =
   ask:     askLine
-  pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0
+  pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0 or debugAsking > 0
   entered: -> entered.slice()
 
 # --- input ------------------------------------------------------------------
@@ -406,24 +432,179 @@ resumeTo = 'ready'
 pauseFrames = ->
   return if paused
   paused   = yes
-  resumeTo = status
-  setStatus 'paused'
+  resumeTo = if status is 'line paused' then 'running' else status
+  setStatus 'frame paused' unless linePaused
 
 goFrames = ->
   return unless paused
   paused   = no
   stepOnce = no
-  setStatus resumeTo
+  setStatus resumeTo unless linePaused
 
+# From a line pause, a frame step runs on to the next frame boundary and holds
+# there: the swap it reaches is simply not served.
 stepFrame = ->
+  if linePaused
+    pauseFrames()
+    return beans.debug.resume()
   pauseFrames() unless paused
   stepOnce = yes
+
+# --- line stepping ----------------------------------------------------------
+
+# The pause we are in, as the debugger numbered it, or null. The number is
+# what makes an object id in the variables pane mean anything.
+linePaused = null
+
+# Suspend now, on whatever line is running. From a frame pause the swap has to
+# be let go, or the sketch never reaches a line to stop on.
+linePause = ->
+  return unless status in ['running', 'frame paused']
+  unless await beans.debug.pause()
+    return say '*** could not pause -- is DevTools open? ***', 'sys'
+  goFrames()
+
+stepLine = ->
+  if linePaused then beans.debug.step() else linePause()
+
+continueAll = ->
+  goFrames()
+  beans.debug.resume() if linePaused
+
+togglePause = ->
+  if linePaused then continueAll() else linePause()
+
+# The buffer arms the debugger: attached while it says `breakpoint` anywhere,
+# let go when it does not. Nothing to remember to turn on, and nothing left
+# on by mistake. Keystrokes are debounced; a run checks for itself, so it can
+# never set off ahead of the attach it needs.
+BREAKPOINT = /\bbreakpoint\b/
+armedFor   = null
+armTimer   = null
+skipping   = no          # a Stop set breakpoints aside; the next run wants them
+
+wantsDebug = (extra = '') -> BREAKPOINT.test(Editor.all()) or BREAKPOINT.test extra
+
+syncDebug = (extra = '') ->
+  clearTimeout armTimer
+  want = wantsDebug extra
+  armedFor = want
+  skipping = no
+  try
+    await beans.debug.arm want
+  catch error
+    say "debugger: #{error.message ? error}", 'err'
+
+watchBuffer = ->
+  clearTimeout armTimer
+  armTimer = setTimeout (->
+    syncDebug() unless BREAKPOINT.test(Editor.all()) is armedFor
+  ), 300
+
+lineOnScreen = (where) ->
+  return null unless where?.line? and where.name
+  if where.name.replace(/ \(region\)$/, '') is Editor.name() then where.line else null
+
+beans.debug.onEvent (event) ->
+  switch event.type
+    when 'paused'
+      linePaused = event.seq
+      setStatus 'line paused'
+      Editor.showLine lineOnScreen event.where
+      showVars event
+    when 'resumed'
+      linePaused = null
+      Editor.showLine null
+      hideVars()
+      setStatus (if paused then 'frame paused' else 'running') if status is 'line paused'
+    when 'problem'
+      say event.text, 'err'
+  undefined
 
 globalThis.Stepping =
   pause:  pauseFrames
   step:   stepFrame
   go:     goFrames
   paused: -> paused
+  line:   stepLine
+  suspend: linePause
+  resume: continueAll
+  linePaused: -> linePaused
+  armed:  -> armedFor
+
+# --- the variables pane -----------------------------------------------------
+
+# The paused frame's names, beside the console rather than printed into it,
+# so a value can be watched changing as you step. Nothing here runs code: the
+# debugger hands over previews, and a getter is shown as a getter.
+varsEl = document.getElementById 'vars'
+
+# What was open, by path, so a step does not fold everything back up; and
+# what each row said last time, so a value that changed can say so.
+expandedPaths = new Set
+shownBefore   = new Map
+
+varRow = (entry, path, depth) ->
+  row = document.createElement 'div'
+  row.className = 'var'
+  row.style.paddingLeft = "#{depth * 1.1 + .4}rem"
+  name = document.createElement 'span'
+  name.className   = 'var-name'
+  name.textContent = entry.name
+  value = document.createElement 'span'
+  value.className   = if entry.getter then 'var-value getter' else 'var-value'
+  value.textContent = entry.text
+  seen = shownBefore.get path
+  value.classList.add 'changed' if seen? and seen isnt entry.text
+  shownBefore.set path, entry.text
+  row.append name, value
+  holder = document.createElement 'div'
+  holder.append row
+  if entry.id
+    row.classList.add 'openable'
+    open = (expand) ->
+      row.classList.toggle 'open', expand
+      if expand
+        expandedPaths.add path
+        members = await beans.debug.members linePaused, entry.id
+        return unless members and row.classList.contains 'open'
+        children = document.createElement 'div'
+        children.className = 'var-children'
+        children.append (varRow member, "#{path}.#{member.name}", depth + 1 for member in members)...
+        holder.append children
+      else
+        expandedPaths.delete path
+        holder.querySelector('.var-children')?.remove()
+    row.addEventListener 'click', -> open not row.classList.contains 'open'
+    open yes if expandedPaths.has path
+  holder
+
+showVars = ({where, scopes}) ->
+  head = document.createElement 'div'
+  head.className = 'vars-head'
+  place = if where?.line? then "line #{where.line}" else 'somewhere of ours'
+  head.textContent = "#{where?.fn ? 'top level'} \u00b7 #{place}"
+  sections = for scope in scopes
+    section = document.createElement 'div'
+    title = document.createElement 'div'
+    title.className   = 'vars-title'
+    title.textContent = scope.title
+    section.append title
+    if scope.vars.length
+      section.append (varRow entry, "#{scope.title}/#{entry.name}", 0 for entry in scope.vars)...
+    else
+      none = document.createElement 'div'
+      none.className   = 'var none'
+      none.textContent = 'nothing here'
+      section.append none
+    section
+  varsEl.replaceChildren head, sections...
+  varsEl.hidden = no
+  undefined
+
+hideVars = ->
+  varsEl.hidden = yes
+  varsEl.replaceChildren()
 
 # buffer.fps paces swaps, so the gate belongs on the branch that serves one.
 # The worker stays parked until its frame is due, which is the whole point:
@@ -567,6 +748,9 @@ start = (thenRun = null) ->
   clearInput()
   paused   = no                       # a new sketch does not inherit a pause
   stepOnce = no
+  linePaused = null                   # nor a line pause: the old worker is gone
+  Editor.showLine null
+  hideVars()
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
@@ -588,6 +772,21 @@ stop = ->
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
+  # A sketch stopped in V8 cannot reach a yield point to notice the interrupt,
+  # so it is let go first, told to ignore any breakpoint on its way out, and
+  # the deadline only starts once it is actually running. Timed from the
+  # press instead, it would always miss, destroy the live image, and blame
+  # "no yield point", which would be a lie.
+  if linePaused
+    linePaused = null
+    skipping = yes
+    await beans.debug.resume yes
+    Editor.showLine null
+    hideVars()
+    setStatus 'running' if status is 'line paused'
+  else if armedFor
+    skipping = yes
+    beans.debug.resume yes
   # The deadline belongs to this worker. A restart before it passes replaces
   # the worker, and this check must not shoot the new one.
   stopping = worker
@@ -606,10 +805,25 @@ stop = ->
 # A run that arrives while the runtime is still loading waits for it; sent
 # straight through it would evaluate before `screen` exists. The latest
 # request wins, which is also what a held-down Ctrl-Enter means.
-runSource = (source, name) ->
+# Arming has to finish before the run it is for, or the first breakpoint is
+# missed. It is the only wait in front of a run, so it is skipped when nothing
+# changes, and said on the status line when it happens -- which is also what
+# stops anything watching the status from mistaking the gap for a run that
+# has already finished.
+armFirst = (source, run) ->
+  return run() if wantsDebug(source) is armedFor and not skipping
+  before = status
+  setStatus 'arming'
+  await syncDebug source
+  setStatus before if status is 'arming'
+  run()
+
+runSource = (source, name) -> armFirst source, ->
   return start {source, name} unless worker
   return pending = {source, name} if status is 'booting'
   send {source, name}
+
+runFresh = (source, name) -> armFirst source, -> start {source, name}
 
 # Non-comment source lines, the count he used to fish out of the REPL. With a
 # :target set it reads count/limit and turns red once the limit is passed.
@@ -621,13 +835,14 @@ setLines = ({count, limit}) ->
 Editor.mount document.getElementById('editor'),
   onPause:    pauseFrames
   onStep:     stepFrame
-  onGo:       goFrames
+  onGo:       continueAll
+  onLine:     stepLine
   onEval:     (source, name) -> runSource source, "#{name} (region)"
   onEvalAll:  (source, name) -> runSource source, name
-  onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; start {source, name}
+  onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; runFresh source, name
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
   onHelp:     showHelp
-  onLines:    setLines
+  onLines:    (lines) -> setLines lines; watchBuffer()
   onMessage:  (text) -> say text, 'sys'
   onProblem:  (text) -> say text, 'err'
   onEdit:     (name) -> openSketch name
@@ -663,13 +878,29 @@ toggleEditor = ->
   resize()
 
 document.getElementById('evalRegion').onclick = -> Editor.evalRegion()
-document.getElementById('runFresh').onclick   = -> start {source: Editor.all(), name: Editor.name()}
-document.getElementById('pauseFrame').onclick = -> if paused then goFrames() else pauseFrames()
+document.getElementById('runFresh').onclick   = -> runFresh Editor.all(), Editor.name()
+document.getElementById('pauseFrame').onclick = -> if status in PAUSED then continueAll() else pauseFrames()
 document.getElementById('stepFrame').onclick  = stepFrame
+document.getElementById('stepLine').onclick   = stepLine
 document.getElementById('stop').onclick       = stop
 document.getElementById('toggle').onclick     = toggleEditor
 document.getElementById('open').onclick = pickSketch
 beans.onOpen pickSketch
+
+# The line-stepping keys are DevTools' own, and are caught before the editor
+# or the prompt can see them: Ctrl-\ is a prefix in vim, and a key that
+# pauses only when the right thing has focus is no use in a hurry.
+window.addEventListener 'keydown', ((event) ->
+  modified = event.ctrlKey or event.metaKey
+  verb = if event.key is 'F8' or (modified and event.key is '\\')
+    togglePause
+  else if event.key is 'F10'
+    stepLine
+  return unless verb
+  event.preventDefault()
+  event.stopPropagation()
+  verb()
+), true
 
 window.addEventListener 'keydown', (event) ->
   return unless event.ctrlKey
