@@ -28,11 +28,19 @@ HEADER =
   PRINT_LOST: 39     # lines dropped because the ring was full
   ASK_STATE:  40     # 0 idle, 1 a question is waiting, 2 answered, 3 threw
   ASK_LEN:    41     # bytes of the question, then of the answer
+  SOUND_HEAD: 42     # floats; written only by the worker
+  SOUND_TAIL: 43     # floats; written only by the audio thread
+  SOUND_EPOCH:44     # bumped by the renderer on a new worker: drop everything queued
+  SOUND_HOLD: 45     # 1 = a pause of either kind; the audio clock stands still
+  SOUND_STARTED: 46  # notes begun since the audio thread started; for tests and meters
+  SOUND_PEAK: 47     # loudest sample of the last render quantum, in millionths
+  SOUND_BUSY: 48     # one bit per voice with a note playing
+  SOUND_RATE: 49     # the audio thread's sample rate, once it is running
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 42..63 spare: gamepads, audio, whatever comes
+HEADER_WORDS = 64        # 50..63 spare: gamepads, whatever comes
 BUFFERS      = 2
 
 # Where a loaded image lands on its way from the main process to the worker.
@@ -54,8 +62,15 @@ PRINT_BYTES = 1 << 20
 # read memory at a yield point.
 ASK_BYTES = 1 << 16
 
+# Notes on their way to the audio thread, as floats: the same single-producer
+# single-consumer ring as the console, for the same reason. The worker cannot
+# be messaged while it is busy, and the audio thread must never wait on
+# anybody, so neither side ever blocks the other.
+SOUND_FLOATS = 1 << 20
+
 PRINT_OFFSET = (HEADER_WORDS + BUFFERS * MAX_PIXELS + TRANSFER_PIXELS) * 4
 ASK_OFFSET   = PRINT_OFFSET + PRINT_BYTES
+SOUND_OFFSET = ASK_OFFSET + ASK_BYTES
 
 globalThis.LAYOUT =
   HEADER:       HEADER
@@ -71,5 +86,9 @@ globalThis.LAYOUT =
   printOffset:     PRINT_OFFSET
   ASK_BYTES:       ASK_BYTES
   askOffset:       ASK_OFFSET
-  TOTAL_BYTES:     ASK_OFFSET + ASK_BYTES
+  SOUND_FLOATS:    SOUND_FLOATS
+  soundOffset:     SOUND_OFFSET
+  VOICES:          8
+  CONTROL_RATE:    500     # samples a second for a note's frequency and volume curves
+  TOTAL_BYTES:     SOUND_OFFSET + SOUND_FLOATS * 4
   bufferWords:  (index) -> HEADER_WORDS + index * MAX_PIXELS

@@ -537,6 +537,7 @@ globalThis.attach = (sab) ->
   state.ring = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
   display.pixels = state.u32
   state.brush = solid COLORS.white
+  SOUND.attach sab, checkInterrupt
   installMath()
   {keys, mouse} = INPUT.attach state
   Object.assign globalThis, {
@@ -546,6 +547,7 @@ globalThis.attach = (sab) ->
     locate, text, textAt, textScale, textBackground, textWidth, load
     fill, where, matching, border
     maker, tile, gradient, radial
+    sound: SOUND.sound
   }
   Object.defineProperty globalThis, 'elapsed', get: -> (performance.now() - state.started) / 1000
   Object.defineProperty globalThis, 'frames',  get: -> Atomics.load state.i32, H.FRAME

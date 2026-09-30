@@ -221,6 +221,9 @@ createWindow = ->
       # parked in buffer.swap never wakes up and the app looks wedged until
       # you Stop it. Alt-tabbing away from a running sketch must not do that.
       backgroundThrottling: no
+      # Sound starts with the app, not with a click: a sketch that beeps on
+      # its first line should be heard.
+      autoplayPolicy: 'no-user-gesture-required'
   query = process.env.BEANS_QUERY ? ''
   win.loadURL "app://beans/src/renderer/index.html#{query}"
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS

@@ -37,6 +37,9 @@ setStatus = (text) ->
   document.getElementById('stepFrame').disabled  = text not in PAUSED
   document.getElementById('stepLine').disabled   = text not in BUSY
   holding = text in PAUSED
+  # The audio clock stands still with the frame clock, so stepping does not
+  # leave the music running on ahead of the picture.
+  Atomics.store i32, H.SOUND_HOLD, if holding then 1 else 0
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
   hold.title       = if holding then 'Let the sketch run on (F8)' else 'Hold the sketch at its next frame'
@@ -661,10 +664,44 @@ frame = do ->
     updateMeter()
   tick
 
+# --- sound ------------------------------------------------------------------
+
+# The audio thread gets the same shared memory as everyone else and reads its
+# notes straight out of it; see sound-worklet.coffee. Compiled here and handed
+# over as a blob, with the layout ahead of it, because a worklet loads one
+# module and CoffeeScript is only on this side.
+startSound = ->
+  try
+    audio   = new AudioContext latencyHint: 'interactive'
+    sources = for part in ['/src/runtime/layout.coffee', '/src/renderer/sound-worklet.coffee']
+      CoffeeScript.compile (await (await fetch part).text()), bare: no, filename: part
+    url = URL.createObjectURL new Blob [sources.join '\n'], type: 'text/javascript'
+    await audio.audioWorklet.addModule url
+    voices = new AudioWorkletNode audio, 'beans-sound', numberOfInputs: 0, outputChannelCount: [2]
+    voices.port.postMessage sab
+    voices.connect audio.destination
+    await audio.resume()
+  catch error
+    say "sound: #{error.message ? error}", 'err'
+  undefined
+
+# What the audio thread says it is doing. The suite reads this; nothing else
+# needs to.
+globalThis.Sound =
+  started: -> Atomics.load i32, H.SOUND_STARTED
+  peak:    -> Atomics.load(i32, H.SOUND_PEAK) / 1e6
+  busy:    -> Atomics.load i32, H.SOUND_BUSY
+  rate:    -> Atomics.load i32, H.SOUND_RATE
+
 # --- worker lifecycle -------------------------------------------------------
 
 worker  = null
 pending = null
+
+# Once the worker says it is idle there is nothing left for a Stop to unwind.
+# Left raised, the flag makes every yield point reached from the prompt --
+# buffer.swap, sound -- throw 'stopped' until the next run.
+standDown = -> Atomics.store i32, H.INTERRUPT, 0
 
 messages =
   ready: ->
@@ -673,9 +710,10 @@ messages =
     send pending
     pending = null
   load:    (data) -> answerLoad data.url
-  done:    -> setStatus 'ready'
-  stopped: -> say '*** stopped ***', 'sys'; setStatus 'ready'
+  done:    -> standDown(); setStatus 'ready'
+  stopped: -> standDown(); say '*** stopped ***', 'sys'; setStatus 'ready'
   error:   (data) ->
+    standDown()
     where = if data.line? then " (line #{data.line})" else ''
     say "#{data.stage}#{where}: #{data.message}", 'err'
     # The frames span more than one sketch only when a region defined a helper
@@ -745,6 +783,7 @@ start = (thenRun = null) ->
   Atomics.store i32, H.SWAP,      0
   Atomics.store i32, H.FRONT,     0
   Atomics.store i32, H.ASK_STATE, 0   # the old worker will never answer now
+  Atomics.add   i32, H.SOUND_EPOCH, 1 # nor should anything it queued play
   clearInput()
   paused   = no                       # a new sketch does not inherit a pause
   stepOnce = no
@@ -772,6 +811,7 @@ stop = ->
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
+  Atomics.add    i32, H.SOUND_EPOCH, 1   # silence now, not at the next yield point
   # A sketch stopped in V8 cannot reach a yield point to notice the interrupt,
   # so it is let go first, told to ignore any breakpoint on its way out, and
   # the deadline only starts once it is actually running. Timed from the
@@ -939,6 +979,7 @@ do ->
   restorePanels()
   start()
   frame()
+  startSound()
   say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, :help for the rest', 'sys'
 
   try

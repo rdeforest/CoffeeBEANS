@@ -228,6 +228,41 @@ hand for code that never swaps.
 is what you want while you are typing. The canvas gets a coffee-coloured
 outline when it holds the keyboard.
 
+## Sound
+
+Like paints: a plain value is the simple case, and a function in the same
+slot is the unlimited one.
+
+    sound 440, 0.5                                  # Hz, seconds
+    sound 'C4', 0.5                                 # or a note name
+    sound 'E4', 1, voice: 1, wave: 'square', volume: 0.3
+    sound ((t) -> 440 + 20 * sin(t * 30)), 2         # vibrato, t in seconds
+    sound 'A3', 1, volume: (t, u) -> 1 - u           # a fade, u from 0 to 1
+    sound 110, 1, wave: (phase) -> if phase < 0.25 then 1 else -1
+
+`sound` queues and returns at once. Each of the eight voices plays its notes
+in order, so one voice is a tune and several are harmony. Functions run in
+your sketch when the note is queued -- a curve is sampled every 2ms, a wave
+as one period -- so they can use anything the sketch can see. The sound
+itself is made on the audio thread, which keeps time whatever the sketch is
+doing. Stop and Run silence everything; a pause holds the sound with the
+picture.
+
+## Stopping to look
+
+Put `breakpoint` in a sketch -- BASIC's `STOP` -- and running it stops
+there. The line about to run lights up in the editor, and the names that
+line can see appear beside the console, with objects that open in place.
+The `>` prompt then asks about the stopped call, and can change it.
+
+    Cmd/Ctrl-\  F8     stop now on whatever line is running; again, carry on
+    F10  :line         step to the next line that runs, wherever it is
+    :step              run on to the next frame and hold there
+    :continue          carry on, from either kind of pause
+
+A sketch that says `breakpoint` nowhere runs with no debugger at all. With
+DevTools open, `breakpoint` does nothing: the two cannot share the page.
+
 ## Panels
 
 Screen, editor and console are resizable -- drag the splitters between them.

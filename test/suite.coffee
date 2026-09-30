@@ -19,7 +19,7 @@ path = require 'path'
 # first, the slow ones last.
 PARTS = [
   'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'lifecycle'
-  'drawing', 'color', 'loading', 'shell', 'input', 'perf'
+  'drawing', 'color', 'loading', 'shell', 'input', 'sound', 'perf'
 ]
 
 module.exports = (win, paths) ->

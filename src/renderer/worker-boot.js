@@ -315,6 +315,7 @@
     '/src/runtime/probe.coffee',
     '/src/runtime/paint.coffee',
     '/src/runtime/fill.coffee',
+    '/src/runtime/sound.coffee',
     '/src/runtime/font.coffee',
     '/src/runtime/runtime.coffee',
   ]

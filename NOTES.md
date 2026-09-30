@@ -386,3 +386,43 @@ Decisions to make before writing it:
   positions transform; glyphs do not scale, they are pixels.
 - A margin argument, so "contain everything" does not put the outermost
   bug on the very edge.
+
+## Sound
+
+Built on the paint pattern: a number, a name or an array is the simple case,
+and a function in the same slot is the unlimited one. `sound 440, 0.5` is a
+beep; `volume: (t, u) -> ...` is an envelope, `wave: (phase) -> ...` a
+waveform, and a function for the frequency is a slide or a vibrato. No new
+vocabulary for any of them.
+
+The audio thread is an AudioWorklet that reads notes off a float ring in the
+SAB, the console's mechanism in the other direction. It never waits on the
+worker and never runs sketch code: functions are sampled in the worker when
+the note is queued (curves at 500 a second, a wave as one 1024-sample period)
+and travel as numbers. That is what keeps a slow function from ever being a
+click, and why a function can use anything the sketch can see.
+
+There is no `wave` command setting a voice's sound for later notes. Every
+note carries its own, so there is no mode left behind for the next sketch to
+inherit -- the failure `screen` exists to prevent for drawing.
+
+### Come back to these
+
+- **Keeping sound and picture in step without `buffer.swap`.** Today notes
+  queued between two frames start together, and a pause holds sound with the
+  picture. A sketch that never swaps, or one that wants its music on its own
+  clock rather than tied to its drawing, has nothing: no way to ask how much
+  is still queued, wait for a voice to finish, or start several voices on one
+  cue. AmigaBASIC had `SOUND WAIT` / `SOUND RESUME` for the last one. Decide
+  what the question is before choosing an answer -- `sound.left voice`,
+  a blocking `sound.wait`, or queues that start on a commit.
+- **Speech.** AmigaBASIC's `SAY` is the precedent, but the OS speech engines
+  sound different everywhere. A generative voice model could do something
+  much nicer; worth a look when it comes up, as its own piece.
+- **A modular synth and effects.** Oscillators, filters, envelopes and delays
+  as values that plug into each other, probably still in the paint shape: a
+  slot that takes a number takes a module. The float ring would carry a patch
+  rather than a note.
+- **Raw samples.** `sound` with a buffer of samples, or a function of time
+  producing them, rendered in the worker -- the lowest layer, which the ring
+  already has room for.

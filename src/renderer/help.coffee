@@ -164,6 +164,22 @@ SECTIONS = [
     ['mouse.wheel',       'delta since you last read it -- reading consumes']
   ]
 ,
+  name:  'sound'
+  title: 'Sound'
+  lines: [
+    ['sound 440, 0.5',    'Hz and seconds; queues the note and returns at once']
+    ["sound 'C4', 0.5",   "or a note name: 'F#3', 'Bb2' -- A4 is 440"]
+    ['  voice: 1',        'eight voices, 0..7; each plays its notes in turn,']
+    ['',                  'so one voice is a tune and several are chords']
+    ["  wave: 'square'",  'sine (the default), square, triangle, saw, noise,']
+    ['',                  'an array of -1..1 for one period, or (phase) -> ...']
+    ['  volume: 0.3',     '0..1, or (t, u) -> ... for a shape over the note']
+    ['',                  't is seconds in, u runs 0 to 1; frequency takes one too']
+    ["sound.hz 'A4'",     'a note name as a frequency, for doing arithmetic on']
+    ['sound 0, 0.25',     'a rest']
+    ['',                  'Stop and Run silence everything; a pause holds it']
+  ]
+,
   name:  'colors'
   title: 'Colors'
   lines: [

@@ -7,11 +7,11 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 120 checks, ~110s
+    npm test                                 all 133 checks, ~120s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging lifecycle drawing color
-loading shell input perf`. Each starts from a reset app, so running one alone means
+loading shell input sound perf`. Each starts from a reset app, so running one alone means
 the same thing as running it in the middle of everything else.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
@@ -48,9 +48,10 @@ nothing with no error.
 
 Robert's order, set 2026-09-28:
 
-1. **Debugging** -- line stepping and the variables pane, below.
-2. **Sound.** Not designed yet; NOTES.md only notes that audio will want the
-   same shared-memory mechanism for sample data that the prompt uses.
+1. **Debugging** -- done 2026-09-29: line stepping and the variables pane,
+   below.
+2. **Sound.** First pass done 2026-09-29; the design and what is parked are
+   in NOTES.md under Sound. Robert wants a modular synth and effects later.
 3. **Tab completion at the console** -- designed and parked, at the bottom of
    this file. Do not start it ahead of the other two.
 
@@ -217,6 +218,25 @@ Out, each needing a fresh reason: clickable gutter breakpoints, conditional
 breakpoints (`breakpoint if angle > pi` is already just code), watch
 expressions (the prompt is one, and better), a clickable call stack (a one-line
 breadcrumb, maybe), editing values in the pane, stepping into the runtime.
+
+## Sound, the facts worth keeping
+
+- `sound-worklet.coffee` is compiled in the renderer and loaded as a blob
+  with `layout.coffee` ahead of it; a worklet takes one module and has no
+  CoffeeScript. Anything both sides need goes in LAYOUT (`CONTROL_RATE`).
+- Stop and a new worker bump `SOUND_EPOCH`, and the worklet drops everything
+  queued when it changes. Not the interrupt flag: that stayed raised after a
+  Stop, and would have swallowed a note typed at the prompt.
+- The interrupt flag is now lowered when the worker reports `done`,
+  `stopped` or `error`. Before, every yield point reached from the prompt
+  after a Stop -- `buffer.swap` too, not just `sound` -- threw 'stopped'.
+- `SOUND_HOLD` follows the status line: either pause freezes the audio clock.
+- `main.coffee` sets `autoplayPolicy: 'no-user-gesture-required'`; without it
+  the AudioContext starts suspended and the first sketch is silent.
+- A test run is not listened to. The worklet reports notes begun, a peak per
+  render quantum and a busy bit per voice (`Sound.*` in the renderer), and
+  the `sound` part checks those. None of it says the result sounds good --
+  that takes an ear.
 
 ## Open for discussion
 
