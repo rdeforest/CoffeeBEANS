@@ -53,7 +53,7 @@ module.exports = (t) ->
 
   # 4. voices play together
   await run "sound 'C4', 0.4\nsound 'E4', 0.4, voice: 1\nsound 'G4', 0.4, voice: 2\n"
-  chord = await until_ -> (await busy()) is 0b111
+  chord = await until_ -> (await busy()) is 3
   check 'three voices sound at once', chord, "busy=#{await busy()}"
   await until_ -> (await busy()) is 0
 
@@ -73,10 +73,65 @@ print 'a4=' + sound.hz('A4') + ' c4=' + sound.hz('C4').toFixed(2) + ' bb3=' + so
     ["sound 440, 0.1, wave: 'wobble'", 'no wave called']
     ["sound 'H4', 0.1",                'not a frequency or a note name']
     ["sound 440, 0",                   'seconds must be']
-    ["sound 440, 0.1, voice: 9",       'voice must be']
+    ["sound 440, 0.1, voice: {}",      'a voice is a number or a name']
+    ["sound 440, volume: (t) -> t",    'a note with no length takes plain values']
+    ["n = sound 440, 0.1\nn.stop -1",  'a fade must be']
   ]
     text = await run source
-    check "a bad note says why: #{expect}", text.includes(expect) and text.includes('line 1'), JSON.stringify text.trim()
+    check "a bad note says why: #{expect}", text.includes(expect) and /line [12]\b/.test(text), JSON.stringify text.trim()
+
+  # 6b. voices are made on first use, as many as you like, by number or name
+  await run "sound 200 + i * 40, 0.5, voice: 'v' + i, volume: 0.1 for i in [0...12]\n"
+  many = await until_ -> (await busy()) is 12
+  check 'twelve named voices sound at once', many, "busy=#{await busy()}"
+  await until_ -> (await busy()) is 0
+
+  # 6c. a note with no length plays until it is stopped
+  await run "held = sound 330, voice: 'key'\n"
+  on_ = await until_ -> (await busy()) is 1 and (await peak()) > 0.05
+  await wait 500
+  still = (await busy()) is 1 and (await peak()) > 0.05
+  await ask 'held.stop()'
+  ended = await until_ (-> (await busy()) is 0), 1000
+  check 'a note with no length plays until stopped', on_ and still and ended,
+    "on=#{on_} still=#{still} ended=#{ended}"
+
+  # 6d. and can be changed while it plays
+  await run "held = sound 330\n"
+  await until_ -> (await peak()) > 0.05
+  await ask 'held.volume = 0'
+  hushed = await until_ -> (await peak()) is 0 and (await busy()) is 1
+  await ask "held.volume = 1; held.frequency = 'E5'"
+  loud = await until_ -> (await peak()) > 0.05
+  check 'a playing note can be changed', hushed and loud, "hushed=#{hushed} loud=#{loud}"
+
+  # 6e. a stop can fade
+  await ask 'held.stop 0.4'
+  await wait 150
+  fading = (await busy()) is 1
+  gone = await until_ (-> (await busy()) is 0), 1500
+  check 'a stop with a fade takes that long', fading and gone, "fading=#{fading} gone=#{gone}"
+
+  # 6f. a voice can be stopped, queue and all, and so can everything
+  before = await started()
+  await run "sound 220, voice: 'a'\nsound 440, 1, voice: 'a'\nsound 330, voice: 'b'\n"
+  await until_ -> (await busy()) is 2
+  await ask "sound.stop 'a'"
+  one = await until_ -> (await busy()) is 1
+  await wait 150
+  noQueue = (await busy()) is 1 and (await started()) is before + 2
+  await ask 'sound.stop()'
+  none = await until_ -> (await busy()) is 0
+  check 'sound.stop takes a voice with its queue, or everything', one and noQueue and none,
+    "one=#{one} queueDropped=#{noQueue} none=#{none} started=#{(await started()) - before}"
+
+  # 6g. a note stopped before its turn never plays
+  before = await started()
+  await run "a = sound 440, 0.2\nb = sound 550, 0.2\nb.stop()\n"
+  await until_ -> (await started()) > before
+  await wait 450
+  check 'a queued note that is stopped never starts', (await started()) is before + 1,
+    "started #{(await started()) - before}"
 
   # 7. Stop silences at once, not when the note would have ended
   await setDoc "sound 220, 10\nloop\n  buffer.swap\n"
@@ -87,6 +142,17 @@ print 'a4=' + sound.hz('A4') + ' c4=' + sound.hz('C4').toFixed(2) + ' bb3=' + so
   quiet = await until_ (-> (await busy()) is 0 and (await peak()) is 0), 1000
   check 'stop silences a long note at once', quiet, "busy=#{await busy()} peak=#{await peak()}"
   await t.settle()
+
+  # 7b. a note that outlives its sketch is silenced by Stop, and Stop with
+  # nothing running leaves the prompt working
+  text = await run "sound 262, voice: 'drone'\nprint 'finished'\n"
+  lingering = await until_ -> (await busy()) is 1
+  await click 'stop'
+  hushed = await until_ -> (await busy()) is 0
+  asked = await ask '6 * 7'
+  check 'stop silences a note that outlived its sketch',
+    text.includes('finished') and lingering and hushed and asked.includes('42'),
+    "lingering=#{lingering} hushed=#{hushed} asked=#{JSON.stringify asked.trim()}"
 
   # 8. and a note typed at the prompt after a Stop still plays
   before = await started()

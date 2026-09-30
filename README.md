@@ -240,8 +240,27 @@ slot is the unlimited one.
     sound 'A3', 1, volume: (t, u) -> 1 - u           # a fade, u from 0 to 1
     sound 110, 1, wave: (phase) -> if phase < 0.25 then 1 else -1
 
-`sound` queues and returns at once. Each of the eight voices plays its notes
-in order, so one voice is a tune and several are harmony. Functions run in
+`sound` queues and returns at once. A voice is any number or name, made the
+first time you use it, and each plays its notes in order, so one voice is a
+tune and several are harmony. There is no limit on voices; past a few at
+full volume they start to distort, so turn each down as on a mixing desk.
+
+Leave out the length and a note plays until it is stopped. Every `sound`
+hands back its note, to change or stop while it plays -- which is how a key
+held down becomes a note held down:
+
+    playing = {}
+    loop
+      for key, note of {a: 'C4', s: 'D4', d: 'E4'}
+        playing[key] ?= sound note, voice: key if keys.hit key
+        if playing[key] and not keys.down key
+          playing[key].stop 0.1                   # a 0.1s fade
+          delete playing[key]
+      buffer.swap
+
+`held.frequency = 'D4'` and `held.volume = 0.5` change a note as it plays;
+`sound.stop 'bass'` silences a voice and its queue, `sound.stop()` all of
+them. Functions run in
 your sketch when the note is queued -- a curve is sampled every 2ms, a wave
 as one period -- so they can use anything the sketch can see. The sound
 itself is made on the audio thread, which keeps time whatever the sketch is

@@ -7,7 +7,7 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 133 checks, ~120s
+    npm test                                 all 142 checks, ~125s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging lifecycle drawing color
@@ -231,6 +231,15 @@ breadcrumb, maybe), editing values in the pane, stepping into the runtime.
   `stopped` or `error`. Before, every yield point reached from the prompt
   after a Stop -- `buffer.swap` too, not just `sound` -- threw 'stopped'.
 - `SOUND_HOLD` follows the status line: either pause freezes the audio clock.
+- Stop with nothing running only bumps the epoch. It used to raise the
+  interrupt flag too, and with no busy worker to report idle, nothing would
+  ever lower it -- the prompt bug above, reached by the obvious way to hush
+  a held note that outlived its sketch.
+- Voices: the worker names them, the worklet only sees small numbers from
+  `voiceOf`, and drops a voice the moment it is idle. `SOUND_BUSY` is a
+  count of voices sounding, not a bitmask.
+- A test run is muted (`setAudioMuted`) unless `BEANS_SHOW` is set. Muting
+  does not stop the worklet, so the sound checks still see everything.
 - `main.coffee` sets `autoplayPolicy: 'no-user-gesture-required'`; without it
   the AudioContext starts suspended and the first sketch is silent.
 - A test run is not listened to. The worklet reports notes begun, a peak per

@@ -406,6 +406,15 @@ There is no `wave` command setting a voice's sound for later notes. Every
 note carries its own, so there is no mode left behind for the next sketch to
 inherit -- the failure `screen` exists to prevent for drawing.
 
+Voices are unlimited, by number or name, made on first use and forgotten
+when idle. The only real cost of many is loudness: the mix goes through
+tanh, so it bends rather than wraps, but it bends audibly. A sketch that
+wants Pico-8's four channels can choose that wall; the runtime does not.
+
+A note with no length plays until stopped, and every `sound` hands back its
+note: `stop` with an optional fade, and `frequency` and `volume` setters.
+Changes ride the same ring, so they land within a render quantum.
+
 ### Come back to these
 
 - **Keeping sound and picture in step without `buffer.swap`.** Today notes
@@ -423,6 +432,12 @@ inherit -- the failure `screen` exists to prevent for drawing.
   as values that plug into each other, probably still in the paint shape: a
   slot that takes a number takes a module. The float ring would carry a patch
   rather than a note.
+- **Functions on a note with no length.** A timed note's curves are sampled
+  over its length when it is queued; a held note has no length, so today it
+  takes plain values and is changed through its handle. A vibrato that lasts
+  as long as the key is down wants the worker to keep sampling ahead -- at
+  its yield points, say -- or an LFO the audio thread runs itself, which is
+  where the modular synth starts.
 - **Raw samples.** `sound` with a buffer of samples, or a function of time
   producing them, rendered in the worker -- the lowest layer, which the ring
   already has room for.

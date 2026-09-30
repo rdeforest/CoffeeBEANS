@@ -803,6 +803,13 @@ start = (thenRun = null) ->
 
 stop = ->
   pending = null
+  # Nothing running is nothing to unwind, but a note with no length can
+  # outlive the sketch that started it, and Stop is where anyone reaches to
+  # make it quiet. Raising the flag here would leave it up with no worker
+  # busy to report idle and lower it.
+  if status in ['ready', 'error']
+    Atomics.add i32, H.SOUND_EPOCH, 1
+    return
   # Stop clears the swap itself and notifies, so it releases a paused worker
   # without any help. Going through goFrames rather than just dropping the flag
   # is what puts the status line back: left saying "paused", nothing that reads

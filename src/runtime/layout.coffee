@@ -34,7 +34,7 @@ HEADER =
   SOUND_HOLD: 45     # 1 = a pause of either kind; the audio clock stands still
   SOUND_STARTED: 46  # notes begun since the audio thread started; for tests and meters
   SOUND_PEAK: 47     # loudest sample of the last render quantum, in millionths
-  SOUND_BUSY: 48     # one bit per voice with a note playing
+  SOUND_BUSY: 48     # how many voices have a note sounding
   SOUND_RATE: 49     # the audio thread's sample rate, once it is running
 
 MAX_WIDTH    = 3840
@@ -88,7 +88,11 @@ globalThis.LAYOUT =
   askOffset:       ASK_OFFSET
   SOUND_FLOATS:    SOUND_FLOATS
   soundOffset:     SOUND_OFFSET
-  VOICES:          8
   CONTROL_RATE:    500     # samples a second for a note's frequency and volume curves
+  # What travels on the sound ring; the worker writes these and the audio
+  # thread switches on them.
+  SOUND_OP:        {note: 1, set: 2, stopNote: 3, stopVoice: 4, stopAll: 5}
+  SOUND_FIELD:     {frequency: 0, volume: 1}
+  SOUND_HELD:      -1      # the length of a note with no length
   TOTAL_BYTES:     SOUND_OFFSET + SOUND_FLOATS * 4
   bufferWords:  (index) -> HEADER_WORDS + index * MAX_PIXELS

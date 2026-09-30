@@ -13,8 +13,9 @@ H = LAYOUT.HEADER
 # sound of a beginner's first melody unless something prevents it.
 EDGE = 0.005
 
-# Summed voices go through tanh, so eight at full volume bend rather than
-# wrap; one voice at full volume sits comfortably below the ceiling.
+# Summed voices go through tanh, so many at full volume bend rather than
+# wrap; one voice at full volume sits comfortably below the ceiling. Past a
+# few, turn each one down, as on a mixing desk.
 DRIVE = 0.5
 
 # Band-limiting for the two waves with a jump in them. Without it a square
@@ -38,6 +39,8 @@ at = (curve, t, rate) ->
   return curve[curve.length - 1] if i >= curve.length - 1
   curve[i] + (curve[i + 1] - curve[i]) * (x - i)
 
+# A note plays out its length, or -- a note with no length -- until it is
+# stopped. Stopping is a fade from wherever it is, never a cut.
 class Voice
   constructor: ->
     @queue = []
@@ -53,14 +56,16 @@ class Voice
       @started = yes
     note = @note
     t    = note.t
-    if t >= note.seconds
+    if t >= note.end
       @note = null
+      @ended note
       return @sample dt, rate
     note.t += dt
 
     frequency = at note.pitch, t, rate
     volume    = at note.loud,  t, rate
-    edge      = Math.min 1, t / EDGE, (note.seconds - t) / EDGE
+    edge      = Math.min 1, t / EDGE, (note.end - t) / EDGE
+    edge      = Math.min edge, 1 - (t - note.stopAt) / note.fade if note.stopAt?
     return 0 unless frequency > 0 and volume isnt 0
 
     step   = frequency * dt
@@ -82,16 +87,32 @@ class Voice
         i = Math.floor x
         a = table[i % table.length]
         a + (table[(i + 1) % table.length] - a) * (x - i)
-    value * volume * edge
+    value * volume * Math.max 0, edge
 
-  clear: ->
+  # Playing: fade out from here. Still queued: it never starts.
+  stop: (note, seconds) ->
+    if note is @note
+      return if note.stopAt?                  # already on its way out
+      note.fade   = Math.max seconds, EDGE
+      note.stopAt = note.t
+      note.end    = Math.min note.end, note.t + note.fade
+    else
+      @queue = (queued for queued in @queue when queued isnt note)
+      @ended note
+
+  stopAll: (seconds) ->
+    @ended queued for queued in @queue
     @queue = []
-    @note  = null
+    @stop @note, seconds if @note
 
 class BeansSound extends AudioWorkletProcessor
   constructor: ->
     super()
-    @voices = (new Voice for i in [0...LAYOUT.VOICES])
+    # Made on first use, dropped when idle: there is no limit on voices, and
+    # a voice with nothing to play costs nothing.
+    @voices = new Map         # the worker's number for a voice -> Voice
+    @notes  = new Map         # note id -> the voice holding it, while it lives
+    @live   = []
     @i32    = null
     @port.onmessage = ({data}) =>
       @i32  = new Int32Array data, 0, LAYOUT.HEADER_WORDS
@@ -99,29 +120,70 @@ class BeansSound extends AudioWorkletProcessor
       @epoch = Atomics.load @i32, H.SOUND_EPOCH
       Atomics.store @i32, H.SOUND_RATE, sampleRate
 
+  voice: (number) ->
+    unless @voices.has number
+      voice = new Voice
+      voice.ended = (note) => @notes.delete note.id
+      @voices.set number, voice
+    @voices.get number
+
   flush: ->
-    voice.clear() for voice in @voices
+    @voices.clear()
+    @notes.clear()
     Atomics.store @i32, H.SOUND_TAIL, Atomics.load @i32, H.SOUND_HEAD
 
-  # Everything the worker has published, onto the voices' queues.
+  # Everything the worker has published: notes onto their voices' queues,
+  # changes and stops onto the notes they name. A change for a note that has
+  # already ended finds nothing, which is fine.
   take: ->
     N    = LAYOUT.SOUND_FLOATS
+    OP   = LAYOUT.SOUND_OP
     ring = @ring
     head = Atomics.load @i32, H.SOUND_HEAD
     tail = Atomics.load @i32, H.SOUND_TAIL
     return if head is tail
+    one = ->
+      value = ring[tail]
+      tail = (tail + 1) % N
+      value
     read = (count) ->
       out = new Float32Array count
-      for i in [0...count] by 1
-        out[i] = ring[tail]
-        tail = (tail + 1) % N
+      out[i] = one() for i in [0...count] by 1
       out
     while tail isnt head
-      [voice, seconds, kind, pitches, louds, tables] = read 6
-      pitch = read pitches
-      loud  = read louds
-      table = read tables
-      @voices[voice]?.queue.push {seconds, kind, pitch, loud, table}
+      switch one()
+        when OP.note
+          [number, id, seconds, kind, pitches, louds, tables] = read 7
+          note  = {id, kind, pitch: read(pitches), loud: read(louds), table: read(tables)}
+          note.end = if seconds is LAYOUT.SOUND_HELD then Infinity else seconds
+          voice = @voice number
+          voice.queue.push note
+          @notes.set id, voice
+        when OP.set
+          [id, field, count] = read 3
+          samples = read count
+          note = @notes.get(id)?.note
+          note = null unless note?.id is id
+          # Queued notes are found in their voice's queue instead.
+          note ?= (queued for queued in @notes.get(id)?.queue ? [] when queued.id is id)[0]
+          if note
+            if field is LAYOUT.SOUND_FIELD.frequency then note.pitch = samples else note.loud = samples
+        when OP.stopNote
+          [id, seconds] = read 2
+          voice = @notes.get id
+          if voice
+            note = if voice.note?.id is id then voice.note else (queued for queued in voice.queue when queued.id is id)[0]
+            voice.stop note, seconds if note
+        when OP.stopVoice
+          [number, seconds] = read 2
+          @voices.get(number)?.stopAll seconds
+        when OP.stopAll
+          [seconds] = read 1
+          voice.stopAll seconds for voice from @voices.values()
+        else
+          # A ring that says something we do not understand cannot be read
+          # past; drop the rest rather than play garbage.
+          tail = head
     Atomics.store  @i32, H.SOUND_TAIL, tail
     Atomics.notify @i32, H.SOUND_TAIL     # a worker waiting for room
 
@@ -138,22 +200,28 @@ class BeansSound extends AudioWorkletProcessor
     else
       @take()
 
+    # Only voices with something to do are visited, and idle ones are let go.
+    @live.length = 0
+    for [number, voice] from @voices
+      if voice.note or voice.queue.length then @live.push voice else @voices.delete number
+    live = @live
+
     # Paused, the audio clock stands still with the frame clock.
     held = Atomics.load(@i32, H.SOUND_HOLD) is 1
     length = out[0].length
     peak = 0
-    busy = 0
     unless held
       dt = 1 / sampleRate
       rate = LAYOUT.CONTROL_RATE
       for n in [0...length] by 1
         sum = 0
-        sum += voice.sample dt, rate for voice in @voices
+        sum += voice.sample dt, rate for voice in live
         value = Math.tanh sum * DRIVE
         peak  = Math.max peak, Math.abs value
         channel[n] = value for channel in out
-    for voice, i in @voices
-      busy |= 1 << i if voice.note
+    busy = 0
+    for voice in live
+      busy += 1 if voice.note
       if voice.started
         voice.started = no
         Atomics.add @i32, H.SOUND_STARTED, 1

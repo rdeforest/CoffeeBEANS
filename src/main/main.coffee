@@ -224,6 +224,10 @@ createWindow = ->
       # Sound starts with the app, not with a click: a sketch that beeps on
       # its first line should be heard.
       autoplayPolicy: 'no-user-gesture-required'
+  # Nor any business making noise. The audio thread still runs -- the sound
+  # tests read what it reports, not what reaches the speakers -- but nothing
+  # comes out unless you asked to watch the run, when hearing it helps.
+  win.webContents.setAudioMuted yes if process.env.BEANS_TEST and not process.env.BEANS_SHOW
   query = process.env.BEANS_QUERY ? ''
   win.loadURL "app://beans/src/renderer/index.html#{query}"
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
