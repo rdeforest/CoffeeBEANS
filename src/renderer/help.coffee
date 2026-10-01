@@ -212,8 +212,9 @@ SECTIONS = [
   ]
 ]
 
-# The longer story for the objects a sketch pokes at: every member, and what
-# the section line had no room for. Asked for by the object's own name.
+# The longer story for the objects and commands a sketch pokes at: every
+# member, what the section line had no room for, and an example to paste.
+# Asked for by the exact name.
 OBJECTS = [
   name:  'keys'
   title: 'keys -- the keyboard, polled'
@@ -239,6 +240,17 @@ OBJECTS = [
     ['',                  'a name nobody knows is an error, not a quiet false']
     ['',                  'click the screen first, or the editor keeps the keys']
   ]
+  example: [
+    'buffer.on'
+    'x = 160'
+    'loop'
+    "  x -= 2 if keys.down 'left'"
+    "  x += 2 if keys.down 'right'"
+    "  print 'fire!' if keys.hit 'space'"
+    '  cls()'
+    '  circleFill x, 100, 4'
+    '  buffer.swap'
+  ]
 ,
   name:  'mouse'
   title: 'mouse -- the pointer, polled'
@@ -248,6 +260,13 @@ OBJECTS = [
     ['mouse.down',        'true while any button is held']
     ['mouse.wheel',       'movement since you last read it -- reading consumes,']
     ['',                  'so read it once a frame into a variable']
+  ]
+  example: [
+    'buffer.on'
+    'loop'
+    '  cls()'
+    "  circleFill mouse.x, mouse.y, 4, (if mouse.left then 'red' else 'white')"
+    '  buffer.swap'
   ]
 ,
   name:  'buffer'
@@ -261,6 +280,66 @@ OBJECTS = [
     ['wait n',            'sleep n frames; never flips, in either mode']
     ['display.onScreen',  'is drawing landing on the buffer you can see']
     ['',                  'screen turns buffering off, so put buffer.on after it']
+  ]
+  example: [
+    'buffer.on'
+    'x = 0'
+    'loop'
+    '  cls()'
+    '  circleFill x, 100, 8'
+    '  x = (x + 2) % 320'
+    '  buffer.swap'
+  ]
+,
+  name:  'stamp'
+  title: 'stamp -- put, but turned and scaled'
+  lines: [
+    ['stamp s, x, y',     'like put, except x, y is where the anchor lands']
+    ['  angle: a',        'radians; positive turns clockwise, since y runs down']
+    ['  scale: 2',        'or scaleX: and scaleY: apart']
+    ['  anchorX: ax',     'with anchorY:, the point in s that lands on x, y and']
+    ['',                  'that it turns around. 0, 0 unless you say, so pass']
+    ['',                  'the middle to spin in place']
+    ["  mode: 'xor'",     'the same modes as put']
+    ['',                  'nearest neighbour on purpose: the crunch is the look']
+  ]
+  example: [
+    'buffer.on'
+    'ship = surface 9, 9'
+    'drawTo ship, -> line 0, 8, 4, 0; line 4, 0, 8, 8'
+    'heading = 0'
+    'loop'
+    '  cls()'
+    '  stamp ship, 160, 100, angle: heading, anchorX: 4.5, anchorY: 4.5'
+    '  heading += 0.05'
+    '  buffer.swap'
+  ]
+,
+  name:  'overlaps'
+  title: 'overlaps -- do two surfaces touch'
+  lines: [
+    ['overlaps a,ax,ay,b,bx,by', 'true if an opaque pixel of a lands on an']
+    ['',                  'opaque pixel of b. ax, ay and bx, by are top-left']
+    ['',                  'corners, the same as put']
+    ['',                  'transparent pixels never touch anything, so it is']
+    ['',                  'the shape that counts, not the box around it']
+    ['',                  'it takes the surfaces as they are -- no angle or']
+    ['',                  'scale. For a turned sprite, stamp it into a scratch']
+    ['',                  'surface big enough for any angle, and test that']
+  ]
+  example: [
+    'rock = surface 16, 16'
+    "drawTo rock, -> circleFill 8, 8, 7, 'gray'"
+    'ship = surface 9, 9'
+    'drawTo ship, -> line 0, 8, 4, 0; line 4, 0, 8, 8'
+    'print overlaps ship, 100, 100, rock, 104, 96'
+    '# turned: 13 is past the diagonal of 9, and the middles'
+    '# line up, so the box sits 2 up and left of the ship'
+    'turned = surface 13, 13'
+    'drawTo turned, ->'
+    '  cls 0                # clear back to transparent'
+    '  stamp ship, 6.5, 6.5, angle: pi / 4, anchorX: 4.5, anchorY: 4.5'
+    'print overlaps turned, 98, 98, rock, 104, 96'
   ]
 ]
 

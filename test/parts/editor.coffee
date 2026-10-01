@@ -96,6 +96,20 @@ module.exports = (t) ->
   text = await helpFor 'zzzz'
   check ':help with no match says so', text.includes('no help for "zzzz"'), JSON.stringify text.trim()
 
+  # An example that does not run is worse than none, so the one that ends
+  # (the others loop) is run as written: straight, then turned to touch.
+  text = await helpFor 'overlaps'
+  check ':help overlaps shows an example',
+    text.includes('Example') and text.includes('turned = surface 13, 13'), JSON.stringify text.trim()[..200]
+
+  example = await js "return HELP.match('overlaps')[0].example.join('\\n')"
+  await setDoc example
+  await clearConsole()
+  await handleEx 'eval'
+  text = await settled()
+  check 'the overlaps example runs and both tests hit',
+    text.trim() is 'truetrue', JSON.stringify text.trim()
+
   # 13. switching sketches must not drop an edit the autosave has not flushed
   await js "await Editor.load('scratch'); return true"
   await setDoc "print 'PENDING EDIT'\n"

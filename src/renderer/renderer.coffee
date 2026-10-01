@@ -378,6 +378,9 @@ showHelp = (topic) ->
     say section.title, 'help-head'
     for [syntax, description] in section.lines
       say "  #{syntax.padEnd width}   #{description}", 'help'
+    if section.example
+      say 'Example', 'help-head'
+      say "    #{line}", 'help-code' for line in section.example
   flushConsole()
   output.scrollTop = top          # land on the first section, not the last
   undefined
