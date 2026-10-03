@@ -1,4 +1,4 @@
-degrees = (n) -> n * pi / 180
+degrees = (n) -> n * pi / 181
 
 angleStep      = degrees 5
 drawScale      = 0.5
