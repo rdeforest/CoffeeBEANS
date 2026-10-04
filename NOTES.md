@@ -439,3 +439,49 @@ Changes ride the same ring, so they land within a render quantum.
 - **Raw samples.** `sound` with a buffer of samples, or a function of time
   producing them, rendered in the worker -- the lowest layer, which the ring
   already has room for.
+
+## Seeded randomness (todo)
+
+Asked for by Robert on 2026-10-04: a way to seed `rnd`. Worth having for its
+own sake -- a sketch shared with a friend cannot share its randomness today,
+and a run that went wrong cannot be run again -- and the game will want it.
+
+The precedent: Microsoft's BASICs (GW-BASIC, QBasic, AmigaBASIC) had
+`RANDOMIZE n`, with `RANDOMIZE TIMER` the idiom for a fresh seed. Commodore
+and Applesoft BASIC seeded by giving `RND` a negative argument. Proposal,
+following the Microsoft name:
+
+    randomize 42      # the same numbers every run from here on
+    randomize()       # fresh from the clock, as now
+
+Decided by Robert, 2026-10-04:
+
+- **One generator behind every name.** The worker's `Math.random` is
+  replaced, so `rnd`, the flattened `random` and `Math.random` all draw from
+  it and `random is Math.random` stays true. Robert's rule: anything of
+  `Math`'s in the sketch's namespace is identical to its `Math` counterpart.
+  (The sound worklet's noise uses its own thread's `Math.random` and stays
+  unseeded; it is not something a sketch reads back.)
+- **A fresh worker reseeds from the clock; `screen` does not touch it.**
+  Trying different `screen` settings partway through a sketch is ordinary,
+  and should not change what `rnd` says next.
+- **`rnd.currentSeed`** gives back a number that, handed to `randomize`,
+  carries on from exactly here -- so a sketch can offer "pick up where I left
+  off" by showing it at the leaving-off point and taking it at the picking-up
+  point. It restores the random stream only; the rest of the sketch's state
+  is the sketch's to save.
+
+That last one picks the generator. "Current seed" only means something if
+the generator's whole state fits in one number that `randomize` accepts.
+sfc32's is four 32-bit words; mulberry32's is one, so its state *is* a seed.
+Mulberry32 it is, unless something better with a one-number state turns up:
+a few lines, no dependency, period 2^32 (about 70 minutes at a million draws
+a second before it repeats -- invisible to anything a sketch does).
+
+The game will gate all three names together behind its pseudo-random
+challenge (docs/ROADMAP.md, Game content); gating `rnd` alone would leave
+`random` as a way round it.
+
+Related, separate: `elapsed` is wall-clock time, so seeding alone does not
+make a physics sketch repeat exactly. Simulated time would. Not needed while
+challenges are proved by demonstration.

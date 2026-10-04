@@ -80,14 +80,19 @@ nothing with no error.
 
 ## Priorities
 
-Robert's order, set 2026-09-28:
+**The direction changed on 2026-10-04:** CoffeeBEANS becomes a game for
+Steam, done by 2027-07-30, aimed at Next Fest in October 2027. The schedule
+and every decision behind it are in `docs/ROADMAP.md`; read it before
+choosing what to work on.
 
-1. **Debugging** -- done 2026-09-29: line stepping and the variables pane,
-   below.
-2. **Sound.** First pass done 2026-09-29; the design and what is parked are
-   in NOTES.md under Sound. Robert wants a modular synth and effects later.
-3. **Tab completion at the console** -- designed and parked, at the bottom of
-   this file. Do not start it ahead of the other two.
+Now: Phase 0 there -- the licence, builds and tests for all three platforms
+in CI, seeded `rnd` (NOTES.md, Seeded randomness), feature gating, and the
+sandbox mode.
+
+Earlier priorities, by Robert on 2026-09-28: debugging (done 2026-09-29);
+sound (first pass done 2026-09-29; the modular synth and effects wait on the
+roadmap); tab completion at the console (designed, parked at the bottom of
+this file -- still lowest).
 
 ## Where the debugger work stands
 
