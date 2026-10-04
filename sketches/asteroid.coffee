@@ -1,6 +1,6 @@
 # How hard can it be?
 
-screen w = 640, h = 400
+screen w = 3 * 160, h = 3 * 100
 w2 = w>>1
 h2 = h>>1
 
@@ -16,6 +16,7 @@ missileSpeed  = 1
 minRockSize   = 8
 
 # game state
+gameStarted   =
 gameOver      = false
 score         = 0
 quarterSeen   = 0
@@ -56,6 +57,18 @@ missileSprite = makeSprite 6, 3, ->
   line 0,1,5,1
   line 1,0,1,2
 
+defaultShow = (body) ->
+  {sprite, x, y, pointing} = body
+  
+  midx  = sprite.width  / 2
+  midy  = sprite.height / 2
+
+  stamp sprite, x, y,
+    angle:   pointing,
+    anchorX: midx
+    anchorY: midy
+ 
+
 makeBody = (info = {}, sprite) ->
   size   = min sprite.width, sprite.height
   radius = size / 2
@@ -65,11 +78,18 @@ makeBody = (info = {}, sprite) ->
     vel      = [0, 0]
     pointing = 0
     spin     = 0
+    show     = defaultShow
   } = info
 
   {loc, vel, pointing, spin, size, r2, sprite}
 
-makeShip     = (info = {}) -> Object.assign {}, name: "ship",     makeBody(info, shipSprite)
+makeShip     = (info = {}) ->
+  Object.assign {},
+    name: "ship"
+    makeBody(info, shipSprite)
+    show: (body) ->
+      defaultShow(body) if Date.now() % 2
+        
 makeMissile  = (info = {}) -> Object.assign {}, name: "missile",  makeBody(info, missileSprite), fuel: missileFuel
 makeAsteroid = (info = {}) ->
   info.loc  ?= vAdd [w2, h2], angleToVector rnd() * 2 * pi, h2 / 2
@@ -117,7 +137,7 @@ physics = (dt) ->
     body.pointing += body.spin * dt
     body
 
-  checkCollisions()
+  checkCollisions() if gameStarted
 
 checkCollisions = ->
   rocks    = bodies.filter (b) -> b.name is "asteroid"
@@ -172,13 +192,6 @@ makeChildRock = ({loc, vel, size, spin, r2}) ->
 showBody = (body) ->
   {sprite, pointing, loc: [x, y]} = body
 
-  midx  = sprite.width  / 2
-  midy  = sprite.height / 2
-
-  stamp sprite, x, y,
-    angle:   pointing,
-    anchorX: midx
-    anchorY: midy
 
 display = ->
   textAt 0, 0, "SCORE: #{score * 100}"
@@ -196,11 +209,13 @@ input = ->
 
     if quarterSeen is ("quarter").length
       initGame()
-  else
+  else if gameStarted
     ship.thrust    = keys.down 'w'
     ship.turnLeft  = keys.down 'a'
     ship.turnRight = keys.down 'd'
     ship.fire      = keys.down 'space'
+  else
+    gameStarted  or= keys.down()
 
 buffer.on
 
