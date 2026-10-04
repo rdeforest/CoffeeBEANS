@@ -279,9 +279,17 @@ createWindow = ->
     console.error "renderer gone: #{reason}"
     return if reason is 'clean-exit' or process.env.BEANS_TEST or win.isDestroyed()
     win.loadURL "app://beans/src/renderer/index.html?crashed=#{encodeURIComponent reason}"
-  # The only way to exercise backgroundThrottling from a test run: a hidden
-  # window is not throttled, a minimised one is. With throttling on, this
-  # makes every buffer.swap in the suite hang until its deadline.
+  # BEANS_MINIMIZE is the way to exercise backgroundThrottling from a test run
+  # on macOS: there a hidden window is not throttled and a minimised one is,
+  # and with throttling on every buffer.swap in the suite hangs until its
+  # deadline.
+  #
+  # Linux is different, and unresolved. A never-shown window there gets about
+  # one animation frame a second whatever backgroundThrottling says, so the
+  # frame-timing checks in repl, buffers, stepping and debugging fail on a
+  # hidden run and pass with BEANS_SHOW (Claude, 2026-10-04). Minimising
+  # instead was tried the same day and is intermittent -- the same parts
+  # passed in one run and failed in the next -- so it is not done here.
   win.once 'ready-to-show', -> win.minimize() if process.env.BEANS_MINIMIZE
   capture win
   watchSketches win

@@ -10,19 +10,28 @@ and why, and the facts that cost something to learn.
     npm test                                 all 153 checks, ~125s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
-Parts: `editor image repl buffers stepping debugging lifecycle drawing color
-loading shell input sound perf`. Each starts from a reset app, so running one alone means
+Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
+color loading shell input sound perf`. Each starts from a reset app, so running one alone means
 the same thing as running it in the middle of everything else.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
-run never steals focus), `BEANS_MINIMIZE=1` minimises it (the only way to
-exercise `backgroundThrottling`), `BEANS_DEVTOOLS=1` opens DevTools detached,
+run never steals focus; on Linux it starves the frame-timing checks, see
+Platform facts),
+`BEANS_MINIMIZE=1` minimises it (on macOS the only way to exercise
+`backgroundThrottling`), `BEANS_DEVTOOLS=1` opens DevTools detached,
 `BEANS_CAPTURE=2500` screenshots to `tmp/` then quits, `BEANS_QUERY='?sketch=
 bounce&run=1'` drives the app from the URL, `BEANS_DATA_HOME=test_tmp` keeps a
 run away from the real data folder.
 
 **Do not pipe `npm test` into `head`.** Closing stdout mid-run throws EPIPE out
 of the main process and Electron shows a modal dialog. Redirect to a file.
+
+**`npm test` exits nonzero when a check fails** -- since 2026-10-04. Before
+that it always exited 0 (Electron's quit path ignores `process.exitCode`; the
+suite now uses `app.exit`), which is how the Linux suite stayed red for weeks
+with nobody hearing. Trust the exit status now, and run the suite on Linux as
+well as the Mac before calling something done -- with `BEANS_SHOW=1` there,
+until the hidden-window problem in Platform facts is solved.
 
 The suite waits on the app, never on the clock: `t.settle()` polls the status
 line, `t.quiet()` polls `Printing.pending()` (bytes still in the print ring or
@@ -37,6 +46,13 @@ runtime each compile into one scope. NOTES.md lists three bugs from a name
 that looked free (`history`, `onmessage`, `load`); a fourth (`frame`, the
 present loop, clobbered by `for frame in frames`) killed rendering entirely
 and took forty tests with it. Before naming anything at file scope, check it.
+
+It cuts both ways, and order matters. CoffeeScript resolves scope in file
+order, so a file-scope variable assigned *below* a function that also assigns
+it becomes that function's local instead: `inFlight` in the renderer did this
+on 2026-10-04 and `send` recorded nothing anybody read. Declare file-scope
+state above every function that touches it, and when in doubt, read the
+compiled output -- an inner `var name` or a `typeof name` guard is the tell.
 
 **Comments say why, not what.** Match the density around you.
 
@@ -223,8 +239,50 @@ stop).
 
 Out, each needing a fresh reason: clickable gutter breakpoints, conditional
 breakpoints (`breakpoint if angle > pi` is already just code), watch
-expressions (the prompt is one, and better), a clickable call stack (a one-line
-breadcrumb, maybe), editing values in the pane, stepping into the runtime.
+expressions (the prompt is one, and better), editing values in the pane,
+stepping into the runtime.
+
+A clickable call stack was on that list. Robert moved it in on 2026-10-04,
+for runtime errors: the stack shows in the variables pane, innermost first,
+the innermost line marked, the prompt focused, and a click takes the editor
+to a frame's line (`showStack`/`visitFrame` in the renderer, test part
+`focus`). It is post-mortem -- the frames are gone, only their lines are
+known -- so it is not "pausing on uncaught errors", which is still blocked
+(see Decisions). A live stack while line paused is still out, but now that
+the pane can draw one, it would be cheap if a reason turns up.
+
+## Platform facts
+
+Each of these passed on the Mac and failed on Linux, so check both.
+
+- **Watch folders, never files.** On Linux Node implements
+  `fs.watch(dir, {recursive: true})` itself by watching every file's inode,
+  and a file replaced by rename -- vim's save, and our own atomic save --
+  leaves its watch on the dead inode: the first save is seen, none after.
+  `watchSketches` watches each folder non-recursively and adopts folders
+  that appear. Node fixed this upstream in v26.9.0 (nodejs/node#65486,
+  2026-08-31); Electron 44 ships Node 24.20, which does not have it, and
+  the PR carries no v24 backport label. Measured by Claude, 2026-10-04,
+  on 24.20, 26.8 (broken) and 26.10 (fixed). To check a newer Electron:
+  under `fs.watch(dir, {recursive: true})`, save a file twice by renaming a
+  new one over it; if the second save reports, the fix has arrived and the
+  hand walk could go back to `recursive`.
+- **A never-shown window gets about one animation frame a second on Linux**,
+  `backgroundThrottling: no` or not, so the frame-timing checks in `repl`,
+  `buffers`, `stepping` and `debugging` fail on a hidden run there and pass
+  with `BEANS_SHOW=1`. **Unresolved.** Minimising instead was tried on
+  2026-10-04 and is intermittent: `repl,buffers` failed alone and passed with
+  `editor` in front, so no particular part causes it. Untried: a timer
+  fallback for the present loop when animation frames stop arriving, or a
+  Chromium switch such as `disable-gpu-vsync` for test runs. Whether a real
+  user minimising the window mid-sketch on Linux drops to 1fps too -- X11
+  window managers usually unmap an iconified window -- is unverified, and is
+  the question that decides between those two.
+- **Vim's command line focuses the editor as it closes**, after running the
+  command and inside the same keydown. Anything an ex command wants focused
+  has to be focused a tick later (`toCanvas`), and a run that fails inside
+  that tick cancels it. The `focus` part types `:run` through the real panel
+  for exactly this; calling the ex handler directly would never catch it.
 
 ## Sound, the facts worth keeping
 
