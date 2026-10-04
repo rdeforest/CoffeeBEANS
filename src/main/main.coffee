@@ -141,24 +141,21 @@ ipcMain.handle 'sketch:pick', (event) ->
   return {outside: filePaths[0]} unless file.startsWith root + path.sep
   {name: sketchName path.join SKETCHES, path.relative root, file}
 
-# Watch the directory rather than the file: vim writes via a temp file and a
-# rename, which leaves a file watch pointing at a dead inode.
+# Watch directories, never files: a file replaced by renaming a new one into
+# place leaves a file watch on the dead inode. Vim saves that way by default,
+# and so does sketch:write above.
+#
+# So one plain watch per folder, walked by hand, and not fs.watch's
+# `recursive` option. On Linux Node implements `recursive` itself by watching
+# every file's inode -- exactly the watch this comment warns against -- so
+# from the first time the app saved a sketch, no outside change to it was
+# seen again. Reproduced on Node 24.20 and 26.8 by Claude, 2026-10-04; macOS
+# never showed it because its recursive watch is native.
 watchSketches = (win) ->
-  timers  = {}
-  watcher = fs.watch SKETCHES, recursive: yes
-  # Without this, deleting the sketches directory while the app runs throws
-  # out of the main process and takes the window with it.
-  watcher.on 'error', (error) ->
-    console.log "watch stopped: #{error.message}"
-    watcher.close()
-  # The watcher outlives the window otherwise, and sending to a destroyed
-  # webContents throws out of a timer nobody is catching.
-  win.on 'closed', ->
-    clearTimeout timer for name, timer of timers
-    watcher.close()
-  watcher.on 'change', (event, filename) ->
-    return unless filename?.endsWith '.coffee'
-    name = sketchName path.join SKETCHES, filename
+  timers   = {}
+  watchers = new Map
+
+  reload = (name) ->
     clearTimeout timers[name]
     timers[name] = setTimeout (->
       return if win.isDestroyed()
@@ -168,6 +165,47 @@ watchSketches = (win) ->
       catch error
         console.log "watch: #{name}: #{error.message}"
     ), 60
+
+  forget = (dir) ->
+    watchers.get(dir)?.close()
+    watchers.delete dir
+
+  watchTree = (dir) ->
+    return if watchers.has dir
+    try
+      watcher  = fs.watch dir
+      children = fs.readdirSync dir, withFileTypes: yes
+    catch error
+      watcher?.close()
+      console.log "watch: #{dir}: #{error.message}"
+      return
+    watchers.set dir, watcher
+    # Without this, deleting a watched folder while the app runs throws out
+    # of the main process and takes the window with it.
+    watcher.on 'error', (error) ->
+      console.log "watch stopped: #{dir}: #{error.message}"
+      forget dir
+    watcher.on 'change', (event, filename) ->
+      return unless filename?
+      entry = path.join dir, filename
+      return reload sketchName entry if filename.endsWith '.coffee'
+      # Anything else may be a folder arriving, which needs its own watch, or
+      # one leaving, whose watch should go with it.
+      fsp.stat(entry)
+        .then (stats) -> watchTree entry if stats.isDirectory()
+        .catch (error) ->
+          if error.code is 'ENOENT' then forget entry
+          else console.log "watch: #{entry}: #{error.message}"
+    watchTree path.join dir, child.name for child in children when child.isDirectory()
+    undefined
+
+  watchTree SKETCHES
+  # The watchers outlive the window otherwise, and sending to a destroyed
+  # webContents throws out of a timer nobody is catching.
+  win.on 'closed', ->
+    clearTimeout timer for name, timer of timers
+    watchers.forEach (watcher) -> watcher.close()
+    watchers.clear()
 
 SHOTS = path.join ROOT, 'tmp'
 

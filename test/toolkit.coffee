@@ -38,6 +38,16 @@ module.exports = (win, paths) ->
     return true
   """
 
+  # Until the editor shows `wanted`, rather than a sleep that guesses how long
+  # a watcher event, a read and an IPC round trip take. Hands back what it saw
+  # last, so a failing check can say what arrived instead.
+  t.untilDoc = (wanted, limit = 3000) ->
+    deadline = Date.now() + limit
+    loop
+      doc = await t.js "return Editor.all()"
+      return doc if doc is wanted or Date.now() > deadline
+      await wait 25
+
   # Through the real ex parser, so :help and :target are tested the way they
   # are typed rather than by calling the handler behind them.
   t.handleEx  = (cmd) -> t.js "CM.Vim.handleEx(CM.getCM(Editor.view()), #{JSON.stringify cmd}); return true"

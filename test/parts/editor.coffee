@@ -4,10 +4,19 @@
 fsp     = require 'fs/promises'
 path    = require 'path'
 
+# How vim saves by default: the old file renamed aside, a new one written in
+# its place, the backup removed. Every save is a new inode -- the case that
+# broke Linux reloads on 2026-10-04, and one an in-place writeFile never
+# exercises, because it keeps the inode.
+vimSave = (file, text) ->
+  await fsp.rename file, "#{file}~"
+  await fsp.writeFile file, text, 'utf8'
+  await fsp.rm "#{file}~"
+
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
-   settled, evalRegion} = t
+   settled, evalRegion, untilDoc} = t
   # 1. editor is mounted and vim is driving it
   mounted = await js "return !!document.querySelector('.cm-editor')"
   fatCursor = await js "return !!document.querySelector('.cm-fat-cursor') || !!document.querySelector('.cm-vim-panel')"
@@ -57,6 +66,37 @@ module.exports = (t) ->
   await wait 700
   doc = await js "return Editor.all()"
   check 'external write reloads editor', doc is "print 'FROM VIM'\n", JSON.stringify doc
+
+  # 8b. ...and keeps being picked up when every save is a new file. On Linux,
+  # Node's recursive watch tracked each file's inode, so the first such save
+  # was seen and every later one was not (Claude, 2026-10-04).
+  seen = []
+  for round in [1..3]
+    text = "print 'VIM SAVE #{round}'\n"
+    await vimSave scratch, text
+    seen.push await untilDoc text
+  check 'every rename-style save reloads, not just the first',
+    seen.every((doc, index) -> doc is "print 'VIM SAVE #{index + 1}'\n"),
+    JSON.stringify seen
+
+  # A folder made by someone else while the app runs has to be watched too,
+  # and a file in it saved the same way, more than once.
+  outside = path.join paths.sketches, 'made-outside'
+  await fsp.rm outside, recursive: yes, force: yes
+  await fsp.mkdir outside
+  later = path.join outside, 'later.coffee'
+  await fsp.writeFile later, "print 'START'\n", 'utf8'
+  await js "await Editor.load('made-outside/later'); return true"
+  seen = []
+  for round in [1..2]
+    text = "print 'LATER #{round}'\n"
+    await vimSave later, text
+    seen.push await untilDoc text
+  check 'a folder created outside the app is watched, every save',
+    seen.every((doc, index) -> doc is "print 'LATER #{index + 1}'\n"),
+    JSON.stringify seen
+  await js "await Editor.load('scratch'); return true"
+  await fsp.rm outside, recursive: yes, force: yes
 
   # 9. :help goes through the real ex parser
   await clearConsole()
