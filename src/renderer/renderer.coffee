@@ -624,6 +624,89 @@ hideVars = ->
   varsEl.hidden = yes
   varsEl.replaceChildren()
 
+# --- after a failed run -------------------------------------------------------
+
+# Region runs carry this on their name, so a traceback can say a frame came
+# from a region; it comes off again to find the sketch the region was in.
+REGION   = ' (region)'
+sketchOf = (runName) -> if runName?.endsWith REGION then runName[...-REGION.length] else runName
+
+# Declared here, above everything that touches them, and not beside toCanvas
+# further down: CoffeeScript resolves scope in file order, so `send` -- which
+# sets inFlight -- would otherwise have compiled it as a local of its own and
+# nothing would ever have read what it recorded (caught by Claude in the
+# compiled output, 2026-10-04).
+inFlight    = null      # the run last sent: its name, and how much a region was dedented
+canvasTimer = null
+
+# A runtime error's stack, in the pane the debugger uses for names: innermost
+# first, one row a frame, each taking you to its line. Nothing here is live --
+# the frames are gone -- but the image still holds every top-level name, which
+# is why the prompt has the keyboard until a frame is chosen.
+showStack = (frames, message) ->
+  head = document.createElement 'div'
+  head.className   = 'vars-head stack-head'
+  head.textContent = message
+  title = document.createElement 'div'
+  title.className   = 'vars-title'
+  title.textContent = 'stack'
+  across = (new Set(step.name for step in frames)).size > 1
+  rows = for step in frames
+    do (step) ->
+      row = document.createElement 'div'
+      row.className = 'stack-frame'
+      site = document.createElement 'span'
+      site.className   = 'stack-site'
+      where = "#{step.fn ? 'top level'} \u00b7 line #{step.line ? '?'}"
+      where += " \u00b7 #{sketchOf step.name}" if across and step.name
+      site.textContent = where
+      code = document.createElement 'span'
+      code.className   = 'stack-code'
+      code.textContent = step.text ? ''
+      row.append site, code
+      if step.line?
+        row.classList.add 'openable'
+        row.addEventListener 'click', -> visitFrame step, row
+      row
+  varsEl.replaceChildren head, title, rows...
+  varsEl.hidden = no
+  undefined
+
+visitFrame = (step, row) ->
+  chosen.classList.remove 'chosen' for chosen in varsEl.querySelectorAll '.stack-frame.chosen'
+  row.classList.add 'chosen'
+  name = sketchOf step.name
+  # A frame from a region of another sketch -- a helper defined there and
+  # called from here -- is in that sketch, so that is where it opens.
+  unless name is Editor.name()
+    try
+      await selectSketch name
+    catch error
+      say "cannot open #{name}: #{error.message ? error}", 'err'
+      return
+  Editor.jumpTo step.line
+  undefined
+
+# Where the keyboard goes once a run has failed. A syntax error is fixed where
+# it is, so the cursor goes there. A runtime error offers its stack, marks
+# the innermost line without moving the cursor, and gives the prompt the
+# keyboard. A canvas focus still pending from the run is cancelled either way:
+# a run that fails inside one tick would otherwise snatch the keyboard back.
+showFailure = ({kind, line, column, frames, message}) ->
+  clearTimeout canvasTimer
+  mine = sketchOf(inFlight?.name) is Editor.name()
+  if kind is 'syntax'
+    hideVars()
+    # Regions are dedented before they compile, so a column comes back short
+    # by however much was cut.
+    Editor.jumpTo line, (column + (inFlight?.cut ? 0) if column?) if mine
+    return
+  frames ?= []
+  showStack frames, message
+  Editor.showError frames[0].line if frames[0]?.line? and sketchOf(frames[0].name) is Editor.name()
+  promptLine.focus()
+  undefined
+
 # buffer.fps paces swaps, so the gate belongs on the branch that serves one.
 # The worker stays parked until its frame is due, which is the whole point:
 # a sketch asking for 30fps should spend the rest of the time asleep.
@@ -743,6 +826,7 @@ messages =
       code = if step.text then ":  #{step.text}" else ''
       say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
     setStatus 'error'
+    showFailure data
 
 # nativeImage hands back BGRA; the framebuffer wants RGBA. One swizzle here
 # beats one per pixel at draw time.
@@ -779,10 +863,14 @@ answerLoad = (url) ->
 # The worker runs one thing at a time and its inbox is not a queue we want:
 # a run posted while a sketch is busy would sit there and fire the moment the
 # sketch ended, which looks exactly like the sketch running itself twice.
-send = ({source, name}) ->
+send = ({source, name, cut}) ->
   if status in BUSY
     say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
     return
+  # The last failure's marks are stale the moment something else runs.
+  inFlight = {name, cut: cut ? 0}
+  Editor.showError null
+  hideVars()
   Atomics.store i32, H.INTERRUPT, 0   # a stop leaves the flag raised
   setStatus 'running'
   worker.postMessage {type: 'run', source, name}
@@ -880,12 +968,22 @@ armFirst = (source, run) ->
   setStatus before if status is 'arming'
   run()
 
-runSource = (source, name) -> armFirst source, ->
-  return start {source, name} unless worker
-  return pending = {source, name} if status is 'booting'
-  send {source, name}
+runSource = (source, name, cut) -> armFirst source, ->
+  return start {source, name, cut} unless worker
+  return pending = {source, name, cut} if status is 'booting'
+  send {source, name, cut}
 
 runFresh = (source, name) -> armFirst source, -> start {source, name}
+
+# A sketch you run is almost always one you are about to play with, so Run
+# and :eval give it the keyboard. Region eval does not: that is the loop of
+# redefining something and carrying on typing, and the next keystroke belongs
+# to vim. A tick late on purpose -- :run and :eval come through vim's command
+# line, which runs the command and then, still inside the same keydown,
+# focuses the editor as it closes.
+toCanvas = ->
+  clearTimeout canvasTimer
+  canvasTimer = setTimeout (-> stage.focus()), 0
 
 # Non-comment source lines, the count he used to fish out of the REPL. With a
 # :target set it reads count/limit and turns red once the limit is passed.
@@ -899,9 +997,9 @@ Editor.mount document.getElementById('editor'),
   onStep:     stepFrame
   onGo:       continueAll
   onLine:     stepLine
-  onEval:     (source, name) -> runSource source, "#{name} (region)"
-  onEvalAll:  (source, name) -> runSource source, name
-  onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; runFresh source, name
+  onEval:     (source, name, cut) -> runSource source, "#{name}#{REGION}", cut
+  onEvalAll:  (source, name) -> toCanvas(); runSource source, name
+  onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; toCanvas(); runFresh source, name
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
   onHelp:     showHelp
   onLines:    (lines) -> setLines lines; watchBuffer()
@@ -940,7 +1038,7 @@ toggleEditor = ->
   resize()
 
 document.getElementById('evalRegion').onclick = -> Editor.evalRegion()
-document.getElementById('runFresh').onclick   = -> runFresh Editor.all(), Editor.name()
+document.getElementById('runFresh').onclick   = -> toCanvas(); runFresh Editor.all(), Editor.name()
 document.getElementById('pauseFrame').onclick = -> if status in PAUSED then continueAll() else pauseFrames()
 document.getElementById('stepFrame').onclick  = stepFrame
 document.getElementById('stepLine').onclick   = stepLine

@@ -58,8 +58,8 @@
     display: grid; grid-template-rows: 1fr auto; grid-template-columns: 1fr auto;
     min-height: 0; background: var(--panel);
   }
-  /* Only there while a sketch is line paused, so it costs the console nothing
-     the rest of the time. */
+  /* Only there while a sketch is line paused, or after a runtime error to show
+     its stack, so it costs the console nothing the rest of the time. */
   #vars {
     grid-row: 1 / span 2; grid-column: 2; width: 36ch; min-height: 0;
     overflow: auto; padding: .3rem 0; border-left: 1px solid var(--edge);
@@ -77,6 +77,12 @@
   .var-name::before { content: ''; display: inline-block; width: 1.6ch; opacity: .5; }
   .var.openable .var-name::before      { content: '\25B8'; }
   .var.openable.open .var-name::before { content: '\25BE'; }
+  .stack-head  { color: #ff6b6b; white-space: normal; }
+  .stack-frame { display: flex; flex-direction: column; padding: .15rem .6rem .15rem 1.1rem; }
+  .stack-frame.openable { cursor: pointer; }
+  .stack-frame.openable:hover { background: #ffffff0a; }
+  .stack-frame.chosen { box-shadow: inset 3px 0 0 #ff6b6b; background: #ff6b6b1a; }
+  .stack-code { opacity: .55; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #console   { grid-row: 1; grid-column: 1; }
   #promptRow { grid-row: 2; grid-column: 1; }
   #console { overflow-y: auto; padding: .4rem .6rem; white-space: pre-wrap; min-height: 0; }

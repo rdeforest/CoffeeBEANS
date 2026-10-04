@@ -293,14 +293,18 @@
 
   const fail = (stage, error) => {
     // A compile error carries its own CoffeeScript location; a runtime error
-    // carries a stack that has to be mapped back through the source map.
+    // carries a stack that has to be mapped back through the source map. The
+    // renderer answers the two differently -- a syntax error puts the cursor
+    // on it, a runtime one offers the stack -- so the kind travels with it.
     const location = error && error.location
     const frames = location ? [] : traceback(error)
     postMessage({
       type: 'error',
       stage,
+      kind: location ? 'syntax' : 'runtime',
       message: String((error && error.message) || error),
       line: location ? location.first_line + 1 : (frames[0] && frames[0].line),
+      column: location ? location.first_column + 1 : undefined,
       frames,
     })
   }

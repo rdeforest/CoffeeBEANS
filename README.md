@@ -178,6 +178,17 @@ it first, or Run, which replaces the worker and never has to ask. Otherwise
 the second eval would fire the instant the first ended and look exactly like
 the sketch starting itself again.
 
+**Where the keyboard goes.** Run and `:eval` hand it to the canvas, because
+a sketch you just ran is almost always one you are about to play with.
+Region eval leaves it in the editor: that is the loop of redefining something
+and carrying on typing, and the next keystroke belongs to vim. If the run
+fails, a syntax error puts the cursor on the offending character and marks
+its line. A runtime error lists its stack beside the console, innermost
+first, with that line marked in the editor, and gives the `>` prompt the
+keyboard -- the frames are gone, but the image still holds every top-level
+name worth asking about. Click a frame to go to its line; a frame from a
+region of another sketch opens that sketch.
+
 Modes persist in the live worker too: the current colour, the draw target,
 double buffering, any frame cap. `screen` resets buffering and the cap, like
 BASIC's SCREEN reset pages, so a sketch starts in the mode it asks for

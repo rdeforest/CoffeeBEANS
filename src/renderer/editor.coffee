@@ -69,6 +69,42 @@ showLine = (n) ->
   view.dispatch
     effects: [pausedEffect.of(from), EditorView.scrollIntoView from, y: 'center']
 
+# Where a run broke. Unlike the paused line it does not follow edits: the
+# first keystroke there is the start of the fix, and a red line that kept up
+# with the typing would go on saying the code is broken.
+errorEffect = StateEffect.define()
+errorMark   = Decoration.line class: 'cm-error-line'
+
+errorField = StateField.define
+  create:  -> Decoration.none
+  update:  (marks, tr) ->
+    marks = Decoration.none if tr.docChanged
+    for effect in tr.effects when effect.is errorEffect
+      marks = if effect.value? then Decoration.set [errorMark.range effect.value] else Decoration.none
+    marks
+  provide: (field) -> EditorView.decorations.from field
+
+lineStart = (n) -> view.state.doc.line(n).from if n? and 1 <= n <= view.state.doc.lines
+
+showError = (n) ->
+  from = lineStart n
+  return view.dispatch effects: errorEffect.of null unless from?
+  view.dispatch effects: [errorEffect.of(from), EditorView.scrollIntoView from, y: 'center']
+
+# The cursor on a line, the line marked, and the keyboard handed over. A
+# syntax error knows its column; a stack frame only knows its line, so it
+# gets the first thing written there.
+jumpTo = (n, column) ->
+  from = lineStart n
+  return unless from?
+  line   = view.state.doc.line n
+  offset = if column? then column - 1 else line.text.search /\S|$/
+  at     = from + Math.min Math.max(0, offset), line.length
+  view.dispatch
+    selection: {anchor: at}
+    effects:   [errorEffect.of(from), EditorView.scrollIntoView at, y: 'center']
+  view.focus()
+
 # --- regions ----------------------------------------------------------------
 
 # A bare selection is what you asked for. A bare cursor means the paragraph
@@ -87,12 +123,13 @@ regionAt = (state) ->
 
 # An indented fragment is a syntax error on its own, so a region taken from
 # inside a block has to come back out to column zero.
+# Hands back how much it cut as well: a syntax error in the region reports
+# its column in the dedented text, and the cursor belongs in the buffer's.
 dedent = (text) ->
   widths = (line.match(/^[ \t]*/)[0].length for line in text.split '\n' when line.trim())
-  return text unless widths.length
-  cut = Math.min widths...
-  return text unless cut
-  (line[cut..] for line in text.split '\n').join '\n'
+  cut    = if widths.length then Math.min widths... else 0
+  return {text, cut: 0} unless cut
+  {text: (line[cut..] for line in text.split '\n').join('\n'), cut}
 
 # --- persistence ------------------------------------------------------------
 
@@ -207,6 +244,7 @@ theme = EditorView.theme {
   '.cm-activeLineGutter':     {backgroundColor: 'transparent', color: palette.coffee}
   '.cm-ran':                  {backgroundColor: '#C0FFEE33', transition: 'background-color .2s'}
   '.cm-paused-line':          {backgroundColor: '#e8c37e2e', boxShadow: 'inset 3px 0 0 #e8c37e'}
+  '.cm-error-line':           {backgroundColor: '#ff6b6b26', boxShadow: 'inset 3px 0 0 #ff6b6b'}
   '.cm-over-limit':           {backgroundColor: '#ff6b6b22', boxShadow: 'inset 2px 0 0 #ff6b6b'}
   '.cm-fat-cursor':           {backgroundColor: '#C0FFEE99 !important', outline: 'none !important'}
   '.cm-vim-panel':            {backgroundColor: '#17171b', color: palette.coffee, padding: '0 .4rem'}
@@ -236,7 +274,8 @@ evalRegion = ->
   # -- an error, a traceback, the line a breakpoint stopped on -- is a line
   # of the buffer rather than of the region.
   above = '\n'.repeat view.state.doc.lineAt(from).number - 1
-  handlers.onEval? above + dedent(view.state.sliceDoc from, to), current
+  {text, cut} = dedent view.state.sliceDoc from, to
+  handlers.onEval? above + text, current, cut
   true
 
 evalAll = ->
@@ -311,6 +350,7 @@ Editor =
           highlightSelectionMatches()
           flashField
           pausedField
+          errorField
           limitField
           StreamLanguage.define coffeeScript
           syntaxHighlighting highlight
@@ -340,7 +380,9 @@ Editor =
   name:      -> current
   all:       -> view.state.doc.toString()
   evalRegion: -> view.focus(); evalRegion()
-  showLine: showLine
+  showLine:  showLine
+  showError: showError
+  jumpTo:    jumpTo
   view:      -> view
   save:   save
   focus:  -> view.focus()
