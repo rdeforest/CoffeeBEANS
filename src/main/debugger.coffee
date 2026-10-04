@@ -38,6 +38,12 @@ HELPERS = ['modulo', 'boundMethodCheck']
 CHASE_LIMIT = 200
 
 SETUP_LIMIT = 2000
+
+# How long the prompt may run against a paused frame before V8 is told to
+# give up. `Array.from forever()` never returns, and while it runs nothing
+# else may reach the worker: a step sent into an evaluation makes V8 pause
+# inside JS the inspector itself is running, and the renderer segfaults.
+EVAL_LIMIT  = 3000
 ITEMS       = 200            # members listed when an object is opened
 
 # --- source maps ------------------------------------------------------------
@@ -179,6 +185,7 @@ module.exports = (win) ->
   scripts  = new Map     # scriptId -> {url, mapUrl, map}
   stopped  = null        # the pause we are sitting in: {frames, where, seq}
   chase    = null        # a step or pause still looking for a sketch line
+  asking   = null        # the prompt's evaluation, while it runs
   seq      = 0
   devtools = no
 
@@ -433,6 +440,7 @@ module.exports = (win) ->
   # and `buffer.swap` are one step, not a walk through their insides.
   step = ->
     return false unless stopped
+    return 'evaluating' if asking
     top   = stopped.frames[0]
     where = locate top
     chase =
@@ -448,6 +456,11 @@ module.exports = (win) ->
   # notice the interrupt, and must not stop at a breakpoint on the way.
   resume = (skip = no) ->
     return false unless enabled
+    # Stop has to get through, so it waits out the evaluation, which
+    # EVAL_LIMIT bounds; anything else is the author's to retry.
+    if asking
+      return 'evaluating' unless skip
+      await asking.catch(->)
     chase = null
     await send('Debugger.setSkipAllPauses', skip: yes).catch(->) if skip
     return true unless stopped
@@ -458,6 +471,14 @@ module.exports = (win) ->
   # author asked about *this* call's `angle`. Assignments reach the frame.
   evaluate = (source) ->
     return null unless stopped
+    return {text: '*** still evaluating the last line ***', kind: 'sys'} if asking
+    asking = answerFor source
+    try
+      return await asking
+    finally
+      asking = null
+
+  answerFor = (source) ->
     try
       js = CoffeeScript.compile source, bare: yes
     catch error
@@ -467,8 +488,12 @@ module.exports = (win) ->
     # frame's own untouched -- `angle = 0` would change nothing.
     js = js.replace /^\s*var [^;]*;\s*/, ''
     top = stopped.frames[0]
-    {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
-      callFrameId: top.callFrameId, expression: js, generatePreview: yes
+    try
+      {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
+        callFrameId: top.callFrameId, expression: js, generatePreview: yes, timeout: EVAL_LIMIT
+    catch error
+      throw error unless /terminated/.test error.message
+      return {text: "*** gave up after #{EVAL_LIMIT / 1000}s -- does it ever finish? ***", kind: 'err'}
     if exceptionDetails
       text = exceptionDetails.exception?.description?.split('\n')[0] ? exceptionDetails.text
       return {text, kind: 'err'}

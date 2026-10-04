@@ -455,6 +455,7 @@ goFrames = ->
 # From a line pause, a frame step runs on to the next frame boundary and holds
 # there: the swap it reaches is simply not served.
 stepFrame = ->
+  return stillAsking() if linePaused and debugAsking
   if linePaused
     pauseFrames()
     return beans.debug.resume()
@@ -475,10 +476,16 @@ linePause = ->
     return say '*** could not pause -- is DevTools open? ***', 'sys'
   goFrames()
 
+# The prompt's answer is still being worked out inside the paused frame, and
+# V8 must not be moved on under it (main refuses too; this is the saying so).
+stillAsking = -> say '*** still evaluating at the prompt ***', 'sys'
+
 stepLine = ->
+  return stillAsking() if linePaused and debugAsking
   if linePaused then beans.debug.step() else linePause()
 
 continueAll = ->
+  return stillAsking() if linePaused and debugAsking
   goFrames()
   beans.debug.resume() if linePaused
 
@@ -996,6 +1003,8 @@ do ->
   frame()
   startSound()
   say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, :help for the rest', 'sys'
+  if params.has 'crashed'
+    say "*** the app crashed (#{params.get 'crashed'}) and has restarted -- your sketch is as it was last saved ***", 'err'
 
   try
     names  = await beans.list()

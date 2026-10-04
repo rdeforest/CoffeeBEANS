@@ -233,6 +233,14 @@ createWindow = ->
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
   win.webContents.on 'console-message', (event) ->
     console.log "[renderer] #{event.message}"
+  # The sketch worker lives in the renderer's process, so a crash in either
+  # takes the page with it and leaves a black window that says nothing. Come
+  # back up and say what happened. A test run lets it lie: a suite that
+  # reloaded past a crash could go on to pass.
+  win.webContents.on 'render-process-gone', (event, {reason}) ->
+    console.error "renderer gone: #{reason}"
+    return if reason is 'clean-exit' or process.env.BEANS_TEST or win.isDestroyed()
+    win.loadURL "app://beans/src/renderer/index.html?crashed=#{encodeURIComponent reason}"
   # The only way to exercise backgroundThrottling from a test run: a hidden
   # window is not throttled, a minimised one is. With throttling on, this
   # makes every buffer.swap in the suite hang until its deadline.

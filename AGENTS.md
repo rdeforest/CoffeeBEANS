@@ -7,7 +7,7 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 150 checks, ~125s
+    npm test                                 all 153 checks, ~125s
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging lifecycle drawing color
@@ -121,6 +121,13 @@ Verified in Electron 44 while building it; do not re-derive.
   `stepOut` needed to leave `beans-breakpoint.js`.
 - **`Target.setAutoAttach` answers after attaching the existing worker**, so
   the session is known when it resolves; no polling.
+- **Nothing may reach V8 while the prompt is evaluating in a paused frame.**
+  A `stepInto` sent into a still-running `evaluateOnCallFrame` segfaults the
+  renderer (null deref in v8_inspector on the DedicatedWorker thread; found
+  2026-10-01, reproduced 2026-10-03). Step and continue are refused while one
+  is out; Stop waits it out. `timeout` on `evaluateOnCallFrame` bounds it
+  (`EVAL_LIMIT`): V8 terminates the expression, the call rejects with
+  "Execution was terminated", and the paused frame stays usable.
 - **`t.settle()` counts both pauses as settled.** A check that waits for a
   Stop to finish has to wait for `ready` itself.
 

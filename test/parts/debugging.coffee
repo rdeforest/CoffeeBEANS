@@ -209,3 +209,37 @@ print 'after'
   await t.evalRegion()
   text = await settled()
   check 'a region reports buffer line numbers', text.includes('(line 6)'), JSON.stringify text.trim()
+
+  # 16. An endless expression at the prompt, then a step. The step used to
+  # reach V8 while it was still inside the evaluation and the renderer
+  # segfaulted. It must wait its turn, and the evaluation must give up.
+  await setDoc """
+screen 320, 200
+n = 0
+breakpoint
+print 'after'
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  start = await nextPause 0
+  await js "Prompt.ask('n = 0; loop then n += 1'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await js "Stepping.line(); return true"
+  alive = await until_ (-> js("return Prompt.pending() === false").catch(-> null)), 15000
+  await t.quiet()
+  text  = await consoleText()
+  check 'a step while the prompt is still evaluating waits, and the evaluation gives up',
+    alive and (await status()) is 'line paused' and (await pauseNumber()) is start and
+      text.includes('still evaluating') and text.includes('gave up'),
+    "alive=#{alive} status=#{await status()} seq #{start} -> #{await pauseNumber()} console=#{JSON.stringify text.trim()}"
+  # the loop's assignments reached the frame before it was cut off
+  check 'the paused frame still answers after an evaluation gives up',
+    (await ask 'n > 1000').includes('true'), JSON.stringify (await consoleText()).trim()
+
+  # Stop cannot be refused, so it waits the evaluation out instead
+  await js "Prompt.ask('loop then n += 1'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await click 'stop'
+  stoppedOk = await until_ (-> (await status()) is 'ready'), 15000
+  check 'Stop during an endless evaluation still stops', stoppedOk, "status=#{await status()}"
