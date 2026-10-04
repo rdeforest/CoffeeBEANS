@@ -284,14 +284,27 @@ createWindow = ->
   # and with throttling on every buffer.swap in the suite hangs until its
   # deadline.
   #
-  # Linux is different, and unresolved. A never-shown window there that draws
-  # -- and this one draws every tick -- gets about one animation frame a
-  # second whatever backgroundThrottling says, so the frame-timing checks in
-  # repl, buffers, stepping and debugging fail on a hidden run and pass with
-  # BEANS_SHOW. A window shown first keeps full rate even minimised, so real
-  # use is unaffected. Minimising a never-shown window is a coin toss, so it
-  # is not done here (Claude, 2026-10-04; see AGENTS.md, Platform facts).
-  win.once 'ready-to-show', -> win.minimize() if process.env.BEANS_MINIMIZE
+  # Linux needs more. A never-shown window there that draws -- and this one
+  # draws every tick -- gets about one animation frame a second whatever
+  # backgroundThrottling says, which failed the frame-timing checks on every
+  # hidden run. A window that has been mapped once keeps full rate even
+  # minimised, so a hidden Linux run shows itself inactive (no focus taken)
+  # and then minimises.
+  #
+  # The beat between is not decoration. `show` seems to fire when the map is
+  # asked for, not when it has happened, and an iconify that overtakes the
+  # map leaves a window that was never mapped. Minimised straight from
+  # `show`, the timing parts passed two runs in three; 300ms later, eight in
+  # eight (Claude, 2026-10-04). The race is the likeliest reading of that,
+  # not a proven one -- if the timing parts start failing hidden again, this
+  # is the first place to look. See AGENTS.md, Platform facts.
+  mapFirst = hidden and process.platform is 'linux'
+  win.once 'ready-to-show', ->
+    if mapFirst
+      win.once 'show', -> setTimeout (-> win.minimize() unless win.isDestroyed()), 300
+      win.showInactive()
+    else if process.env.BEANS_MINIMIZE
+      win.minimize()
   capture win
   watchSketches win
   debugSketches win

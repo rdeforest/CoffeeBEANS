@@ -7,7 +7,7 @@ and why, and the facts that cost something to learn.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 153 checks, ~125s
+    npm test                                 all 171 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
@@ -15,8 +15,8 @@ color loading shell input sound perf`. Each starts from a reset app, so running 
 the same thing as running it in the middle of everything else.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
-run never steals focus; on Linux it starves the frame-timing checks, see
-Platform facts),
+run never steals focus; on Linux a hidden run is shown inactive and then
+minimised, see Platform facts),
 `BEANS_MINIMIZE=1` minimises it (on macOS the only way to exercise
 `backgroundThrottling`), `BEANS_DEVTOOLS=1` opens DevTools detached,
 `BEANS_CAPTURE=2500` screenshots to `tmp/` then quits, `BEANS_QUERY='?sketch=
@@ -30,8 +30,7 @@ of the main process and Electron shows a modal dialog. Redirect to a file.
 that it always exited 0 (Electron's quit path ignores `process.exitCode`; the
 suite now uses `app.exit`), which is how the Linux suite stayed red for weeks
 with nobody hearing. Trust the exit status now, and run the suite on Linux as
-well as the Mac before calling something done -- with `BEANS_SHOW=1` there,
-until the hidden-window problem in Platform facts is solved.
+well as the Mac before calling something done.
 
 The suite waits on the app, never on the clock: `t.settle()` polls the status
 line, `t.quiet()` polls `Printing.pending()` (bytes still in the print ring or
@@ -273,17 +272,33 @@ Each of these passed on the Mac and failed on Linux, so check both.
   was shown first keeps full rate even minimised afterwards -- so this is a
   test-run problem, not one a user meets. Timers are never affected (about
   245 `setTimeout(0)` wake-ups a second throughout). CoffeeBEANS draws every
-  tick, so in a hidden test run the present loop ticks once or twice a second
+  tick, so a hidden test run's present loop ticked once or twice a second
   and the frame-timing checks in `repl`, `buffers`, `stepping` and
-  `debugging` fail; they pass with `BEANS_SHOW=1`. Minimising a never-shown
-  window is a coin toss (two probe runs full rate, one starved), which is why
-  doing that was tried and taken out. Measured by Claude, 2026-10-04: a
-  40-line probe drawing one `putImageData` a frame, and in the app a sketch
-  counting `frames` (bumped every tick) against its own swaps -- one for
-  one, so the swap handshake is innocent. **Unresolved.** The candidate fix
-  belongs in the harness, not the present loop: show the test window
-  inactive and minimise it once it has been mapped, which held full rate in
-  the probe but is not yet tried in the suite.
+  `debugging` failed. Measured by Claude, 2026-10-04: a 40-line probe
+  drawing one `putImageData` a frame, and in the app a sketch counting
+  `frames` (bumped every tick) against its own swaps -- one for one, so the
+  swap handshake is innocent.
+
+  **The fix** (`createWindow`): a hidden Linux run shows the window inactive,
+  then minimises it 300ms after `show`. Results for those four parts,
+  hidden: never shown 0 of 2 runs passed; minimised without being shown, a
+  coin toss; shown then minimised straight from `show`, 2 of 3; with the
+  300ms beat, 8 of 8, and the full suite green. The likeliest reading is
+  that `show` fires when the map is requested, and an iconify that overtakes
+  the map leaves a window that was never mapped. Not proven. If the timing
+  parts start failing hidden again, look there first. The cost: the test
+  window appears for 300ms, without taking focus (checked with
+  `_NET_ACTIVE_WINDOW` sampled through whole runs), and sits minimised in
+  the panel while the suite runs.
+
+  **The machine these numbers came from**, in case they do not reproduce: a
+  Linux X11 session under Marco, three 2560x1440 monitors across two GPUs --
+  the middle one (DP-4, primary, 144Hz) on an RTX 5090, the outer two (left
+  HDMI-1-1 at 60Hz, right HDMI-1-0 at 144Hz) on an RTX 4070. Chromium ran
+  one 144Hz frame clock for every window, including one placed on the 60Hz
+  monitor, so a frame rate measured here is that clock, not the monitor's
+  -- and on the left screen the fps meter reads 144 while the screen shows
+  60. Untested on a single-GPU Linux machine.
 - **Vim's command line focuses the editor as it closes**, after running the
   command and inside the same keydown. Anything an ex command wants focused
   has to be focused a tick later (`toCanvas`), and a run that fails inside
