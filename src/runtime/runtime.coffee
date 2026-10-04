@@ -465,8 +465,10 @@ text = (parts...) ->
     cursor.col += 1
   undefined
 
+# Rounded like the shapes: plot indexes a typed array, and a write at a
+# fractional index is silently dropped, so 10.5 used to draw nothing.
 textAt = (x, y, parts...) ->
-  writeAt x, y, parts.join(' '), brush(), paperBrush()
+  writeAt Math.round(x), Math.round(y), parts.join(' '), brush(), paperBrush()
   undefined
 
 pget = (x, y) ->

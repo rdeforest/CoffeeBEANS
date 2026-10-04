@@ -237,6 +237,11 @@ textAt 0, 0, 'a-with-accent-here'.charAt(0)
 textAt 40, 0, String.fromCharCode(233)
 print 'missingBox=' + (pget(40, 0) is COLORS.white and pget(47, 0) is COLORS.white)
 
+# a fractional position rounds instead of drawing nothing
+cls()
+textAt 0.4, 0.4, 'A'
+print 'fractional=' + (pget(2, 0) is COLORS.white)
+
 print 'timing=' + (elapsed >= 0 and frames >= 0)
 """
   await setDoc texting
@@ -246,7 +251,7 @@ print 'timing=' + (elapsed >= 0 and frames >= 0)
   text2  = await settled()
   wanted = ['glyphOn=true', 'glyphOff=true', 'width=40', 'located=true',
             'scaled=true', 'scaledWidth=32', 'wrapped=true',
-            'onSurface=true', 'screenClean=true', 'missingBox=true', 'timing=true']
+            'onSurface=true', 'screenClean=true', 'missingBox=true', 'fractional=true', 'timing=true']
   absent = (want for want in wanted when not text2.includes want)
   check 'text renders, positions, scales and retargets', absent.length is 0,
     if absent.length then "missing #{absent.join ', '}" else 'all eleven'
