@@ -294,8 +294,11 @@ createWindow = ->
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
         failures = 1
-      process.exitCode = if failures then 1 else 0
-      app.quit()
+      # app.exit, not process.exitCode then app.quit: Electron's quit path
+      # ignores exitCode, so a red suite reported success to the shell
+      # (checked by Claude, 2026-10-04). Nothing here hooks before-quit or
+      # will-quit, which are what app.exit skips.
+      app.exit if failures then 1 else 0
   win
 
 installMenu = ->
