@@ -1,4 +1,4 @@
-screen w = 320, h = 200
+screen w = 640, h = 400
 
 origin = [ w2 = w / 2
            h2 = h / 2 ]
