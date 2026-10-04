@@ -1,18 +1,20 @@
-degrees = (n) -> n * pi / 181
+degrees = (n) -> n * pi / 180
 
 show = (v) -> #print JSON.stringify v, null, 2
 
-angleStep      = degrees 5
+angleStep      = degrees 2
 drawScale      = 50
-expansionDepth = 1
+expansionDepth = 3
 paramsChanged  = true
 turnSpeed      = degrees 5
 walkSpeed      = 50
+plantTurnSpeed = degrees 1
+plantTurning   = false
+plantAngle     = 0
 
 w2 = 1/2 * w = 320
 h2 = 1/2 * h = 200
 
-# Right hand universe, Z is into the screen
 RIGHT = [ 1,  0,  0]
 LEFT  = [-1,  0,  0]
 UP    = [ 0,  1,  0]
@@ -73,14 +75,23 @@ angleDiff = (a1, a2) ->
   a2 = wrapRadians a2
   a2 - a1
 
-worldToCamera = (p) ->
-  p = p.map (x, i) -> x - camera.loc[i]
+negateVec = (v) -> v.map (x) -> -x
 
-  pLeft = cross UP, p
-  pAngle = angleDiff (atan2 FWD[2], FWD[0]), (atan2 camera.heading[2], camera.heading[0])
-  [p, pLeft] = rotate p, pLeft, pAngle
-  p
-  
+dot = (a, b) ->
+  a .map    (x, i) -> x * b[i]
+    .reduce (a, b) -> a + b
+
+worldToCamera = (p) ->
+  d = p.map (x, i) -> x - camera.loc[i]
+
+  c_up    = cross camera.heading, camera.left
+  c_right = negateVec camera.left
+
+  x_c =     dot d, c_right
+  y_c =     dot d, c_up
+  z_c = 0 - dot d, camera.heading
+
+  [x_c, y_c, z_c]
 
 worldToScreen = (p) ->
   [x3, y3, z3] = worldToCamera p
@@ -144,9 +155,7 @@ turtle =
         turtle.loc.map (x, i) ->
           x + drawScale * turtle.heading[i]
 
-drawDesign = (design, depth) ->
-  cls()
-
+drawStage = ->
   corners = [ [ -w2,  h2, view.far  * 1.1 ]
               [  w2,  h2, view.far  * 1.1 ]
               [  w2, -h2, view.far  * 1.1 ]
@@ -161,9 +170,18 @@ drawDesign = (design, depth) ->
     p2 = corners[(i + 1) % corners.length]
     line3d p1, p2
 
+drawDesign = (design, depth) ->
+  cls()
+  drawStage()
+
+  turtleLeft = LEFT
+  if plantTurning
+    plantAngle += plantTurnSpeed
+    turtleLeft = [cos(plantAngle), 0, sin(plantAngle)]
+
   turtle.loc     = [ 0, -h2, view.near + (view.far - view.near) / 2 ]
   turtle.heading = UP
-  turtle.left    = LEFT
+  turtle.left    = turtleLeft
 
   for op from expander design, depth
     if 'function' is typeof handler = turtle.ops[op]
@@ -174,16 +192,18 @@ drawDesign = (design, depth) ->
 keyBindings =
   'leftbracket'  : -> expansionDepth       += +1
   'rightbracket' : -> expansionDepth       += -1
-  ','            : -> challengePlant.angle += angleStep * -1
-  '.'            : -> challengePlant.angle += angleStep * +1
-  '-'            : -> drawScale            *= 1         - 0.05
-  '+'            : -> drawScale            *= 1         + 0.05
+  'comma'        : -> challengePlant.angle += angleStep * -1
+  'period'       : -> challengePlant.angle += angleStep * +1
+  'minus'        : -> drawScale            *= 1         - 0.05
+  'equals'       : -> drawScale            *= 1         + 0.05
 
   'w'            : -> camera.loc = camera.loc.map (x, i) -> x + camera.heading[i] * walkSpeed
   's'            : -> camera.loc = camera.loc.map (x, i) -> x - camera.heading[i] * walkSpeed
 
   'a'            : -> [camera.heading, camera.left] = rotate camera.heading, camera.left,  turnSpeed
   'd'            : -> [camera.heading, camera.left] = rotate camera.heading, camera.left, -turnSpeed
+
+  'space'        : -> plantTurning = not plantTurning
 
 keyWasDown = false
 
@@ -194,11 +214,10 @@ handleInput = ->
 
   for keyName in keys.down()
     if handler = keyBindings[keyName]
-      print "handling '#{keyName}'"
+      #print "handling '#{keyName}'"
       handler()
       #print JSON.stringify {expansionDepth, angle: challengePlant.angle, drawScale}
 
-      paramsChanged = true
       keyWasDown    = true
     else
       print "No handler for key '#{keyName}'"
@@ -206,9 +225,6 @@ handleInput = ->
 screen w, h
 
 loop
-  if paramsChanged
-    drawDesign challengePlant, expansionDepth
-    paramsChanged = false
-
+  drawDesign challengePlant, expansionDepth
   handleInput()
   wait 1
