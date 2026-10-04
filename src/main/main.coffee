@@ -284,12 +284,13 @@ createWindow = ->
   # and with throttling on every buffer.swap in the suite hangs until its
   # deadline.
   #
-  # Linux is different, and unresolved. A never-shown window there gets about
-  # one animation frame a second whatever backgroundThrottling says, so the
-  # frame-timing checks in repl, buffers, stepping and debugging fail on a
-  # hidden run and pass with BEANS_SHOW (Claude, 2026-10-04). Minimising
-  # instead was tried the same day and is intermittent -- the same parts
-  # passed in one run and failed in the next -- so it is not done here.
+  # Linux is different, and unresolved. A never-shown window there that draws
+  # -- and this one draws every tick -- gets about one animation frame a
+  # second whatever backgroundThrottling says, so the frame-timing checks in
+  # repl, buffers, stepping and debugging fail on a hidden run and pass with
+  # BEANS_SHOW. A window shown first keeps full rate even minimised, so real
+  # use is unaffected. Minimising a never-shown window is a coin toss, so it
+  # is not done here (Claude, 2026-10-04; see AGENTS.md, Platform facts).
   win.once 'ready-to-show', -> win.minimize() if process.env.BEANS_MINIMIZE
   capture win
   watchSketches win

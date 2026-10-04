@@ -267,17 +267,23 @@ Each of these passed on the Mac and failed on Linux, so check both.
   under `fs.watch(dir, {recursive: true})`, save a file twice by renaming a
   new one over it; if the second save reports, the fix has arrived and the
   hand walk could go back to `recursive`.
-- **A never-shown window gets about one animation frame a second on Linux**,
-  `backgroundThrottling: no` or not, so the frame-timing checks in `repl`,
-  `buffers`, `stepping` and `debugging` fail on a hidden run there and pass
-  with `BEANS_SHOW=1`. **Unresolved.** Minimising instead was tried on
-  2026-10-04 and is intermittent: `repl,buffers` failed alone and passed with
-  `editor` in front, so no particular part causes it. Untried: a timer
-  fallback for the present loop when animation frames stop arriving, or a
-  Chromium switch such as `disable-gpu-vsync` for test runs. Whether a real
-  user minimising the window mid-sketch on Linux drops to 1fps too -- X11
-  window managers usually unmap an iconified window -- is unverified, and is
-  the question that decides between those two.
+- **A never-shown window that draws gets about one animation frame a second
+  on Linux**, `backgroundThrottling: no` or not. Both halves matter: the same
+  never-shown window drawing nothing gets the full 144/s, and a window that
+  was shown first keeps full rate even minimised afterwards -- so this is a
+  test-run problem, not one a user meets. Timers are never affected (about
+  245 `setTimeout(0)` wake-ups a second throughout). CoffeeBEANS draws every
+  tick, so in a hidden test run the present loop ticks once or twice a second
+  and the frame-timing checks in `repl`, `buffers`, `stepping` and
+  `debugging` fail; they pass with `BEANS_SHOW=1`. Minimising a never-shown
+  window is a coin toss (two probe runs full rate, one starved), which is why
+  doing that was tried and taken out. Measured by Claude, 2026-10-04: a
+  40-line probe drawing one `putImageData` a frame, and in the app a sketch
+  counting `frames` (bumped every tick) against its own swaps -- one for
+  one, so the swap handshake is innocent. **Unresolved.** The candidate fix
+  belongs in the harness, not the present loop: show the test window
+  inactive and minimise it once it has been mapped, which held full rate in
+  the probe but is not yet tried in the suite.
 - **Vim's command line focuses the editor as it closes**, after running the
   command and inside the same keydown. Anything an ex command wants focused
   has to be focused a tick later (`toCanvas`), and a run that fails inside
