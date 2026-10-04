@@ -4,6 +4,25 @@ README says what CoffeeBEANS is and how to use it. NOTES.md is the design
 diary. This file is the working state: what is half-built, what was decided
 and why, and the facts that cost something to learn.
 
+## Before starting work
+
+**Check upstream first**, every session, before touching anything:
+
+    git fetch && git status
+    git log --oneline HEAD..origin/main      # what arrived
+    git log --oneline origin/main..HEAD      # what is local only
+
+Robert works on this repo from two machines and from several kinds of Claude
+session (CLI, desktop, cowork), so a local copy is often behind. Read what
+arrived before building on top of it, and say if any of it contradicts what
+you were about to do.
+
+**And never rewrite a commit without checking it is unpushed** --
+`git branch -r --contains <commit>` prints nothing for a local-only one. On
+2026-10-04 a Claude session amended a commit Robert had already pushed, and
+his next pull conflicted with itself. Once pushed, a correction is a new
+commit, not an amend.
+
 ## Running and testing
 
     npm start                                the app
