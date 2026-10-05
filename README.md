@@ -154,37 +154,48 @@ example added in an update arrives on your next launch while an example you
 edited keeps your edit and one you deleted stays deleted.
 
 The directory is a directory rather than a bare pile of sketches so it has
-somewhere to grow: `assets/` and a preferences file are the next things
-expected to land beside `sketches/`.
+somewhere to grow. Beside `sketches/` sit `assets/`, where `load` caches
+what it downloads, and `settings.json`, what the app remembers about how you
+like to work -- for now, whether Vim Keys is ticked.
 
 ## Editing
 
-The editor pane is CodeMirror with ordinary keys -- or vim's, once Edit >
-Vim Keys is ticked; the app remembers -- and the file on disk is the only
-source of truth: edits autosave, and writes from vim in another window
-reload the pane. Running is an operation on a region:
+The editor pane is CodeMirror with the keys any text editor has -- Ctrl-Z
+to undo, Ctrl-F to find, and the rest -- and the file on disk is the only
+source of truth: edits autosave, and a save from another editor (vim in
+another window, say) reloads the pane. On a Mac those editor keys are Cmd-Z
+and Cmd-F, as copy (Cmd-C) and redo (Cmd-Shift-Z) are at the prompt; the
+app's own keys below -- Ctrl-Enter, Ctrl-S, Ctrl-. -- stay Ctrl. With
+ordinary keys Ctrl-r does nothing in the editor, so it cannot reload the page
+under an unsaved edit; reloading is View > Reload. Running is an operation on a region:
 
     Ctrl-Enter          eval the selection, or the paragraph under the cursor
-    Ctrl-r              same, from vim's visual mode
     Ctrl-Shift-Enter    run -- fresh worker, then the whole buffer
-    :w                  force a save        :eval      eval the whole buffer
-    :run                fresh worker        Ctrl-.     stop
-    :help [word]        quick reference in the console pane: a section,
-                        an object (keys, mouse, buffer), or a search
+    Ctrl-.              stop
+    Ctrl-S              save now (edits autosave anyway)
     > at the console    one line, evaluated in the live worker
 
-The commands work at the `>` prompt too, as `/run` or `:run` -- one table
-serves the prompt and vim's command line, so `/e name`, `/target 30` and
-`/help keys` mean what their `:` forms do. A prompt line starting with `/`
-or `:` is always a command, so CoffeeScript that opens with a regex goes in
-parens: `(/x/).test s`. A name that is not a command gets the list of the
-ones that are.
+Commands are typed at that `>` prompt, starting with `/`:
+
+    /run                fresh worker, then the whole buffer
+    /eval               the whole buffer, into the live worker
+    /e name             open a sketch, creating it if new; /e! drops edits
+    /w                  save now
+    /target 30          flag the first source line past 30; /target 0 clears
+    /help [word]        quick reference in the console pane: a section,
+                        an object (keys, mouse, buffer), or a search
+
+`:run` means what `/run` does, for hands that learned vim. A prompt line
+starting with `/` or `:` is always a command, so CoffeeScript that opens
+with a regex goes in parens: `(/x/).test s`. A name can be cut short the way
+vim cuts them -- `/e` is edit, `/ev` is eval -- and a name that is not a
+command gets the list of the ones that are.
 
 **Eval** puts code into the worker you already have, so everything it knows
 stays. **Run** throws that worker away and starts a new one. They are
 different in kind rather than in scope, which is why they do not share a
 verb: there is no "eval all" button, because eval-the-whole-buffer is the
-same operation as eval-this-region with everything selected, and `:eval` is
+same operation as eval-this-region with everything selected, and `/eval` is
 there when you want it without reaching for the mouse.
 
 An eval pressed while a sketch is still running is refused, not queued: the
@@ -193,7 +204,7 @@ it first, or Run, which replaces the worker and never has to ask. Otherwise
 the second eval would fire the instant the first ended and look exactly like
 the sketch starting itself again.
 
-**Where the keyboard goes.** Run and `:eval` hand it to the canvas, because
+**Where the keyboard goes.** Run and `/eval` hand it to the canvas, because
 a sketch you just ran is almost always one you are about to play with.
 Region eval leaves it in the editor: that is the loop of redefining something
 and carrying on typing, and the next keystroke belongs to the editor. If the run
@@ -210,9 +221,9 @@ BASIC's SCREEN reset pages, so a sketch starts in the mode it asks for
 rather than the one the last sketch left behind. Put `buffer.on` and
 `buffer.fps` after `screen`.
 
-Ctrl-Enter and `:eval` evaluate into the *live* worker, so definitions persist
+Ctrl-Enter and `/eval` evaluate into the *live* worker, so definitions persist
 between evals -- define a function in one region, call it from another. That is
-BASIC's immediate mode. `:run` is `RUN`: a clean scope.
+BASIC's immediate mode. `/run` is `RUN`: a clean scope.
 
 The `>` prompt under the console is the same live worker again, one line at a
 time. It goes through shared memory rather than `postMessage`, for the reason
@@ -225,15 +236,37 @@ live in its own scope and only reach the image when the run ends, which for a
 question and takes back whatever the answer changed.
 
 A sketch that never reaches a yield point never answers, the same way it never
-stops. Up and Down walk earlier lines.
+stops.
+
+The prompt has the node REPL's keys. Up and Down walk earlier lines, and
+Ctrl-R and Ctrl-S search back and forward through them. Ctrl-A and Ctrl-E go
+to the start and end of the line, Alt-B and Alt-F a word at a time. Ctrl-K
+and Ctrl-U cut, and Ctrl-Y puts the cut back -- so redo there is
+Ctrl-Shift-Z, not Ctrl-Y; Ctrl-W and Alt-D delete a word. Ctrl-C copies a selection or else clears the line,
+and Ctrl-L clears the console. While the prompt has the keyboard these beat
+the app's own shortcuts: Ctrl-E there is end of line, not hide the editor.
+On a Mac, Option types characters, so the Alt keys are not bound there. Tab
+completes a name, as far as every candidate agrees; a second Tab lists them.
 
 A sketch runs in its own scope, so its names cannot collide with the drawing
 commands or with anything the app owns. You can still shadow a command --
 `line = 5` hides `line` for as long as the session lives -- but the command
-itself is never damaged, and `:run` gives it back.
+itself is never damaged, and `/run` gives it back.
 
-Ctrl-r stays bound to redo in normal mode; the eval binding only takes it in
-visual mode, where vim leaves it free.
+### Vim keys
+
+**Edit > Vim Keys** puts vim in the editor. It switches live, keeping the
+buffer, the cursor and the undo history, and the app remembers it. With it
+ticked:
+
+- Every `/` command works from vim's command line as well: `:run`, `:e name`,
+  `:e!`, `:w`, `:help keys`. One table serves the prompt and vim, so the two
+  cannot drift apart.
+- Ctrl-r in visual mode evals the selection. Normal mode keeps it for redo,
+  where vim wants it; visual mode leaves it free.
+- Ctrl-Enter, Ctrl-Shift-Enter, Ctrl-S and Ctrl-. work as they do without vim.
+- Ctrl-e scrolls in normal mode, as vim's does; it shows or hides the editor
+  from insert mode or the canvas.
 
 ## Input
 
@@ -307,9 +340,10 @@ line can see appear beside the console, with objects that open in place.
 The `>` prompt then asks about the stopped call, and can change it.
 
     Cmd/Ctrl-\  F8     stop now on whatever line is running; again, carry on
-    F10  :line         step to the next line that runs, wherever it is
-    :step              run on to the next frame and hold there
-    :continue          carry on, from either kind of pause
+    F10  /line         step to the next line that runs, wherever it is
+    /pause             hold the sketch at the next frame
+    /step              run on to the next frame and hold there
+    /continue          carry on, from either kind of pause
 
 A sketch that says `breakpoint` nowhere runs with no debugger at all. With
 DevTools open, `breakpoint` does nothing: the two cannot share the page.
@@ -338,11 +372,16 @@ see NOTES.md.
     BEANS_TESTS=buffers,lifecycle npm test  a few
 
 The parts are `editor image repl buffers stepping debugging focus lifecycle
-drawing color loading shell input sound perf`. Each starts from a reset app --
+drawing color loading shell input random sound perf`. Each starts from a reset app --
 scratch loaded, buffer blank, worker restarted -- so running one alone means
 the same thing as running it in the middle of everything else, and a part
 that fails does not take the ones after it with it. The whole suite takes a
 few minutes; one part is a few seconds. It exits nonzero when a check fails.
+
+`VAR=x npm test` is the POSIX shells' way to set a switch. From cmd.exe it
+is `set BEANS_TESTS=buffers` and then `npm test`; from PowerShell,
+`$env:BEANS_TESTS='buffers'` and then `npm test`. Either way it stays set
+for the rest of that window, so clear it to run every part again.
 
 Add a check to `test/parts/<area>.coffee`; the handles it takes off `t` are
 listed at the top of the file and defined in `test/toolkit.coffee`.

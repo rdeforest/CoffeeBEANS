@@ -131,6 +131,31 @@ module.exports = (t) ->
     check "#{named}, Ctrl-S saves at once",
       saved.pending and not saved.after and onDisk is wanted, JSON.stringify {saved, onDisk}
 
+  # Unclaimed, Ctrl-r is View > Reload, which takes an edit still waiting for
+  # its autosave down with it. sendInputEvent never reaches a menu
+  # accelerator, so this asks whether the editor claimed the key.
+  await vimKeys no
+  claimed = await chord 'r', ctrl: yes
+  check 'with ordinary keys, the editor claims Ctrl-r so it cannot reload the page', claimed
+
+  # ...and with vim on, vim still has it: redo in normal mode.
+  await vimKeys yes
+  await setDoc "abc\n"
+  redo = await js """
+    const v = Editor.view(), cm = CM.getCM(v)
+    CM.Vim.handleKey(cm, '<Esc>')
+    v.dispatch({selection: {anchor: 0}})
+    CM.Vim.handleKey(cm, 'x')
+    const cut = Editor.all()
+    CM.Vim.handleKey(cm, 'u')
+    const undone = Editor.all()
+    v.contentDOM.dispatchEvent(new KeyboardEvent('keydown',
+      {key: 'r', ctrlKey: true, bubbles: true, cancelable: true}))
+    return {cut, undone, redone: Editor.all()}
+  """
+  check 'with vim keys, Ctrl-r in normal mode still redoes',
+    redo.cut is "bc\n" and redo.undone isnt redo.cut and redo.redone is redo.cut, JSON.stringify redo
+
   # Everything below drives vim's command line.
   await vimKeys yes
   await js "await Editor.load('scratch'); return true"
@@ -487,6 +512,19 @@ module.exports = (t) ->
 
   check 'help shows the / form of the commands',
     await js "return HELP.match('running')[0].lines.some(([syntax]) => syntax === '/run')"
+
+  # Ordinary keys come first (Robert, 2026-10-04: most people on Steam will
+  # not want vim), so nothing in Running code works only with vim on, and vim
+  # has a section of its own that says how to switch it on.
+  shape = await js """
+    const text = (section) => section.lines.map((line) => line.join(' ')).join(' | ')
+    const vim  = HELP.sections.find((section) => section.name === 'vim')
+    return {running: /vim|visual mode/i.test(text(HELP.match('running')[0])),
+            switch:  !!vim && text(vim).includes('Edit > Vim Keys'),
+            visual:  !!vim && text(vim).includes('visual mode')}
+  """
+  check 'help leads with ordinary keys, and vim has its own section',
+    JSON.stringify(shape) is JSON.stringify(running: no, switch: yes, visual: yes), JSON.stringify shape
 
   await wait 400                             # let the target edits flush
   await ask '/e hello'

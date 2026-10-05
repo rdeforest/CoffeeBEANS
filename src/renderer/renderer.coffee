@@ -1391,9 +1391,9 @@ runFresh = (source, name) -> armFirst source, -> start {source, name}
 # A sketch you run is almost always one you are about to play with, so Run
 # and :eval give it the keyboard. Region eval does not: that is the loop of
 # redefining something and carrying on typing, and the next keystroke belongs
-# to vim. A tick late on purpose -- :run and :eval come through vim's command
-# line, which runs the command and then, still inside the same keydown,
-# focuses the editor as it closes.
+# to the editor. A tick late on purpose -- with Vim Keys on, :run and :eval
+# come through vim's command line, which runs the command and then, still
+# inside the same keydown, focuses the editor as it closes.
 toCanvas = ->
   clearTimeout canvasTimer
   canvasTimer = setTimeout (-> stage.focus()), 0
@@ -1461,10 +1461,10 @@ document.getElementById('open').onclick = pickSketch
 beans.onOpen pickSketch
 
 # The line-stepping keys are DevTools' own, and are caught before the editor
-# or the prompt can see them: Ctrl-\ is a prefix in vim, and a key that
-# pauses only when the right thing has focus is no use in a hurry. Not with
-# Alt as well: AltGr arrives as Ctrl+Alt on Windows, and AltGr+ß is how a
-# German keyboard types a backslash.
+# or the prompt can see them: Ctrl-\ is a prefix in vim when Vim Keys is on,
+# and a key that pauses only when the right thing has focus is no use in a
+# hurry. Not with Alt as well: AltGr arrives as Ctrl+Alt on Windows, and
+# AltGr+ß is how a German keyboard types a backslash.
 window.addEventListener 'keydown', ((event) ->
   modified = (event.ctrlKey and not event.altKey) or event.metaKey
   verb = if event.key is 'F8' or (modified and event.key is '\\')

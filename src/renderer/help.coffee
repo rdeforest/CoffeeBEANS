@@ -7,10 +7,11 @@ SECTIONS = [
   title: 'Running code'
   lines: [
     ['Ctrl-Enter',        'eval the selection, or the paragraph at the cursor']
-    ['Ctrl-r',            'same, from vim\'s visual mode (normal mode keeps redo)']
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
     ['Ctrl-e',            'show or hide the editor']
+    ['Ctrl-r',            'does nothing in the editor with ordinary keys, so it']
+    ['',                  'cannot reload under an edit; View > Reload does']
     ['/eval',             'eval the whole buffer into the live worker']
     ['/run',              'fresh worker, empty scope -- this is BASIC RUN']
     ['',                  'eval keeps everything the worker knows;']
@@ -24,8 +25,9 @@ SECTIONS = [
     ['',                  'running sketch what it is doing -- and change it']
     ['Up / Down',         'earlier lines, at the prompt']
     ['Ctrl-A  Ctrl-E',    'start and end of the line, at the prompt: it has the']
-    ['',                  'node REPL\'s keys -- Ctrl-K Ctrl-U Ctrl-W cut, Ctrl-Y']
-    ['',                  'puts back, Ctrl-L clears the console']
+    ['',                  'node REPL\'s keys -- Ctrl-K Ctrl-U cut, Ctrl-Y puts']
+    ['',                  'back, Ctrl-W Alt-D delete a word, Ctrl-L clears']
+    ['',                  'the console']
     ['',                  'Ctrl-Y is not redo here; redo is Ctrl-Shift-Z']
     ['Ctrl-R  Ctrl-S',    'search back, or forward, through earlier lines;']
     ['',                  'Esc gives up']
@@ -34,15 +36,14 @@ SECTIONS = [
     ['',                  'it beeps if there is more than one, and a second']
     ['',                  'Tab lists them']
     ['Ctrl-C',            'at the prompt: copy the selection, or clear the line']
-    ['/w',                'force a save (edits autosave anyway)']
+    ['/w  Ctrl-s',        'save now, Ctrl-s in the editor (edits autosave anyway)']
     ['/e <name>',         'open a sketch, creating it if new; /e! discards edits']
     ['',                  'folders are part of the name: /e challenges/ocean']
     ['Cmd/Ctrl-O',        'open a sketch with the system file picker']
     ['/target <n>',       'flag the first source line past n; /target 0 clears']
     ['/help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']
-    ['Edit > Vim Keys',   'vim keys in the editor; ordinary keys until ticked']
-    ['/ or : commands',   'typed at the > prompt, or after : in vim;']
+    ['/ or : commands',   'typed at the > prompt -- /run and :run are one;']
     ['',                  'a line starting with either is always a command,']
     ['',                  'so CoffeeScript opening with a regex goes in']
     ['',                  'parens: (/x/).test s']
@@ -63,6 +64,20 @@ SECTIONS = [
     ['',                  'from a stopped line, /step runs on to the next frame']
     ['/continue',         'let it go again, from either kind of pause']
     ['',                  'with DevTools open, breakpoint does nothing']
+  ]
+,
+  name:  'vim'
+  title: 'Vim keys'
+  lines: [
+    ['Edit > Vim Keys',   'vim in the editor, switched live and remembered;']
+    ['',                  'ordinary keys until it is ticked']
+    [':run  :e!  :w',     'every / command works after : in vim too -- one']
+    ['',                  'table serves both, so :e! name is /e! name']
+    ['Ctrl-r',            'in visual mode, eval the selection; normal mode']
+    ['',                  'keeps it for redo, and u still undoes']
+    ['Ctrl-Enter  Ctrl-s', 'and Ctrl-Shift-Enter, Ctrl-. -- the same as without']
+    ['Ctrl-e',            'scrolls in normal mode, as vim\'s does; shows or hides']
+    ['',                  'the editor from insert mode or the canvas']
   ]
 ,
   name:  'screen'

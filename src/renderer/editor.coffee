@@ -307,6 +307,12 @@ beansKeymap = [
   {key: 'Ctrl-Enter',       run: evalRegion, preventDefault: yes}
   {key: 'Ctrl-Shift-Enter', run: runFresh,   preventDefault: yes}
   {key: 'Ctrl-s',           run: (-> save(); true), preventDefault: yes}
+  # Unclaimed, Ctrl-r reaches View > Reload (CmdOrCtrl+R off a Mac), which
+  # loses an edit still waiting for its autosave, and the worker with it.
+  # Vim keeps its own Ctrl-r (redo, insert register, eval in visual mode)
+  # because its slot sees keys before this keymap does; the editor test
+  # checks redo, so that order cannot quietly flip.
+  {key: 'Ctrl-r',           run: -> true}
 ]
 
 # One table, two ways in: vim's `:` line, and the prompt, where a line
