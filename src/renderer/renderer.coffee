@@ -142,7 +142,10 @@ enteredAt = 0
 
 # Tab's question while it is out -- the line and caret it was asked about, so
 # an answer that arrives after either has moved can be dropped -- and the
-# last ambiguous answer, which a second Tab on the same line lists.
+# last ambiguous answer, which a second Tab on the same line lists. One slot
+# for both ways of asking, the worker and the paused frame: an answer is
+# taken only by the question it belongs to, so a later Tab replaces the
+# earlier one rather than receiving its answer.
 completing = null
 tabbed     = null
 
@@ -156,21 +159,31 @@ askLine = (source) ->
   # A sketch stopped in V8 cannot serve the shared-memory question -- nothing
   # runs to look at it -- so the line goes to the paused frame instead. That
   # is also the better answer: this call's `angle`, not the image's.
-  return askPaused source if linePaused
-  withdrawTab() if completing
+  if linePaused
+    return stillAsking() if debugAsking
+    return askPaused source
+  return say '*** still answering Tab ***', 'sys' unless withdrawTab()
   if Atomics.load(i32, H.ASK_STATE) isnt 0
-    return say (if completing then '*** still answering Tab ***' else '*** still waiting on the last line ***'), 'sys'
+    return say '*** still waiting on the last line ***', 'sys'
   askWorker source, LAYOUT.ASK_FOR.value
 
 # A Tab still out gives way to a line: taken back if the worker has not
 # claimed it yet, its answer dropped if one is already in -- not offered,
 # which would rewrite the very line being sent. One the worker is answering
-# has to finish first, and only that refuses the line. Without this, a Tab at
-# a sketch with no yield point would block every later line until Stop.
+# has to finish first, and only that refuses the line, so this says no. Without
+# this, a Tab at a sketch with no yield point would block every later line
+# until Stop.
+#
+# Whose question is out is read from ASK_KIND, which only this side writes,
+# not from `completing`: a Tab asked of a paused frame sets that too, while a
+# line may still be waiting in shared memory, and taking that line back left
+# it unanswered with nothing said (found by the holistic review, 2026-10-05).
 withdrawTab = ->
-  return if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 4
+  return yes unless Atomics.load(i32, H.ASK_KIND) is LAYOUT.ASK_FOR.completion
+  return no if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 4
   completing = null
   drainAsk()
+  yes
 
 # The one way a question reaches a worker that is not line paused, a line or
 # Tab's alike; ASK_KIND says which, so drainAsk knows whose the answer is.
@@ -189,15 +202,32 @@ askWorker = (text, kind) ->
 
 debugAsking = 0
 
+# The pane's member listings while they are out. Runtime.getProperties during
+# a step or an evaluation has never been measured, so a listing takes the
+# turn as well -- but it is waited for, not refused: the pane re-opens what
+# was open on every pause, and a step pressed just then must not bounce.
+# Listings do not wait for each other, or a redraw would refuse itself.
+listing = new Set
+listed  = -> Promise.all listing
+
+# Whether step and continue may go: once the listings are in, and only if no
+# evaluation is out -- one may have been asked for while they were.
+frameFree = ->
+  await listed()
+  not debugAsking
+
 movedOn = -> say '*** it moved on before it could answer ***', 'sys'
 
-# And the one way into a line-paused frame, for the same two. Counted while
-# out, so step, continue, the pane and Tab all wait their turn: nothing may
-# reach V8 until it is back.
-evaluatePaused = (source) ->
+# And the one way to evaluate in a line-paused frame -- a line, Tab, a getter
+# clicked in the pane. Counted while out, so step, continue, the pane and each
+# other all wait their turn: nothing may reach V8 until it is back. Counted
+# from the call, not from when it is sent, so a second one asked in the same
+# tick is refused; it is sent only once the pane's member listings are in.
+evaluatePaused = (ask) ->
   debugAsking += 1
   try
-    await beans.debug.evaluate source
+    await listed()
+    await ask()
   finally
     debugAsking -= 1
 
@@ -205,7 +235,7 @@ evaluatePaused = (source) ->
 # objects it re-opens are not asked for while one is still out.
 askPaused = (source) ->
   try
-    reply = await evaluatePaused source
+    reply = await evaluatePaused -> beans.debug.evaluate source
   catch error
     return say String(error.message ? error), 'err'
   return movedOn() unless reply
@@ -223,7 +253,7 @@ drainAsk = ->
   kind   = Atomics.load i32, H.ASK_KIND
   Atomics.store i32, H.ASK_STATE, 0
   text = decoder.decode answer
-  return completed text, state is 3 if kind is LAYOUT.ASK_FOR.completion
+  return completed completing, text, state is 3 if kind is LAYOUT.ASK_FOR.completion
   say text, (if state is 3 then 'err' else 'value')
   undefined
 
@@ -345,7 +375,8 @@ yankPop = ->
 # `f().`, `@x` -- would mean evaluating something to find out what it is,
 # and Tab never evaluates; it beeps.
 DOTTED  = /(?:^|[^\w$.@])((?:[A-Za-z_$][\w$]*\.)*)([A-Za-z_$][\w$]*)?$/
-COMMAND = /^[\/:](\w*)$/
+COMMAND = /^\s*[\/:](\w*)$/   # a command's name, as Editor.isCommand finds one
+ARGUED  = /^\s*[\/:]/          # a command with more after its name
 
 commonPrefix = (a, b) ->
   at = 0
@@ -367,11 +398,11 @@ offer = ({line, at, word}, names) ->
   tabbed = {line: promptLine.value, at: caret(), names: fits}
   beep()
 
-completed = (text, threw) ->
-  asked      = completing
+completed = (asked, text, threw) ->
+  return unless asked and asked is completing
   completing = null
   return say "completion: #{text}", 'err' if threw
-  offer asked, JSON.parse text if asked
+  offer asked, JSON.parse text
 
 complete = ->
   line = promptLine.value
@@ -382,6 +413,9 @@ complete = ->
   before  = line[...at]
   command = COMMAND.exec before
   return offer {line, at, word: command[1]}, Editor.commands() if command
+  # A command's arguments are not CoffeeScript, so the worker's names mean
+  # nothing there.
+  return beep() if ARGUED.test before
   found = DOTTED.exec before
   path  = found?[1].split('.')[...-1] ? []
   word  = found?[2] ? ''
@@ -395,19 +429,24 @@ complete = ->
 # The frame's own names come from the pane's last report. The first name is
 # read in the frame only when it is one of them -- a variable, which cannot
 # be a getter; anything else is left to the worker's descriptor walk.
+#
+# A Tab still out to the worker is taken back first: it was asked about the
+# line before this one, and would otherwise answer into this one's slot.
 completePaused = (asked, path) ->
-  return beep() if debugAsking
+  return beep() if debugAsking or not withdrawTab()
   local    = path[0] in pausedNames
   question = JSON.stringify {path, word: asked.word, local}
   source   = "REPL.complete #{question}, #{JSON.stringify pausedNames}, #{if local then path[0] else 'undefined'}"
   completing = asked
   try
-    reply = await evaluatePaused source
+    reply = await evaluatePaused -> beans.debug.evaluate source
   catch error
-    completing = null
+    completing = null if completing is asked
     return say String(error.message ? error), 'err'
-  return completing = null unless reply
-  completed (if reply.kind is 'value' then JSON.parse reply.text else reply.text), reply.kind isnt 'value'
+  unless reply
+    completing = null if completing is asked
+    return
+  completed asked, (if reply.kind is 'value' then JSON.parse reply.text else reply.text), reply.kind isnt 'value'
 
 submit = ->
   tabbed = null
@@ -576,7 +615,7 @@ globalThis.Printing =
 
 globalThis.Prompt =
   ask:     askLine
-  pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0 or debugAsking > 0
+  pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0 or debugAsking > 0 or listing.size > 0
   entered: -> entered.slice()
   beeps:   -> beeps
 
@@ -806,8 +845,10 @@ goFrames = ->
 # From a line pause, a frame step runs on to the next frame boundary and holds
 # there: the swap it reaches is simply not served.
 stepFrame = ->
-  return stillAsking() if linePaused and debugAsking
   if linePaused
+    seq = linePaused
+    return stillAsking() unless await frameFree()
+    return unless linePaused is seq
     pauseFrames()
     return beans.debug.resume()
   pauseFrames() unless paused
@@ -828,18 +869,27 @@ linePause = ->
     return say '*** could not pause -- is DevTools open? ***', 'sys'
   goFrames()
 
-# The prompt's answer is still being worked out inside the paused frame, and
-# V8 must not be moved on under it (main refuses too; this is the saying so).
-stillAsking = -> say '*** still evaluating at the prompt ***', 'sys'
+# Something -- a line, Tab, a getter -- is still being worked out inside the
+# paused frame, and V8 must not be moved on under it (main refuses too; this
+# is the saying so).
+stillAsking = -> say '*** still evaluating in the paused frame ***', 'sys'
 
+# Each waits for the frame to be free, and the pause may be gone by then --
+# Stop, or a Run -- with nothing left to step or continue.
 stepLine = ->
-  return stillAsking() if linePaused and debugAsking
-  if linePaused then beans.debug.step() else linePause()
+  return linePause() unless linePaused
+  seq = linePaused
+  return stillAsking() unless await frameFree()
+  return unless linePaused is seq
+  beans.debug.step()
 
 continueAll = ->
-  return stillAsking() if linePaused and debugAsking
+  return goFrames() unless linePaused
+  seq = linePaused
+  return stillAsking() unless await frameFree()
+  return unless linePaused is seq
   goFrames()
-  beans.debug.resume() if linePaused
+  beans.debug.resume()
 
 togglePause = ->
   if linePaused then continueAll() else linePause()
@@ -924,16 +974,15 @@ ranGetters = new Map
 
 # The click is an evaluation in the paused frame, so it waits its turn with
 # the prompt's: refused while one is out, and holding step and continue off
-# while it runs (main refuses both as well; this is the saying so).
+# while it runs (main refuses both as well; this is the saying so). The pause
+# is the one it was clicked in, not whichever is current once it is sent.
 runGetter = (entry, path) ->
   return stillAsking() if debugAsking
-  debugAsking += 1
+  seq = linePaused
   try
-    reply = await beans.debug.getter linePaused, entry.owner, entry.name
+    reply = await evaluatePaused -> beans.debug.getter seq, entry.owner, entry.name
   catch error
     return say String(error.message ? error), 'err'
-  finally
-    debugAsking -= 1
   return stillAsking() if reply is 'evaluating'
   return movedOn() unless reply
   return unless reply.pane.seq is linePaused
@@ -971,7 +1020,19 @@ varRow = (entry, path, depth) ->
       row.classList.toggle 'open', expand
       if expand
         expandedPaths.add path
-        members = await beans.debug.members linePaused, entry.id
+        fetching = beans.debug.members linePaused, entry.id
+        # Held only as something to wait on; the error, if any, is this
+        # row's, and the await below still meets it.
+        held = fetching.catch(->)
+        listing.add held
+        try
+          members = await fetching
+        catch error
+          row.classList.remove 'open'
+          expandedPaths.delete path
+          return say String(error.message ? error), 'err'
+        finally
+          listing.delete held
         if members is 'evaluating'
           row.classList.remove 'open'
           expandedPaths.delete path
@@ -1477,8 +1538,10 @@ window.addEventListener 'keydown', ((event) ->
   verb()
 ), true
 
+# Not with Alt: chordOf leaves Ctrl+Alt with a typed key to the prompt as
+# AltGr, so Ctrl-Alt-E reaching here would toggle the editor from the prompt.
 window.addEventListener 'keydown', (event) ->
-  return unless event.ctrlKey
+  return unless event.ctrlKey and not event.altKey
   handled =
     'e':      toggleEditor
     '.':      stop

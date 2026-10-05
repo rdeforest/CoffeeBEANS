@@ -524,7 +524,11 @@ module.exports = (win) ->
   members = (pauseSeq, id) ->
     return null unless stopped?.seq is pauseSeq
     return 'evaluating' if asking
-    {result} = await send 'Runtime.getProperties',
+    # Bounded like an evaluation, though nothing of the author's runs: the
+    # renderer holds step, continue and the prompt until every listing is in,
+    # so one that never answered -- the worker torn down by a Run, DevTools
+    # taking the session -- would hold them for good.
+    {result} = await within EVAL_LIMIT, send 'Runtime.getProperties',
       objectId: id, ownProperties: yes, generatePreview: yes
     # Own enumerable members, plus getters, which are exactly the ones the
     # author needs to see are there and not being run.

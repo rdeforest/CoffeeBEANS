@@ -284,6 +284,14 @@ module.exports = (t) ->
     inPrompt is was and fromCanvas isnt was and (await solo()) is was,
     "solo before=#{was} after prompt Ctrl-E=#{inPrompt} after canvas Ctrl-E=#{fromCanvas}"
 
+  # Ctrl+Alt with a typed key is left to the prompt as AltGr, so the window
+  # must not take it as Ctrl-E either.
+  await promptAt 'hello', 0
+  await press 'C-M-e'
+  altE = await solo()
+  check 'Ctrl-Alt-E at the prompt does not show or hide the editor',
+    altE is was, "solo before=#{was} after=#{altE}"
+
   # 10. history, typed for real so Enter is the thing that records it
   enter = (line) ->
     await promptAt line, line.length
@@ -443,11 +451,17 @@ myWidget = 1
 
   # 14. a unique prefix finishes, from each place a name can come from
   unique = [['myWid', 'myWidget'], ['randomi', 'randomize'], ['world.ball.vel', 'world.ball.velocity'],
-            ['x = rectF', 'x = rectFill'], ['/ru', '/run'], [':ru', ':run']]
+            ['x = rectF', 'x = rectFill'], ['/ru', '/run'], [':ru', ':run'], [' /ru', ' /run']]
   for [typed, wanted] in unique
     got = await tab typed
     check "Tab finishes #{JSON.stringify typed}", got.value is wanted and got.from is wanted.length and
       got.focused and got.beeped is 0, JSON.stringify got
+
+  # A command's arguments are not CoffeeScript: the worker's names are not
+  # offered there, though `myWidget` is one.
+  argued = await tab '/e myWid'
+  check 'Tab after a command name does not offer the worker\'s names',
+    argued.value is '/e myWid' and argued.beeped is 1, JSON.stringify argued
 
   # 15. ambiguous: as far as they agree, a beep, and a second Tab lists them
   first  = await tab 'circ'
@@ -715,4 +729,105 @@ turn 5
     "beeped=#{beeped} held=#{JSON.stringify held} again=#{JSON.stringify again}"
   await js "Stepping.resume(); return true"
   await until_ (-> (await status()) is 'ready'), 10000
+
+  # 21. Tab in a paused frame, then Stop while its evaluation is still out.
+  # The trap's print says the evaluation is inside it, and it stays there
+  # until the check presses x; Stop waits it out, so its answer arrives after
+  # Stop. The sketch waits for y before its breakpoint, so a line sent before
+  # then sits in shared memory, unclaimed, all through the pause. Both wait
+  # on keys rather than the clock -- `keys.down` reads shared memory and has
+  # no yield point, so it works inside an evaluation too -- because a timed
+  # wait on a slow machine ran out early and let both checks pass against
+  # the code they were written to catch. The clock only bounds a broken run;
+  # the trap is bounded anyway, by the debugger's 3s evaluation limit.
+  slowTabSketch = """
+slowProxy = new Proxy {oldName: 1}, ownKeys: (target) ->
+  print 'claimed'
+  until1 = Date.now() + 10000
+  null until keys.down('x') or Date.now() > until1
+  Reflect.ownKeys target
+until0 = Date.now() + 10000
+null until keys.down('y') or Date.now() > until0
+breakpoint
+done = 1
+"""
+  # Dispatched at the stage without focusing it, unlike t.key: an answer is
+  # offered only to a focused prompt, so moving focus would hide the very
+  # stale offer the second check looks for. Held until what it lets go of is
+  # over, since `keys.down` sees only a key held at the moment it looks.
+  stageKey = (kind, code) -> js """
+    document.getElementById('stage').dispatchEvent(new KeyboardEvent('#{kind}', { code: '#{code}', bubbles: true }))
+    return true
+  """
+  tabPaused = -> js """
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'slowProxy.'
+    p.setSelectionRange(10, 10)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    return true
+  """
+
+  # A line waiting from before the pause is not taken for Tab's question:
+  # the line after Stop used to take it back, and it was never answered.
+  await setDoc slowTabSketch
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  await js "Prompt.ask('6 * 7'); return true"
+  lineOut = await js "return Prompt.pending()"
+  await stageKey 'keydown', 'KeyY'
+  waited  = await until_ (-> (await status()) is 'line paused'), 10000
+  await stageKey 'keyup', 'KeyY'
+  await until_ -> js "return !document.getElementById('vars').hidden"
+  await tabPaused()
+  inTrap = await until_ (-> (await consoleText()).includes 'claimed'), 10000
+  await js """
+    document.getElementById('stop').click()
+    Prompt.ask('7 * 8')
+    return true
+  """
+  await stageKey 'keydown', 'KeyX'
+  await until_ (-> (await status()) is 'ready' and not await js "return Prompt.pending()"), 15000
+  await stageKey 'keyup', 'KeyX'
+  await t.quiet()
+  heldLine = await consoleText()
+  check 'a line out before a pause is not taken back by a line after a paused Tab and Stop',
+    waited and lineOut and inTrap and /\b42\b/.test(heldLine) and heldLine.includes('*** still waiting on the last line ***'),
+    "paused=#{waited} lineOut=#{lineOut} inTrap=#{inTrap} console=#{JSON.stringify heldLine}"
+
+  # The paused Tab's answer, arriving after Stop and a Tab asked of the
+  # worker since, belongs to the paused Tab and is not offered to the later
+  # one. The worker cannot answer until the evaluation is done, so the stale
+  # answer always comes first. `oldName` is the proxy's key, not a name the
+  # worker could offer.
+  await setDoc slowTabSketch
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  await stageKey 'keydown', 'KeyY'
+  waited = await until_ (-> (await status()) is 'line paused'), 10000
+  await stageKey 'keyup', 'KeyY'
+  await until_ -> js "return !document.getElementById('vars').hidden"
+  await tabPaused()
+  inTrap = await until_ (-> (await consoleText()).includes 'claimed'), 10000
+  await js """
+    document.getElementById('stop').click()
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'old'
+    p.setSelectionRange(3, 3)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    return true
+  """
+  await stageKey 'keydown', 'KeyX'
+  await until_ (-> (await status()) is 'ready' and not await js "return Prompt.pending()"), 15000
+  await stageKey 'keyup', 'KeyX'
+  await t.quiet()
+  later = await promptNow()
+  check 'a paused Tab\'s answer after Stop is not offered to the Tab asked since',
+    waited and inTrap and later.value isnt 'oldName' and later.value.startsWith('old'),
+    "paused=#{waited} inTrap=#{inTrap} prompt=#{JSON.stringify later}"
   await setDoc ''
