@@ -25,12 +25,22 @@ jobs:
     # A wedged app never exits; the suite alone takes about two minutes.
     timeout-minutes: 20
     steps:
+      # Windows git checks out CRLF. The first Windows run then failed "suite
+      # does not touch real sketches": hello.coffee came back at 785 bytes,
+      # its LF size, so something in the suite rewrote it with LF endings.
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: current
           cache: npm
       - run: npm ci
+
+      # Ubuntu 24.04 has AppArmor refuse unprivileged user namespaces, and
+      # without them Chromium's sandbox aborts at launch ("The SUID sandbox
+      # helper binary was found, but is not configured correctly").
+      - if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm test

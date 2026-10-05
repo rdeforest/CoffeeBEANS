@@ -298,7 +298,11 @@ createWindow = ->
   # eight (Claude, 2026-10-04). The race is the likeliest reading of that,
   # not a proven one -- if the timing parts start failing hidden again, this
   # is the first place to look. See AGENTS.md, Platform facts.
-  mapFirst = hidden and process.platform is 'linux'
+  #
+  # Windows has the same symptom: on the GitHub Actions runner the first
+  # hidden run read 1fps on the meter and failed the same frame-timing
+  # checks (Claude, 2026-10-05).
+  mapFirst = hidden and process.platform in ['linux', 'win32']
   win.once 'ready-to-show', ->
     if mapFirst
       win.once 'show', -> setTimeout (-> win.minimize() unless win.isDestroyed()), 300
