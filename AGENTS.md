@@ -76,8 +76,19 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 238 checks
+    npm test                                 all 239 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
+
+`npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
+too; set a switch there with `set BEANS_TESTS=stepping` (cmd) or
+`$env:BEANS_TESTS='stepping'` (PowerShell) before `npm test`. After a green
+full run the runner, not the app, removes `test_tmp`: on Windows Electron
+still holds its own files in there until it has exited.
+
+**CI** (`.github/workflows/test.yml`, since 2026-10-05): the suite on
+ubuntu-24.04 (under xvfb) and windows-latest on every push, macOS on a `v*`
+tag or by hand (`gh workflow run test.yml`). The repo is private, so runs
+cost minutes: push merges, not every commit.
 
 Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
 color loading shell input random sound perf`. Each starts from a reset app, so running one alone means
@@ -399,6 +410,29 @@ Each of these passed on the Mac and failed on Linux, so check both.
   has to be focused a tick later (`toCanvas`), and a run that fails inside
   that tick cancels it. The `focus` part types `:run` through the real panel
   for exactly this; calling the ex handler directly would never catch it.
+
+Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
+
+- **Electron's sandbox dies on ubuntu-24.04** (`The SUID sandbox helper
+  binary was found, but is not configured correctly`) unless the workflow
+  sets `kernel.apparmor_restrict_unprivileged_userns=0`. Fixed there, not by
+  `--no-sandbox`.
+- **On the Windows runner a never-shown or minimised window draws at about
+  1fps**, like Linux's never-shown one; shown and left alone it runs full
+  rate. So a hidden Windows test run shows its window inactive and leaves it
+  up (`createWindow`). A Windows contributor sees it, unfocused.
+- **CRLF**: Git for Windows' default checkout turned sketches CRLF and the
+  suite rewrote them LF. `.gitattributes` pins LF now. The editor bug behind
+  it is still open: `Editor.load` keeps the raw CRLF text as `lastWritten`,
+  CodeMirror normalises to `\n`, so a CRLF sketch reads dirty forever and is
+  rewritten LF on the next switch.
+- **Saves fail on Windows**: the rename in `sketch:write` failed with ENOENT
+  or EPERM in 6 of 7 Windows runs; the next eval then ran the previous buffer
+  and later checks cascaded. Likely two overlapping saves share the one
+  staging name `.<name>.saving`. Not fixed.
+- **macOS missed the first save in a folder created outside the app** once
+  (`a folder created outside the app is watched, every save`), in the one
+  by-hand run. Not investigated.
 
 ## Sound, the facts worth keeping
 
