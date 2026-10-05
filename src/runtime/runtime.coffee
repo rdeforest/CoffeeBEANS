@@ -56,15 +56,26 @@ checkInterrupt = ->
 # everything would go round again and draw over the new run, set its screen
 # modes and queue its notes. So the first time the memory turns out not to be
 # its own, the worker lets go of it: every view onto it is pointed at a
-# private copy of the layout instead, nothing it does afterwards reaches the
-# new run, and every yield point from then on throws again. The copy is full
-# size so every offset stays valid; its pages are zero and untouched, so it
-# costs address space, not memory, for the second or so the worker has left.
+# private copy of the layout instead, and every yield point from then on
+# throws again. The copy is full size so every offset stays valid; its pages
+# are zero and untouched, so it costs address space, not memory, for the
+# second or so the worker has left.
+#
+# Letting go happens at the first check after the Run, not at the Run, so a
+# worker in the middle of a long frame still holds the shared views until it
+# reaches one. Drawing in that time is overwritten by the new run's first
+# frame; a mode is not, which is why every command that sets one (`screen`,
+# `buffer.on`/`off`, `buffer.fps`, `load`) checks first.
 checkOwner = ->
   return if Atomics.load(state.i32, H.OWNER) is state.owner and not state.disowned
-  views new ArrayBuffer LAYOUT.TOTAL_BYTES unless state.disowned
-  state.disowned = yes
-  throw new Interrupted()
+  # Interrupted whatever happens: should the copy fail to allocate, the old
+  # worker keeps the shared views, but every check still refuses it, where a
+  # RangeError escaping instead would be reported as the sketch failing.
+  try
+    views new ArrayBuffer LAYOUT.TOTAL_BYTES unless state.disowned
+  finally
+    state.disowned = yes
+    throw new Interrupted()
 
 # Everything in the worker that touches shared memory goes through here, so
 # that letting go of it is one call. INPUT reads through `state` itself.
@@ -81,6 +92,7 @@ refreshBase = ->
   display.base = LAYOUT.bufferWords if state.double then 1 - front else front
 
 setDouble = (value) ->
+  checkOwner()
   state.double = value
   Atomics.store state.i32, H.DOUBLE, if value then 1 else 0
   refreshBase()
@@ -124,6 +136,7 @@ doSwap = (flip = yes) ->
 #
 # Put `buffer.on`, `color`, `drawTo` and `locate` *after* `screen`.
 screen = (width, height) ->
+  checkOwner()
   width  = Math.round width
   height = Math.round height
   # Without this the renderer throws in createImageData every frame, which
@@ -411,6 +424,7 @@ loadFailure = ->
   new Error message
 
 load = (url) ->
+  checkOwner()
   Atomics.store state.i32, H.LOAD_ID, Atomics.load(state.i32, H.LOAD_ID) + 1
   Atomics.store state.i32, H.LOAD_STATE, 1
   postMessage {type: 'load', url: String url}
@@ -562,6 +576,7 @@ Object.defineProperty buffer, 'off',  get: -> setDouble no
 Object.defineProperty buffer, 'swap', get: -> doSwap()
 
 buffer.fps = (n) ->
+  checkOwner()
   Atomics.store state.i32, H.FPS, n | 0
   undefined
 

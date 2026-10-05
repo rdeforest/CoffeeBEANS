@@ -288,10 +288,21 @@
   // Re-entrant by construction: a line that calls buffer.swap reaches a yield
   // point, which would ask us to serve the question we are already serving.
   const serveAsk = () => {
-    if (!askBytes || serving) return
+    // A worker that a Run has replaced may still serve 'ask' pokes queued in
+    // its inbox while it unwinds; the line waiting now is the new worker's.
+    if (!askBytes || serving || Atomics.load(askWords, LAYOUT.HEADER.OWNER) !== owner) return
     // Claimed, not just read: until the worker takes it, the renderer may
     // still withdraw a Tab's question to make way for a line.
     if (Atomics.compareExchange(askWords, LAYOUT.HEADER.ASK_STATE, 1, 4) !== 1) return
+    // A Run between that check and the claim means the line just claimed is
+    // the new worker's -- start() bumps the owner before it resets the ask --
+    // so it is given back at once, or nothing could ever claim it again.
+    // Checked here and not after answering: by then the new worker may have
+    // claimed a line of its own, and giving that back would run it twice.
+    if (Atomics.load(askWords, LAYOUT.HEADER.OWNER) !== owner) {
+      Atomics.compareExchange(askWords, LAYOUT.HEADER.ASK_STATE, 4, 1)
+      return
+    }
     serving = true
     // A sketch that is still running has its names in its own scope, so it
     // lends them to the image for the length of the question and takes back

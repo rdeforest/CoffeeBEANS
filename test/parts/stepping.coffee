@@ -235,3 +235,87 @@ loop
     "bad=#{bad} of #{seen} frames, widths=#{[widths...].join()}"
   await click 'stop'
   await settle()
+
+  # 11. Every line answered at a yield point leaves its poke queued in that
+  # worker's inbox, and an old worker unwinding after a Run goes on to read
+  # them. It used to claim whatever line was waiting -- by then the new
+  # worker's -- and drop it on finding the memory no longer its own, leaving
+  # the ask claimed for good: that line never answered, and every later one
+  # said it was still waiting, until the next Run. Once for each way to run.
+  stuck = []
+  for how in ['eval', 'fresh']
+    await setDoc """
+screen 100, 80
+loop
+  t0 = performance.now()
+  null while performance.now() - t0 < 100
+  buffer.swap
+"""
+    await wait 400
+    if how is 'eval' then await evalAll() else await click 'runFresh'
+    deadline = Date.now() + 15000
+    await wait 25 until (await status()) is 'running' or Date.now() > deadline
+    await wait 300
+    await ask '1 + 1'
+    await ask '2 + 2'
+    await setDoc """
+screen 100, 80
+loop
+  buffer.swap
+"""
+    await wait 400
+    await clearConsole()
+    await t.js """
+      document.getElementById('runFresh').click()
+      setTimeout(() => Prompt.ask('6 * 7'), 30)
+      return true
+    """
+    await wait 100
+    deadline = Date.now() + 3000
+    await wait 25 while (await t.js "return Prompt.pending()") and Date.now() < deadline
+    await t.quiet()
+    said = await consoleText()
+    stuck.push "#{how}: #{JSON.stringify said.trim()}" unless said.includes '42'
+    # A wedged ask outlives Stop; only a Run clears it for the next check.
+    await click 'runFresh' if stuck.length
+    await settle()
+    await click 'stop'
+    await settle()
+  check 'a line asked just after Run is answered, not taken by the old worker',
+    stuck.length is 0, stuck.join(' | ') or 'eval and fresh both answered'
+
+  # 12. A worker in the middle of a long frame when Run is pressed still holds
+  # the shared memory until it reaches a check. The drawing it does in that
+  # time is overwritten by the new run, but a mode is not: its `screen` used
+  # to land after the new sketch's and stay. The width is what the renderer
+  # reads from the header; it must go to 200 once and stay there.
+  await setDoc """
+loop
+  t0 = performance.now()
+  null while performance.now() - t0 < 1500
+  screen 100, 80
+  buffer.on
+  buffer.swap
+"""
+  await wait 400
+  await evalAll()
+  deadline = Date.now() + 15000
+  await wait 25 until (await status()) is 'running' or Date.now() > deadline
+  await wait 1600
+  await setDoc """
+screen 200, 120
+loop
+  buffer.swap
+"""
+  await wait 300
+  await click 'runFresh'
+  widths = []
+  for i in [0...100]
+    width = await t.js "return document.getElementById('screen').width"
+    widths.push width unless widths[widths.length - 1] is width
+    await wait 25
+  check 'an old worker mid-frame at Run sets no mode over the new run',
+    widths[widths.length - 1] is 200 and widths.indexOf(200) is widths.lastIndexOf(200),
+    "widths=#{widths.join()}"
+  await click 'stop'
+  await settle()
