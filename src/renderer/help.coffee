@@ -1,5 +1,5 @@
-# Quick reference, shown by :help in the editor. Data rather than prose so
-# `:help colors` can pick one section out, and `:help wheel` can pick lines
+# Quick reference, shown by /help (or :help). Data rather than prose so
+# `/help colors` can pick one section out, and `/help wheel` can pick lines
 # out of every section, without reformatting anything.
 
 SECTIONS = [
@@ -11,11 +11,11 @@ SECTIONS = [
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
     ['Ctrl-e',            'show or hide the editor']
-    [':eval',             'eval the whole buffer into the live worker']
-    [':run',              'fresh worker, empty scope -- this is BASIC RUN']
+    ['/eval',             'eval the whole buffer into the live worker']
+    ['/run',              'fresh worker, empty scope -- this is BASIC RUN']
     ['',                  'eval keeps everything the worker knows;']
     ['',                  'run throws it away and starts clean']
-    ['',                  'run and :eval give the canvas the keyboard;']
+    ['',                  'run and /eval give the canvas the keyboard;']
     ['',                  'region eval leaves it in the editor']
     ['',                  'a syntax error takes the cursor to it; a runtime']
     ['',                  'one lists its stack -- click a frame to go there']
@@ -23,13 +23,17 @@ SECTIONS = [
     ['',                  'it answers between frames, so you can ask a']
     ['',                  'running sketch what it is doing -- and change it']
     ['Up / Down',         'earlier lines, at the prompt']
-    [':w',                'force a save (edits autosave anyway)']
-    [':e <name>',         'open a sketch, creating it if new; :e! discards edits']
-    ['',                  'folders are part of the name: :e challenges/ocean']
+    ['/w',                'force a save (edits autosave anyway)']
+    ['/e <name>',         'open a sketch, creating it if new; /e! discards edits']
+    ['',                  'folders are part of the name: /e challenges/ocean']
     ['Cmd/Ctrl-O',        'open a sketch with the system file picker']
-    [':target <n>',       'flag the first source line past n; :target 0 clears']
-    [':help <word>',      'this, or one section, or an object like keys,']
+    ['/target <n>',       'flag the first source line past n; /target 0 clears']
+    ['/help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']
+    ['/ or : commands',   'typed at the > prompt, or after : in vim;']
+    ['',                  'a line starting with either is always a command,']
+    ['',                  'so CoffeeScript opening with a regex goes in']
+    ['',                  'parens: (/x/).test s']
   ]
 ,
   name:  'debug'
@@ -40,10 +44,10 @@ SECTIONS = [
     ['',                  'the > prompt asks the paused call, and can change it']
     ['Cmd/Ctrl-\\  F8',    'stop right now on whatever line is running;']
     ['',                  'pressed again, carry on']
-    ['F10  :line',        'step to the next line that runs, wherever it is']
-    [':pause  :step',     'hold a sketch at a frame, then let one through;']
-    ['',                  'from a stopped line, :step runs on to the next frame']
-    [':continue',         'let it go again, from either kind of pause']
+    ['F10  /line',        'step to the next line that runs, wherever it is']
+    ['/pause  /step',     'hold a sketch at a frame, then let one through;']
+    ['',                  'from a stopped line, /step runs on to the next frame']
+    ['/continue',         'let it go again, from either kind of pause']
     ['',                  'with DevTools open, breakpoint does nothing']
   ]
 ,
@@ -368,7 +372,7 @@ search = (wanted) ->
 globalThis.HELP =
   sections: SECTIONS
   objects:  OBJECTS
-  # An object by its exact name, then sections by prefix (so `:help col` is
+  # An object by its exact name, then sections by prefix (so `/help col` is
   # still Colors), then a search of every line.
   match: (topic) ->
     return SECTIONS unless topic

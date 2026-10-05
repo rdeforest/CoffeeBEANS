@@ -145,6 +145,7 @@ askLine = (source) ->
   say "> #{source}", 'echo'
   entered.push source
   enteredAt = entered.length
+  return Editor.command source if Editor.isCommand source
   return say '*** no worker -- press Run ***', 'err' unless worker
   # A sketch stopped in V8 cannot serve the shared-memory question -- nothing
   # runs to look at it -- so the line goes to the paused frame instead. That
@@ -369,7 +370,7 @@ globalThis.Panels =
 showHelp = (topic) ->
   sections = HELP.match topic
   unless sections.length
-    say "no help for \"#{topic}\" -- try :help with no topic", 'err'
+    say "no help for \"#{topic}\" -- try /help with no topic", 'err'
     return
   entries = [].concat (section.lines for section in sections)...
   width   = Math.max (syntax.length for [syntax] in entries)...
@@ -1100,7 +1101,7 @@ do ->
   start()
   frame()
   startSound()
-  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, :help for the rest', 'sys'
+  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, /help for the rest', 'sys'
   if params.has 'crashed'
     say "*** the app crashed (#{params.get 'crashed'}) and has restarted -- your sketch is as it was last saved ***", 'err'
 

@@ -1,5 +1,6 @@
 # The editor is the program: mounting, vim, region extraction,
-# autosave, reloads from disk, :e, :target and :help.
+# autosave, reloads from disk, :e, :target and :help, and the command table
+# the prompt shares with vim.
 
 fsp     = require 'fs/promises'
 path    = require 'path'
@@ -254,3 +255,151 @@ module.exports = (t) ->
   await wait 700
   strays = (await fsp.readdir paths.sketches).filter (name) -> not name.endsWith '.coffee'
   check 'atomic save leaves nothing behind', strays.length is 0, strays.join ', '
+
+  # --- one command table, two ways in --------------------------------------
+
+  # Commands at the prompt, as `/` or `:`, from the same table vim's command
+  # line uses (Robert's ask, 2026-10-04). Through Prompt.ask, the line the
+  # Enter key sends; the keystroke itself is the repl part's business.
+  {ask} = t
+  await js "await Editor.load('scratch'); return true"
+
+  await setDoc "print 'RAN FROM SLASH'\n"
+  await wait 400
+  await clearConsole()
+  await ask '/run'
+  text = await settled()
+  check '/run at the prompt runs the buffer in a fresh worker',
+    text.includes('fresh worker') and text.includes('RAN FROM SLASH'), JSON.stringify text.trim()
+
+  await setDoc "print 'RAN FROM COLON'\n"
+  await wait 400
+  await clearConsole()
+  await ask ':run'
+  text = await settled()
+  check ':run at the prompt does the same',
+    text.includes('fresh worker') and text.includes('RAN FROM COLON'), JSON.stringify text.trim()
+
+  # A regex can still open a line, in parens -- and without them it is a command.
+  await clearConsole()
+  text = await ask "(/a/).test 'a'"
+  check 'a regex in parens at the prompt is CoffeeScript', text.includes('true'), JSON.stringify text.trim()
+
+  await clearConsole()
+  text = await ask "/a/.test 'a'"
+  check 'a bare leading regex is taken as a command, not evaluated',
+    text.includes('/a is not a command') and not text.includes('true'), JSON.stringify text.trim()
+
+  await clearConsole()
+  text = await ask '/foo'
+  check 'an unknown command says so and names the real ones',
+    text.includes('/foo is not a command') and
+      ['/run', '/restart', '/eval', '/edit', '/help', '/target', '/pause', '/step', '/continue', '/line', '/write']
+        .every((name) -> text.includes name),
+    JSON.stringify text.trim()
+
+  await clearConsole()
+  text = await ask ':foo'
+  check 'and names them with the mark that was typed',
+    text.includes(':foo is not a command') and text.includes(':run') and not text.includes('/run'),
+    JSON.stringify text.trim()
+
+  # The same argument from both entrances. A command defined after mount is
+  # one table entry; vim and the prompt must both find it, by its full name
+  # and its short one, and hand it the same argument -- the bang included.
+  probed = await js """
+    if (!Editor.defineCommand) return 'no Editor.defineCommand'
+    globalThis.probed = []
+    Editor.defineCommand({name: 'zzprobe', short: 'zzp', run: (arg) => probed.push(arg)})
+    return true
+  """
+  if probed is true
+    await ask '/zzprobe one  two'
+    await handleEx 'zzprobe one  two'
+    await ask ':zzp! x'
+    await handleEx 'zzp! x'
+    await ask '/zzp'
+    await handleEx 'zzp'
+    probed = await js "return probed"
+  check 'one table entry, reached from the prompt and from vim with the same argument',
+    JSON.stringify(probed) is JSON.stringify(['one  two', 'one  two', '! x', '! x', '', '']),
+    JSON.stringify probed
+
+  # An entry with no short form is reached by its whole name from both sides.
+  # Vim falls back to the name by itself; the prompt has to be told.
+  bare = await js """
+    globalThis.bare = []
+    Editor.defineCommand({name: 'zzbare', run: (arg) => bare.push(arg)})
+    return true
+  """
+  await ask '/zzbare hi'
+  await handleEx 'zzbare hi'
+  bare = await js "return bare"
+  check 'an entry without a short form answers its full name at the prompt and in vim',
+    JSON.stringify(bare) is JSON.stringify(['hi', 'hi']), JSON.stringify bare
+
+  # Real commands that take arguments, from the prompt.
+  await setDoc "# a comment\nprint 'one'\n\nprint 'two'\n"
+  await wait 300
+  await ask '/target 3'
+  set = await linesText()
+  await ask '/tar 0'
+  cleared = await linesText()
+  check '/target n at the prompt sets the target, and /tar 0 clears it',
+    set is '2/3 lines' and cleared is '2 lines', "set=#{JSON.stringify set} cleared=#{JSON.stringify cleared}"
+
+  # A bare /target, no number at all, clears too -- from either side.
+  cleared = {}
+  for [side, give] in [['prompt', (line) -> ask "/#{line}"], ['vim', handleEx]]
+    await give 'target 3'
+    await wait 200
+    set = await linesText()
+    await give 'target'
+    await wait 200
+    cleared[side] = [set, await linesText()]
+  check 'a bare /target at the prompt (and :target in vim) clears a set target',
+    JSON.stringify(cleared) is JSON.stringify(prompt: ['2/3 lines', '2 lines'], vim: ['2/3 lines', '2 lines']),
+    JSON.stringify cleared
+
+  await clearConsole()
+  text = await ask '/help colors'
+  check '/help <topic> at the prompt narrows to one section',
+    text.includes('Colors') and not text.includes('Running code'), JSON.stringify text.trim()[..200]
+
+  # Several words are one topic, searched for line by line, and a run of
+  # spaces between them is one space -- the same at the prompt as in vim.
+  await clearConsole()
+  fromPrompt = await ask '/help where   fn'
+  fromVim    = await helpFor 'where   fn'
+  check '/help <a> <b> at the prompt searches the same as :help <a> <b> in vim',
+    fromPrompt.includes('where fn') and fromPrompt.includes('p.hue') and
+      fromPrompt.trim() is "> /help where   fn#{fromVim.trim()}",
+    JSON.stringify(prompt: fromPrompt.trim()[..200], vim: fromVim.trim()[..200])
+
+  check 'help shows the / form of the commands',
+    await js "return HELP.match('running')[0].lines.some(([syntax]) => syntax === '/run')"
+
+  await wait 400                             # let the target edits flush
+  await ask '/e hello'
+  await wait 300
+  check '/e name at the prompt switches sketches', (await js "return Editor.name()") is 'hello'
+  await js "await Editor.load('scratch'); return true"
+
+  # A bare /e! reloads the open sketch from disk and drops the edit not yet
+  # saved. Had the edit been flushed instead -- by the reload's own save, or
+  # by the debounce -- the buffer and the file would both read DROPPED.
+  reloaded = {}
+  for [side, give] in [['prompt', (line) -> ask "/#{line}"], ['vim', handleEx]]
+    await setDoc "print 'KEPT'\n"
+    await wait 600                           # past the save debounce: on disk
+    await setDoc "print 'DROPPED'\n"         # inside it: pending
+    await give 'e!'
+    await wait 500                           # longer than a save would take
+    reloaded[side] =
+      name:    await js "return Editor.name()"
+      doc:     await js "return Editor.all()"
+      disk:    await fsp.readFile scratch, 'utf8'
+  want = {name: 'scratch', doc: "print 'KEPT'\n", disk: "print 'KEPT'\n"}
+  check 'a bare /e! at the prompt (and :e! in vim) reloads the sketch, discarding the edit',
+    JSON.stringify(reloaded) is JSON.stringify(prompt: want, vim: want),
+    JSON.stringify reloaded
