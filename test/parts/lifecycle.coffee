@@ -91,17 +91,37 @@ module.exports = (t) ->
   await click 'stop'
   await settle()
 
-  # 36. a flood of prints is capped, and the last line still arrives
-  await setDoc "print i for i in [1..200000]\nprint 'LAST'\n"
+  # 36. a flood the console cannot hold is capped to its tail. 20,000 lines
+  # of 1..5 digits are 88,894 bytes of text plus a 4-byte length each, about
+  # 169 KB against the 1 MiB print ring (PRINT_BYTES): it fits six times over
+  # even if the renderer drained nothing, so every line reaches the console
+  # and the cap alone decides what is kept -- 18002..20000 and LAST.
+  await setDoc "print i for i in [1..20000]\nprint 'LAST'\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  await settled()
+  ends = await js """
+    const lines = document.getElementById('console')
+    return {count: lines.childElementCount, first: lines.firstElementChild?.textContent,
+            last: lines.lastElementChild?.textContent}
+  """
+  check 'console caps a flood and keeps the tail',
+    ends.count is 2000 and ends.first is '18002' and ends.last is 'LAST', JSON.stringify ends
+
+  # 61. a flood the ring cannot hold drops lines and says so. A full ring
+  # drops new lines rather than block the sketch (NOTES.md, The console goes
+  # through shared memory), so which lines survive is a race with the drain
+  # and LAST is not promised. The closing line is longer than the whole ring,
+  # so at least that one is dropped however fast the renderer keeps up.
+  await setDoc "print i for i in [1..200000]\nprint 'x'.repeat 1 << 20\n"
   await wait 500
   await clearConsole()
   await evalAll()
   text  = await settled()
   count = await js "return document.getElementById('console').childElementCount"
-  # The last line too, so a failure says whether LAST was dropped by a full
-  # ring (a "lines dropped" notice) or never printed at all.
-  last  = await js "return document.getElementById('console').lastElementChild?.textContent ?? null"
-  check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines, last #{JSON.stringify last}"
+  check 'a flood past the ring is counted and still capped',
+    count <= 2000 and /\d+ lines? dropped, console ring full/.test(text), "#{count} lines, ends #{JSON.stringify text[-120..]}"
 
   # 39. a runtime error reports the CoffeeScript line it happened on
   await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"

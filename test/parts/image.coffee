@@ -68,8 +68,12 @@ module.exports = (t) ->
   await wait 500
   await clearConsole()
   await click 'runFresh'
-  await wait 1200
-  text = await consoleText()
+  # Until the fresh worker has answered: a fixed 1200ms read the console
+  # mid-boot on a slow machine. The console was cleared, so nothing from
+  # before the run can satisfy this.
+  deadline = Date.now() + 15000
+  await wait 25 until (await consoleText()).includes('afterRun=') or Date.now() > deadline
+  text = await settled()
   check 'a shadowed command is restored by a run',
     shadowed and persists and text.includes('afterRun=function'),
     "shadowed=#{shadowed} persists=#{persists} after=#{JSON.stringify text.trim()}"
