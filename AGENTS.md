@@ -76,11 +76,11 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 171 checks
+    npm test                                 all 182 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
-color loading shell input sound perf`. Each starts from a reset app, so running one alone means
+color loading shell input random sound perf`. Each starts from a reset app, so running one alone means
 the same thing as running it in the middle of everything else.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
