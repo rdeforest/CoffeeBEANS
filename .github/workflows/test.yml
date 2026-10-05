@@ -7,9 +7,10 @@ on:
   push:
   workflow_dispatch:
 
-# A newer push to the same ref makes the older run moot.
+# A newer push to the same ref makes the older run moot. A run by hand is
+# grouped apart, so asking for macOS does not cancel the push's run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -19,8 +20,8 @@ jobs:
       matrix:
         os: >-
           ${{ fromJSON((github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v'))
-            && '["ubuntu-latest", "windows-latest", "macos-latest"]'
-            || '["ubuntu-latest", "windows-latest"]') }}
+            && '["ubuntu-24.04", "windows-latest", "macos-latest"]'
+            || '["ubuntu-24.04", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     # A wedged app never exits; the suite alone takes about two minutes.
     timeout-minutes: 20
@@ -36,7 +37,8 @@ jobs:
           cache: npm
       - run: npm ci
 
-      # Ubuntu 24.04 has AppArmor refuse unprivileged user namespaces, and
+      # Ubuntu 24.04 (pinned above, not ubuntu-latest, because this is what
+      # was measured) has AppArmor refuse unprivileged user namespaces, and
       # without them Chromium's sandbox aborts at launch ("The SUID sandbox
       # helper binary was found, but is not configured correctly").
       - if: runner.os == 'Linux'
@@ -44,8 +46,6 @@ jobs:
 
       - if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' npm test
-        env:
-          BEANS_TESTS: editor
 
       - if: runner.os != 'Linux'
         run: npm test

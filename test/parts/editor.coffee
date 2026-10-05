@@ -22,17 +22,6 @@ module.exports = (t) ->
   fatCursor = await js "return !!document.querySelector('.cm-fat-cursor') || !!document.querySelector('.cm-vim-panel')"
   check 'editor mounts',        mounted
   check 'vim mode active',      fatCursor, '(block cursor present)'
-  console.log 'PROBE', JSON.stringify await js """
-    const v = Editor.view(), cm = v.cm, layer = document.querySelector('.cm-vimCursorLayer')
-    const r = v.scrollDOM.getBoundingClientRect()
-    return {hasFocus: document.hasFocus(), vis: document.visibilityState, active: document.activeElement && document.activeElement.className,
-      vimState: !!(cm && cm.state.vim), insert: cm && cm.state.vim && cm.state.vim.insertMode, layer: !!layer, layerKids: layer && layer.children.length,
-      rect: [r.width, r.height], coords: v.coordsAtPos(v.state.selection.main.head), doc: v.state.doc.length,
-      win: [innerWidth, innerHeight]}
-  """
-  await wait 1000
-  later = await js "return !!document.querySelector('.cm-fat-cursor')"
-  console.log 'PROBE later', later
 
   await js "await Editor.load('scratch'); return true"
 
