@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pause-on-error probe</title>
+<script>
+// A fresh worker per scenario, so the debugger attaches to each exactly once
+// (AGENTS.md: never re-attach to a worker).
+let worker = null
+const LOADER = `self.addEventListener('message', function first(e) {
+  self.removeEventListener('message', first)
+  ;(0, eval)(e.data.lib  + '\\n//# sourceURL=beans-runtime/lib.js')
+  ;(0, eval)(e.data.boot + '\\n//# sourceURL=probe/src/renderer/boot.js')
+  postMessage({type: 'ready'})
+})`
+const loaderUrl = URL.createObjectURL(new Blob([LOADER], {type: 'text/javascript'}))
+
+window.boot = (lib, boot) => new Promise((resolve) => {
+  if (worker) worker.terminate()
+  worker = new Worker(loaderUrl)
+  worker.onmessage = ({data}) => { if (data.type === 'ready') resolve(true) }
+  worker.onerror = (e) => { e.preventDefault(); resolve('worker onerror: ' + e.message) }
+  worker.postMessage({lib, boot})
+})
+
+window.run = (style, source, id) => new Promise((resolve) => {
+  worker.onmessage = ({data}) => resolve(data)
+  worker.onerror = (e) => { e.preventDefault(); resolve({type: 'worker-onerror', message: e.message}) }
+  worker.postMessage({type: 'run', style, source, id})
+})
+</script>
