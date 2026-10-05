@@ -1,0 +1,60 @@
+CoffeeBEANS
+Copyright (c) 2026 Robert de Forest
+
+This repository is dual-licensed: its software is under the MIT License, and
+its documentation is under Creative Commons Attribution-ShareAlike 4.0
+International (CC BY-SA 4.0). This follows the general guidance that software
+should carry a software license, not a Creative Commons one.
+
+--------------------------------------------------------------------------------
+WHICH LICENSE APPLIES
+--------------------------------------------------------------------------------
+
+MIT License (see LICENSE-MIT) -- the software:
+
+  - Source code: *.coffee, *.js, *.html, and package/build files
+  - Everything under src/, test/, examples/ and sketches/
+
+  Sketches are programs, so they follow the code: anyone may copy one into
+  their own work on MIT terms.
+
+CC BY-SA 4.0 (see LICENSE-CC-BY-SA) -- the documentation:
+
+  - *.md, and everything under docs/
+
+--------------------------------------------------------------------------------
+NOT IN THIS REPOSITORY
+--------------------------------------------------------------------------------
+
+The game built on CoffeeBEANS -- its story, challenges, art and music -- lives
+in a separate repository under its own terms. In particular, the art belongs
+to the artists who made it and is licensed to Robert de Forest for the game;
+nothing here grants any right to it.
+
+Neither license grants rights to the name "CoffeeBEANS" for a product of your
+own. Build it, fork it, ship it -- under another name.
+
+--------------------------------------------------------------------------------
+THIRD-PARTY COMPONENTS
+--------------------------------------------------------------------------------
+
+These keep their own licenses; nothing above changes their terms. CREDITS.md
+lists who made them.
+
+  Electron -- MIT -- https://github.com/electron/electron
+    (installed by npm; a packaged build ships Electron's LICENSE and
+    LICENSES.chromium.html, which cover Chromium and its components)
+
+  CoffeeScript 2.7.0 -- MIT -- https://coffeescript.org
+    (vendored as src/renderer/vendor/coffeescript.js)
+
+  CodeMirror 6 and its Lezer, style-mod, w3c-keyname, crelt and
+  find-cluster-break dependencies -- MIT -- https://codemirror.net
+    (bundled into src/renderer/vendor/editor.js)
+
+  @replit/codemirror-vim -- MIT -- https://github.com/replit/codemirror-vim
+    (bundled into src/renderer/vendor/editor.js)
+
+  font8x8 by Daniel Hepper, from Marcel Sondaar's VGA fonts -- public domain
+    -- https://github.com/dhepper/font8x8
+    (transcribed into src/runtime/font.coffee)

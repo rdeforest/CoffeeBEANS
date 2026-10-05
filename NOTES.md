@@ -474,9 +474,13 @@ Decided by Robert, 2026-10-04:
 That last one picks the generator. "Current seed" only means something if
 the generator's whole state fits in one number that `randomize` accepts.
 sfc32's is four 32-bit words; mulberry32's is one, so its state *is* a seed.
-Mulberry32 it is, unless something better with a one-number state turns up:
-a few lines, no dependency, period 2^32 (about 70 minutes at a million draws
-a second before it repeats -- invisible to anything a sketch does).
+**Mulberry32, decided by Robert 2026-10-04.** sfc32's four words could come
+back as an array, but the point of `currentSeed` is that a person reads it
+off the screen and types it back, and one number is what a person can do
+that with. It is also the shape of generator the player will have just
+written in the pseudo-random challenge. A few lines, no dependency, period
+2^32 (about 70 minutes at a million draws a second before it repeats --
+invisible to anything a sketch does).
 
 The game will gate all three names together behind its pseudo-random
 challenge (docs/ROADMAP.md, Game content); gating `rnd` alone would leave

@@ -21,20 +21,60 @@ releases after the fest ends, as Next Fest requires.
 | | |
 |---|---|
 | Platform | Electron. Steam's pain points get handled as they come up. |
-| Code licence | MIT. Anyone can build it free; the Steam version is the one built and tested as a unit, with cloud saves and sharing code with friends. |
+| Licences | Code MIT, documentation CC BY-SA 4.0 (`LICENSE`, 2026-10-04). Anyone can build the code free; the Steam version is the one built and tested as a unit, with cloud saves and sharing code with friends. |
 | Art | Owned by the artist, licensed to Robert for the game and its marketing. |
-| Music | Robert's, under a Creative Commons licence (which one: TBD). |
-| Mascot | *Inspired by* Agent Calico and designed fresh with the artist to be legally distinct from it: that character was created by someone else on company time, so nothing is taken from earlier Agent Calico material. |
+| Music | Robert's, under Creative Commons 4.0 -- BY or BY-SA, not yet chosen -- plus an explicit grant that streams and videos of the game may use it on any terms (Robert, 2026-10-04). |
+| Mascot | An original character, designed with the artist. Her brief belongs in the content repository, below. |
 | Proving a solution | Some challenges are proved by the player demonstrating the outcomes: the lander both lands *and* crashes, and an unpiloted lander crashes. |
+| Repositories | Two, below. Both private until there are playtesters. The engine moves to the `thatsnice` GitHub org with a fresh history when it goes public (Robert, 2026-10-04). |
 | Windows | Built and tested in CI, plus Windows playtesters. Robert does not run Windows. |
 | Credit | Full credit to Claude and Anthropic, plus a doc for others on working this way. Steam's AI disclosure applies to shipped content players consume (story text, examples, help), not to coding assistance. |
+
+## Repositories
+
+Decided 2026-10-04, on Claude's suggestion: split by what may be public, not
+by stage of development.
+
+- **This repository, the engine:** the language, the runtime, the editor, the
+  debugger, the sandbox, the tests. MIT. When it goes public it carries the
+  issues and the CI -- standard GitHub runners are free for public
+  repositories, and bigger (4 vCPU rather than 2).
+- **A content repository, private:** the story, the challenge tree and its
+  solutions, the mascot's brief, the art, the music. Spoilers, and work the
+  artist licenses to Robert rather than to everyone. Steam builds need both,
+  so they are made here or on Robert's machines; that is a few release builds
+  a month, well inside the private minutes.
+
+Until the content repository exists, game design goes in this one, and moves
+when it does.
+
+Open:
+
+- **How the art is handled** -- Robert's todo, 2026-10-04: where the files
+  live, what the artist's licence says, and the free-build question below,
+  settled together.
+- **What a free build from source contains.** Built from this repository
+  alone it is the engine and the sandbox, without the story. If the free
+  build is meant to be the whole game, the content has to go public at some
+  point (at release, say), and the art can only go with it if the artist's
+  licence allows. Robert's call.
+- **How playtesters get builds.** Playtest builds contain the content, so a
+  public repository's releases are the wrong place for them. Candidates:
+  releases in the private content repository with the testers added as
+  readers, or Steam's own playtest and beta-key tools (what those need
+  before a store page exists: not checked). Feedback can still come in as
+  issues on the public engine repository.
+- **The artist's licence** has to cover the Steam build, playtest builds,
+  the store page and marketing, and say whether the art may ever sit in a
+  public repository.
 
 ## Phases
 
 ### 0. Foundations -- Mon 2026-10-05 to Fri 2026-12-11
 
-- `LICENSE` for the code; a credits and third-party notices file
-  (Electron/Chromium, CoffeeScript, CodeMirror, font8x8); a home for asset licences.
+- ~~`LICENSE` for the code; a credits and third-party notices file~~ --
+  `LICENSE`, `LICENSE-MIT`, `LICENSE-CC-BY-SA`, `CREDITS.md`, 2026-10-04.
+  Still to come: the content repository and its licences.
 - Packaged builds for Windows, macOS and Linux from GitHub Actions, and the
   test suite running on all three. The repo is private, so minutes count:
   Linux and Windows on every push, macOS on release builds only.
@@ -87,7 +127,8 @@ releases after the fest ends, as Next Fest requires.
 
 ## Game content (todo)
 
-Ideas for the challenge tree, not yet placed in it.
+Ideas for the challenge tree, not yet placed in it. These move to the
+content repository when it exists.
 
 - **Pseudo-random numbers, as a hack** (Robert, 2026-10-04). Before the game
   gives the player `randomize` and `rnd`, they implement a simple
@@ -96,6 +137,13 @@ Ideas for the challenge tree, not yet placed in it.
   anyone who knows the generator and the seed. A good first lesson for a
   novice, it fits the hacking side of the story, and it needs no graphics.
   Solving it unlocks the built-in generator (NOTES.md, Seeded randomness).
+
+## Robert's own todo
+
+- Fix the `thatsnice/music` repository's licence: it says CC BY-SA 2.0,
+  while its own README describes attribution only. Move to 4.0 and add the
+  streaming grant above.
+- Talk to the candidate artists.
 
 ## The dial
 

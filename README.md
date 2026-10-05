@@ -2,6 +2,13 @@
 
 A BASIC-shaped drawing toy. CoffeeScript in, pixels out, no build step.
 
+CoffeeBEANS is on its way to being a game on Steam: a story about
+programming in the late '80s and early '90s, told through challenges that
+unlock the language as you solve them, with a sandbox that has everything
+open. The plan and the schedule are in [docs/ROADMAP.md](docs/ROADMAP.md).
+The code stays free and open; the game adds a story, art and music of its
+own.
+
     npm install
     npm start
 
@@ -322,11 +329,12 @@ see NOTES.md.
     BEANS_TESTS=buffers npm test            one
     BEANS_TESTS=buffers,lifecycle npm test  a few
 
-The parts are `editor image buffers lifecycle drawing color loading shell
-input perf`. Each starts from a reset app -- scratch loaded, buffer blank,
-worker restarted -- so running one alone means the same thing as running it in
-the middle of everything else, and a part that fails does not take the ones
-after it with it. The whole suite is about a minute; one part is a few seconds.
+The parts are `editor image repl buffers stepping debugging focus lifecycle
+drawing color loading shell input sound perf`. Each starts from a reset app --
+scratch loaded, buffer blank, worker restarted -- so running one alone means
+the same thing as running it in the middle of everything else, and a part
+that fails does not take the ones after it with it. The whole suite takes a
+few minutes; one part is a few seconds. It exits nonzero when a check fails.
 
 Add a check to `test/parts/<area>.coffee`; the handles it takes off `t` are
 listed at the top of the file and defined in `test/toolkit.coffee`.
@@ -336,3 +344,9 @@ it if you want to watch one go by, and `BEANS_MINIMIZE=1` minimises it, which
 is how you check that a sketch still runs when the window is not on screen --
 Chromium throttles a minimised window, and the present loop is what wakes a
 sketch parked in `buffer.swap`.
+
+## License
+
+The code is MIT; the documentation is CC BY-SA 4.0. [LICENSE](LICENSE) says
+which files are which and lists the third-party pieces, and
+[CREDITS.md](CREDITS.md) says who made what.

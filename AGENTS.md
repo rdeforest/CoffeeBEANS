@@ -23,6 +23,56 @@ you were about to do.
 his next pull conflicted with itself. Once pushed, a correction is a new
 commit, not an amend.
 
+## How code changes get made
+
+From 2026-10-04 CoffeeBEANS is worked the way voxel-mvp was on the nights of
+2026-09-26 and 09-27 (its `docs/overnight-2026-09-27.md` is the worked
+example), at Robert's request.
+
+**The day** is Robert's: review what landed overnight, answer the agents'
+questions, talk about the big picture, test by hand, and queue the next
+night's work before bed. **The night** is the agents', working the queue
+while he sleeps.
+
+**The queue** is one plan per night, `docs/overnight/YYYY-MM-DD.md` (named
+for the morning it lands, as voxel-mvp's were), drafted by Claude and
+approved by Robert. It holds a progress checklist; the tracks,
+each with its branch, worktree and the files it owns (a chunk that needs
+another track's file stops and says so); the session facts a restarted
+session needs, the suite's check count first; and, by morning, the brief.
+Closed out, it moves to `docs/overnight/done/`.
+
+**Every code change goes through the loop:**
+
+- an **author** writes the chunk;
+- two **reviewers**, in parallel and adversarial, see only the diff and the
+  files it names -- one hunting for wrong behaviour, one for what is missing
+  (the part of the ask not done, the check that would pass against the old
+  code too);
+- a **tiebreak** when the author disputes a blocking finding;
+- a **fixer** applies what survives and commits only on a green suite,
+  explaining any change in the check count.
+
+voxel-mvp ran Opus 5.5 as author, correctness reviewer and fixer, Sonnet 5
+as completeness reviewer and Fable 5.1 as tiebreak. Each night's plan names
+its own. After the tracks merge, one more review reads the combined result:
+in voxel-mvp that is the step that caught the cross-track bugs.
+
+**Standing rules for a night:**
+
+- A question that needs Robert's judgement goes in the brief with its
+  evidence, and work moves on. Do not guess his intent and build on the guess.
+- Anything decided without him goes in the brief, so he can overrule it.
+- Do not shrink a chunk to close it. If the hard part was cut, say so.
+- Commit the smallest chunks that pass; push after each merge, checking
+  upstream first (above).
+- Whether two suites can run at once without the frame-timing checks failing
+  is not known yet. Run them one at a time until it is measured.
+
+**The morning brief**, at the bottom of the plan: what needs Robert first;
+what landed; what was decided without him; what was not done and why; and a
+list of things to try by hand.
+
 ## Running and testing
 
     npm start                                the app
@@ -89,10 +139,22 @@ Now: Phase 0 there -- the licence, builds and tests for all three platforms
 in CI, seeded `rnd` (NOTES.md, Seeded randomness), feature gating, and the
 sandbox mode.
 
+From Robert's playtesting, 2026-10-04:
+
+- **The editor defaults to ordinary keys; vim is an option.** Most people on
+  Steam will not want vim. Emacs keys if anyone asks (after some mockery);
+  WordStar users get pointed at Turbo Pascal.
+- **The prompt behaves like the node and coffee REPLs** -- readline's emacs
+  keys and Tab completion. Tab completion is no longer parked (its design is
+  at the bottom of this file).
+- **Commands at the prompt**, as `/run` or `:run`: a line starting with
+  either is always a command, and CoffeeScript that starts with a regex goes
+  in parens. Vim's ex commands and the prompt share one table. The vim
+  switch is a remembered checkbox in the Edit menu.
+
 Earlier priorities, by Robert on 2026-09-28: debugging (done 2026-09-29);
 sound (first pass done 2026-09-29; the modular synth and effects wait on the
-roadmap); tab completion at the console (designed, parked at the bottom of
-this file -- still lowest).
+roadmap).
 
 ## Where the debugger work stands
 
@@ -364,7 +426,7 @@ Each of these passed on the Mac and failed on Linux, so check both.
   the UI zoom, scale itself up to fill the stage on its own, or have an
   option? Raised 2026-09-29; nothing decided.
 
-## Tab completion (parked, lowest priority)
+## Tab completion (designed; wanted since 2026-10-04)
 
 Estimated at ~150 lines plus ~5 checks in `repl`. Decided:
 
