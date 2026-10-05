@@ -98,7 +98,10 @@ module.exports = (t) ->
   await evalAll()
   text  = await settled()
   count = await js "return document.getElementById('console').childElementCount"
-  check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines"
+  # The last line too, so a failure says whether LAST was dropped by a full
+  # ring (a "lines dropped" notice) or never printed at all.
+  last  = await js "return document.getElementById('console').lastElementChild?.textContent ?? null"
+  check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines, last #{JSON.stringify last}"
 
   # 39. a runtime error reports the CoffeeScript line it happened on
   await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"
