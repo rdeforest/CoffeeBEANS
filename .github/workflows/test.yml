@@ -47,5 +47,3 @@ jobs:
 
       - if: runner.os != 'Linux'
         run: npm test
-        env:
-          BEANS_SHOW: ${{ runner.os == 'Windows' && '1' || '' }}

@@ -299,13 +299,16 @@ createWindow = ->
   # not a proven one -- if the timing parts start failing hidden again, this
   # is the first place to look. See AGENTS.md, Platform facts.
   #
-  # Windows has the same symptom: on the GitHub Actions runner the first
-  # hidden run read 1fps on the meter and failed the same frame-timing
-  # checks (Claude, 2026-10-05).
-  mapFirst = hidden and process.platform in ['linux', 'win32']
+  # Windows needs more still. On the GitHub Actions runner the frame-timing
+  # checks failed never shown (the meter read 1fps) and failed shown then
+  # minimised, and passed with the window shown and left alone (Claude,
+  # 2026-10-05). So a hidden Windows run shows itself inactive and stays.
+  mapFirst  = hidden and process.platform in ['linux', 'win32']
+  iconAfter = process.platform is 'linux'
   win.once 'ready-to-show', ->
     if mapFirst
-      win.once 'show', -> setTimeout (-> win.minimize() unless win.isDestroyed()), 300
+      if iconAfter
+        win.once 'show', -> setTimeout (-> win.minimize() unless win.isDestroyed()), 300
       win.showInactive()
     else if process.env.BEANS_MINIMIZE
       win.minimize()
