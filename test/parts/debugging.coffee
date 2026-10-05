@@ -243,3 +243,155 @@ print 'after'
   await click 'stop'
   stoppedOk = await until_ (-> (await status()) is 'ready'), 15000
   check 'Stop during an endless evaluation still stops', stoppedOk, "status=#{await status()}"
+  await until_ -> (await status()) is 'ready'
+
+  # 17. A getter in the pane runs when clicked, once a click, and never
+  # otherwise. `count` is the getter's own tally, read back at the prompt, so
+  # a run nobody saw -- by expanding, by redrawing, by a click let through
+  # late -- shows up as a number that went too far.
+  await setDoc """
+screen 320, 200
+count = 0
+spin = ->
+  null while yes
+  0
+o = {x: 1}
+Object.defineProperty o, 'tick',  enumerable: yes, get: -> count += 1
+Object.defineProperty o, 'bad',   enumerable: yes, get: -> throw new Error 'nope'
+Object.defineProperty o, 'stuck', enumerable: yes, get: spin
+Object.defineProperty o, 'seen',  enumerable: yes, get: -> count
+Object.defineProperty o, Symbol('foo'), enumerable: yes, get: -> count += 1
+p = {y: 2}
+breakpoint
+print 'after'
+done = 1
+"""
+  await wait 500
+  await clearConsole()
+  seen = (await pauseNumber()) ? 0
+  await evalAll()
+  getterPause = await nextPause seen
+  clickRow = (name, times = 1) -> js """
+    for (const row of document.querySelectorAll('#vars .var'))
+      if (row.querySelector('.var-name')?.textContent === #{JSON.stringify name})
+        for (let i = 0; i < #{times}; i++) row.click()
+    return true
+  """
+  thrownRow = (name) -> js """
+    for (const row of document.querySelectorAll('#vars .var'))
+      if (row.querySelector('.var-name')?.textContent === #{JSON.stringify name})
+        return row.querySelector('.var-value').classList.contains('thrown')
+    return null
+  """
+  rowHas = (name, cls) -> js """
+    for (const row of document.querySelectorAll('#vars .var'))
+      if (row.querySelector('.var-name')?.textContent === #{JSON.stringify name})
+        return row.classList.contains(#{JSON.stringify cls})
+    return null
+  """
+  counted = -> ask "'count=' + count"
+  # A value other than `was`, once the pane has been redrawn with one.
+  becomes = (name, was, limit) -> until_ (-> v = await paneValue name; v if v? and v isnt was), limit
+
+  # Opened by hand unless check 12 left it open: the pane remembers by path.
+  await js """
+    for (const row of document.querySelectorAll('#vars .var.openable:not(.open)'))
+      if (row.querySelector('.var-name').textContent === 'o') row.click()
+    return true
+  """
+  opened = await until_ -> paneValue 'tick'
+  before = await counted()
+  await becomes 'tick', null           # the prompt's answer redrew the pane
+  await clickRow 'tick'
+  ran = await becomes 'tick', '(getter, not run)'
+  after = await counted()
+  check 'a getter in the pane is not run by opening its object, and a click runs it once',
+    opened is '(getter, not run)' and before.includes('count=0') and
+      ran is '1' and after.includes('count=1'),
+    "opened=#{JSON.stringify opened} before=#{JSON.stringify before.trim()} ran=#{JSON.stringify ran} after=#{JSON.stringify after.trim()}"
+
+  # A symbol cannot be named in the expression that would run it.
+  symbol = await paneValue 'Symbol(foo)'
+  check 'a symbol-keyed getter is listed but not offered to run',
+    symbol is '(getter, not run)' and (await rowHas 'Symbol(foo)', 'runnable') is false,
+    "value=#{JSON.stringify symbol} runnable=#{await rowHas 'Symbol(foo)', 'runnable'}"
+
+  # two clicks before the first has answered: the second is refused
+  await becomes 'tick', null
+  await clearConsole()
+  await clickRow 'tick', 2
+  twice = await becomes 'tick', '(getter, not run)'
+  await t.quiet()
+  said  = await consoleText()
+  check 'a second click while the first is still running is refused',
+    twice is '2' and said.includes('still evaluating') and (await counted()).includes('count=2'),
+    "tick=#{JSON.stringify twice} console=#{JSON.stringify said.trim()}"
+
+  # a click while the prompt is evaluating is refused, and not run afterwards
+  await becomes 'tick', null
+  await clearConsole()
+  await js "Prompt.ask('null while yes'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await clickRow 'tick'
+  await until_ (-> js "return Prompt.pending() === false"), 15000
+  await t.quiet()
+  said = await consoleText()
+  late = await counted()
+  check 'a click while the prompt is evaluating is refused, not queued',
+    said.includes('still evaluating') and said.includes('gave up') and late.includes('count=2') and
+      (await pauseNumber()) is getterPause,
+    "console=#{JSON.stringify said.trim()} then #{JSON.stringify late.trim()}"
+
+  # a getter that throws reads as an error, in the pane's own row
+  await becomes 'bad', null
+  await clickRow 'bad'
+  bad = await becomes 'bad', '(getter, not run)'
+  check 'a getter that throws shows as an error',
+    /^threw Error: nope/.test(bad) and (await thrownRow 'bad'),
+    "bad=#{JSON.stringify bad} thrown=#{await thrownRow 'bad'}"
+
+  # one that never returns is given up on, like the prompt, and the frame
+  # survives it -- and redrawing the pane after it ran nothing else
+  await becomes 'stuck', null
+  await clearConsole()
+  await clickRow 'stuck'
+  await until_ -> js "return Prompt.pending()"
+  await clickRow 'p'
+  openedEarly = await rowHas 'p', 'open'
+  stuck = await becomes 'stuck', '(getter, not run)', 15000
+  check 'a getter that never returns is given up on, and the pause goes on',
+    /gave up/.test(stuck) and (await thrownRow 'stuck') and (await counted()).includes('count=2') and
+      (await pauseNumber()) is getterPause,
+    "stuck=#{JSON.stringify stuck} status=#{await status()}"
+
+  # Listing an object's members is a request to V8 too, so it waits as well;
+  # and the redraw the stuck getter brought must not open it after all.
+  await t.quiet()
+  said = await consoleText()
+  check 'opening an object while a getter is still running is refused',
+    openedEarly is false and (await rowHas 'p', 'open') is false and said.includes('still evaluating'),
+    "early=#{openedEarly} now=#{await rowHas 'p', 'open'} console=#{JSON.stringify said.trim()}"
+
+  # after a step, what a click got is not shown as if it were still true
+  await becomes 'tick', null
+  await clickRow 'tick'
+  third = await becomes 'tick', '(getter, not run)'
+  await js "Stepping.line(); return true"
+  await nextPause getterPause
+  await becomes 'tick', null
+  check 'after a step a getter goes back to not run',
+    third is '3' and (await paneValue 'tick') is '(getter, not run)' and (await counted()).includes('count=3'),
+    "clicked=#{JSON.stringify third} now=#{JSON.stringify await paneValue 'tick'}"
+
+  # nor after another getter ran, which may have changed what this one says
+  await becomes 'seen', null
+  await clickRow 'seen'
+  seenRan = await becomes 'seen', '(getter, not run)'
+  await clickRow 'tick'
+  fourth = await becomes 'tick', '(getter, not run)'
+  check 'running one getter puts every other back to not run',
+    seenRan is '3' and fourth is '4' and (await paneValue 'seen') is '(getter, not run)',
+    "seen=#{JSON.stringify seenRan} then tick=#{JSON.stringify fourth} seen=#{JSON.stringify await paneValue 'seen'}"
+
+  await click 'stop'
+  await until_ -> (await status()) is 'ready'

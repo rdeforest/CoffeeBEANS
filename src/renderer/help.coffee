@@ -42,6 +42,8 @@ SECTIONS = [
     ['breakpoint',        'stop here -- BASIC STOP. The line about to run lights']
     ['',                  'up, and the names it can see appear beside the console']
     ['',                  'the > prompt asks the paused call, and can change it']
+    ['',                  'a getter there reads (getter, not run) until clicked;']
+    ['',                  'each click runs it once']
     ['Cmd/Ctrl-\\  F8',    'stop right now on whatever line is running;']
     ['',                  'pressed again, carry on']
     ['F10  /line',        'step to the next line that runs, wherever it is']

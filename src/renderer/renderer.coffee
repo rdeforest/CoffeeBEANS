@@ -166,17 +166,21 @@ askLine = (source) ->
 
 debugAsking = 0
 
+movedOn = -> say '*** it moved on before it could answer ***', 'sys'
+
+# The pane is redrawn only once the evaluation is counted back in, so the
+# objects it re-opens are not asked for while one is still out.
 askPaused = (source) ->
   debugAsking += 1
   try
     reply = await beans.debug.evaluate source
-    return say '*** it moved on before it could answer ***', 'sys' unless reply
-    showVars reply.pane if reply.pane and reply.pane.seq is linePaused
-    say reply.text, reply.kind
   catch error
-    say String(error.message ? error), 'err'
+    return say String(error.message ? error), 'err'
   finally
     debugAsking -= 1
+  return movedOn() unless reply
+  showVars reply.pane if reply.pane and reply.pane.seq is linePaused
+  say reply.text, reply.kind
   undefined
 
 drainAsk = ->
@@ -554,14 +558,40 @@ globalThis.Stepping =
 # --- the variables pane -----------------------------------------------------
 
 # The paused frame's names, beside the console rather than printed into it,
-# so a value can be watched changing as you step. Nothing here runs code: the
-# debugger hands over previews, and a getter is shown as a getter.
+# so a value can be watched changing as you step. Nothing here runs code
+# unasked: the debugger hands over previews, and a getter is shown as a
+# getter until it is clicked.
 varsEl = document.getElementById 'vars'
 
 # What was open, by path, so a step does not fold everything back up; and
 # what each row said last time, so a value that changed can say so.
 expandedPaths = new Set
 shownBefore   = new Map
+
+# What a click on a getter got, by path -- only the latest click's. Anything
+# else that redraws the pane -- a step, the prompt, another getter -- may have
+# changed what a getter would say, so it goes back to not run rather than
+# show an answer that is no longer true.
+ranGetters = new Map
+
+# The click is an evaluation in the paused frame, so it waits its turn with
+# the prompt's: refused while one is out, and holding step and continue off
+# while it runs (main refuses both as well; this is the saying so).
+runGetter = (entry, path) ->
+  return stillAsking() if debugAsking
+  debugAsking += 1
+  try
+    reply = await beans.debug.getter linePaused, entry.owner, entry.name
+  catch error
+    return say String(error.message ? error), 'err'
+  finally
+    debugAsking -= 1
+  return stillAsking() if reply is 'evaluating'
+  return movedOn() unless reply
+  return unless reply.pane.seq is linePaused
+  ranGetters.clear()
+  ranGetters.set path, reply
+  showVars reply.pane, yes
 
 varRow = (entry, path, depth) ->
   row = document.createElement 'div'
@@ -571,8 +601,10 @@ varRow = (entry, path, depth) ->
   name.className   = 'var-name'
   name.textContent = entry.name
   value = document.createElement 'span'
-  value.className   = if entry.getter then 'var-value getter' else 'var-value'
-  value.textContent = entry.text
+  ran   = ranGetters.get path
+  value.className   = if ran then 'var-value ran' else if entry.getter then 'var-value getter' else 'var-value'
+  value.textContent = ran?.text ? entry.text
+  value.classList.add 'thrown' if ran?.kind is 'err'
   seen = shownBefore.get path
   value.classList.add 'changed' if seen? and seen isnt entry.text
   shownBefore.set path, entry.text
@@ -581,11 +613,21 @@ varRow = (entry, path, depth) ->
   holder.append row
   if entry.id
     row.classList.add 'openable'
-    open = (expand) ->
+    # Listing members is a request to V8, so it waits its turn behind an
+    # evaluation like everything else. A redraw's re-open just stays closed
+    # and remembered, for the next redraw to try.
+    open = (expand, redrawn = no) ->
+      if expand and debugAsking
+        return if redrawn
+        return stillAsking()
       row.classList.toggle 'open', expand
       if expand
         expandedPaths.add path
         members = await beans.debug.members linePaused, entry.id
+        if members is 'evaluating'
+          row.classList.remove 'open'
+          expandedPaths.delete path
+          return stillAsking()
         return unless members and row.classList.contains 'open'
         children = document.createElement 'div'
         children.className = 'var-children'
@@ -595,10 +637,14 @@ varRow = (entry, path, depth) ->
         expandedPaths.delete path
         holder.querySelector('.var-children')?.remove()
     row.addEventListener 'click', -> open not row.classList.contains 'open'
-    open yes if expandedPaths.has path
+    open yes, yes if expandedPaths.has path
+  if entry.getter and entry.owner
+    row.classList.add 'runnable'
+    row.addEventListener 'click', -> runGetter entry, path
   holder
 
-showVars = ({where, scopes}) ->
+showVars = ({where, scopes}, forGetter = no) ->
+  ranGetters.clear() unless forGetter
   head = document.createElement 'div'
   head.className = 'vars-head'
   place = if where?.line? then "line #{where.line}" else 'somewhere of ours'

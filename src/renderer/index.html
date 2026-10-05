@@ -74,6 +74,10 @@
   .var-value.getter  { color: inherit; opacity: .45; font-style: italic; }
   .var-value.changed { color: #e8c37e; }
   .var.openable { cursor: pointer; }
+  .var.runnable { cursor: pointer; }
+  .var.runnable:hover .var-value.getter { opacity: .8; }
+  .var-value.ran    { font-style: italic; }
+  .var-value.thrown { color: #ff6b6b; }
   .var-name::before { content: ''; display: inline-block; width: 1.6ch; opacity: .5; }
   .var.openable .var-name::before      { content: '\25B8'; }
   .var.openable.open .var-name::before { content: '\25BE'; }
