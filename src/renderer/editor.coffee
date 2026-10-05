@@ -166,9 +166,16 @@ dropPending = ->
   clearTimeout saveTimer
   lastWritten = view.state.doc.toString()
 
+# lastWritten is the text as CodeMirror holds it, never the bytes on disk:
+# CodeMirror reads \r\n and \r as \n, so a CRLF sketch compared raw read dirty
+# forever and its next save rewrote a file nobody edited. A sketch the author
+# does edit is saved with \n (decided by Claude, 2026-10-05).
+asHeld = (text) -> view.state.toText(text).toString()
+
 # Echoes of our own writes come back through the watcher; ignore those.
 applyExternal = ({name, text}) ->
   return unless name is current and view
+  text = asHeld text
   return if text is lastWritten or text is view.state.doc.toString()
   lastWritten = text
   anchor      = Math.min view.state.selection.main.anchor, text.length
@@ -365,6 +372,13 @@ defineCommand = (entry) ->
   COMMANDS.push entry
   toVim entry
 
+# Vim has no way to forget an ex command (codemirror-vim's defineEx writes
+# two private tables and nothing removes from them), so `:name` keeps working
+# after this. The prompt, its "not a command" list and Tab read COMMANDS.
+undefineCommand = (name) ->
+  index = COMMANDS.findIndex (entry) -> entry.name is name
+  COMMANDS.splice index, 1 unless index < 0
+
 installVimCommands = ->
   Vim.defineAction 'beansEvalRegion', -> evalRegion()
   Vim.mapCommand '<C-r>', 'action', 'beansEvalRegion', {}, context: 'visual'
@@ -428,7 +442,7 @@ Editor =
 
   load: (name) ->
     await save()          # the outgoing sketch may have an unflushed edit
-    text        = await beans.read name
+    text        = asHeld await beans.read name
     current     = name
     lastWritten = text
     view.dispatch
@@ -449,9 +463,10 @@ Editor =
   vimKeys: -> vimSlot.get(view.state) is VIM
   dirty:   isDirty
 
-  isCommand:     (line) -> COMMAND_LINE.test line
-  command:       command
-  defineCommand: defineCommand
-  commands:      -> (entry.name for entry in COMMANDS)
+  isCommand:       (line) -> COMMAND_LINE.test line
+  command:         command
+  defineCommand:   defineCommand
+  undefineCommand: undefineCommand
+  commands:        -> (entry.name for entry in COMMANDS)
 
 globalThis.Editor = Editor

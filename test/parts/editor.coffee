@@ -233,6 +233,39 @@ module.exports = (t) ->
   await js "await Editor.load('scratch'); return true"
   await fsp.rm outside, recursive: yes, force: yes
 
+  # A CRLF sketch (Notepad, Git for Windows' default checkout) is held with
+  # \n by CodeMirror. Compared with the raw bytes it read dirty forever, so :e
+  # refused to leave it, and switching away rewrote a file nobody had edited.
+  crlf      = path.join paths.sketches, 'crlf.coffee'
+  crlfBytes = "print 'ONE'\r\nprint 'TWO'\r\n"
+  await fsp.writeFile crlf, crlfBytes, 'utf8'
+  written = (await fsp.stat crlf).mtimeMs
+  await js "await Editor.load('crlf'); return true"
+  loaded = await js "return {doc: Editor.all(), dirty: Editor.dirty()}"
+  check 'a CRLF sketch loads clean',
+    loaded.doc is "print 'ONE'\nprint 'TWO'\n" and not loaded.dirty, JSON.stringify loaded
+  # The symptom as the author met it: /e through the prompt, not Editor.load.
+  await clearConsole()
+  said     = await t.ask '/e scratch'
+  switched = await waitFor "return Editor.name() === 'scratch'"
+  check '/e leaves an unedited CRLF sketch without "no write since last change"',
+    switched and not said.includes('no write since'), JSON.stringify {switched, said: said.trim()}
+  left = {bytes: (await fsp.readFile crlf, 'utf8'), mtime: (await fsp.stat crlf).mtimeMs}
+  check 'switching away from an unedited CRLF sketch leaves the file alone',
+    left.bytes is crlfBytes and left.mtime is written, JSON.stringify {left, written}
+
+  await js "await Editor.load('crlf'); return true"
+  outsideBytes = "print 'THREE'\r\n"
+  await fsp.writeFile crlf, outsideBytes, 'utf8'
+  doc     = await untilDoc "print 'THREE'\n"
+  applied = await js "const dirty = Editor.dirty(); await Editor.save(); return dirty"
+  kept    = await fsp.readFile crlf, 'utf8'
+  check 'an outside CRLF write is applied, clean, and not written back',
+    doc is "print 'THREE'\n" and not applied and kept is outsideBytes,
+    JSON.stringify {doc, applied, kept}
+  await js "await Editor.load('scratch'); return true"
+  await fsp.rm crlf
+
   # 9. :help goes through the real ex parser
   await clearConsole()
   await js "CM.Vim.handleEx(CM.getCM(Editor.view()), 'help'); return true"
@@ -458,6 +491,7 @@ module.exports = (t) ->
   check 'one table entry, reached from the prompt and from vim with the same argument',
     JSON.stringify(probed) is JSON.stringify(['one  two', 'one  two', '! x', '! x', '', '']),
     JSON.stringify probed
+  await js "Editor.undefineCommand?.('zzprobe'); return true"
 
   # An entry with no short form is reached by its whole name from both sides.
   # Vim falls back to the name by itself; the prompt has to be told.
@@ -471,6 +505,14 @@ module.exports = (t) ->
   bare = await js "return bare"
   check 'an entry without a short form answers its full name at the prompt and in vim',
     JSON.stringify(bare) is JSON.stringify(['hi', 'hi']), JSON.stringify bare
+  await js "Editor.undefineCommand?.('zzbare'); return true"
+
+  # Both probes gone again, or every later part in a full run would list and
+  # complete them, and a part alone would differ from the same part mid-suite.
+  await clearConsole()
+  text = await ask '/zzprobe'
+  check 'a command the editor part defined is gone after it',
+    text.includes('/zzprobe is not a command') and not text.includes('/zzbare'), JSON.stringify text.trim()
 
   # Real commands that take arguments, from the prompt.
   await setDoc "# a comment\nprint 'one'\n\nprint 'two'\n"
