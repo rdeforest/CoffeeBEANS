@@ -358,6 +358,7 @@ done = 1
   await until_ -> js "return Prompt.pending()"
   await clickRow 'p'
   openedEarly = await rowHas 'p', 'open'
+  await js "Prompt.ask('1 + 1'); return true"
   stuck = await becomes 'stuck', '(getter, not run)', 15000
   check 'a getter that never returns is given up on, and the pause goes on',
     /gave up/.test(stuck) and (await thrownRow 'stuck') and (await counted()).includes('count=2') and
@@ -371,6 +372,14 @@ done = 1
   check 'opening an object while a getter is still running is refused',
     openedEarly is false and (await rowHas 'p', 'open') is false and said.includes('still evaluating'),
     "early=#{openedEarly} now=#{await rowHas 'p', 'open'} console=#{JSON.stringify said.trim()}"
+  # A line, too, and the refusal names what is out rather than blaming a
+  # line at the prompt. Counted, because the click on `p` says the same: a
+  # line let through late, after the getter gave up, would leave one refusal
+  # and an answer.
+  refusals = said.split('*** still evaluating in the paused frame ***').length - 1
+  check 'a line while a getter is running is refused as an evaluation in the paused frame',
+    refusals is 2 and not said.includes('last line') and not said.includes('at the prompt'),
+    "refusals=#{refusals} console=#{JSON.stringify said.trim()}"
 
   # after a step, what a click got is not shown as if it were still true
   await becomes 'tick', null
@@ -393,5 +402,62 @@ done = 1
     seenRan is '3' and fourth is '4' and (await paneValue 'seen') is '(getter, not run)',
     "seen=#{JSON.stringify seenRan} then tick=#{JSON.stringify fourth} seen=#{JSON.stringify await paneValue 'seen'}"
 
+  await click 'stop'
+  await until_ -> (await status()) is 'ready'
+
+  # 18. Step waits for the pane's member listings. Held by the main process's
+  # own handler, gated here, so the listing is out for as long as the check
+  # says and no longer: `beans` is frozen in the page, and nothing in V8 can
+  # make Runtime.getProperties slow. `_invokeHandlers` is Electron's private
+  # table of ipcMain.handle handlers (a Map in Electron 44, checked by a
+  # Claude fixer 2026-10-05); the real handlers go back in whatever happens.
+  {ipcMain} = require 'electron'
+  handlers  = ipcMain._invokeHandlers
+  realList  = handlers.get 'debug:members'
+  realStep  = handlers.get 'debug:step'
+  order     = []
+  release   = null
+  gate      = new Promise (resolve) -> release = resolve
+  swap = (channel, handler) ->
+    ipcMain.removeHandler channel
+    ipcMain.handle channel, handler
+  try
+    swap 'debug:members', (event, args...) ->
+      await gate
+      order.push 'listed'
+      realList event, args...
+    swap 'debug:step', (event, args...) ->
+      order.push 'step'
+      realStep event, args...
+    await setDoc """
+q = {z: 3}
+breakpoint
+print 'one'
+print 'two'
+"""
+    await wait 500
+    seen = (await pauseNumber()) ? 0
+    await evalAll()
+    listPause = await nextPause seen
+    await clickRow 'q'
+    listingOut = await js "return Prompt.pending()"
+    await js "Stepping.line(); return true"
+    # Long enough for a step that does not wait to reach main, which is
+    # milliseconds; the order below is what the check reads, not this wait.
+    early = await until_ (-> order.length > 0), 500
+    release()
+    stepped = await nextPause listPause
+  finally
+    release()
+    swap 'debug:members', realList
+    swap 'debug:step',    realStep
+  # Every listing out when step was pressed is in before it goes. There may
+  # be more than one: clickRow clicks every row named `q` (two, when a Claude
+  # fixer ran it on 2026-10-05), and each re-opens after the step.
+  stepAt = order.indexOf 'step'
+  check 'a step waits for a member listing still out, then goes',
+    listPause and listingOut and not early and stepAt > 0 and
+      order[...stepAt].every((what) -> what is 'listed') and stepped > listPause,
+    "paused=#{listPause} pending=#{listingOut} early=#{early} order=#{order.join()} stepped=#{stepped}"
   await click 'stop'
   await until_ -> (await status()) is 'ready'
