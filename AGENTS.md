@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 278 checks
+    npm test                                 all 283 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -441,9 +441,12 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   up (`createWindow`). A Windows contributor sees it, unfocused.
 - **CRLF**: Git for Windows' default checkout turned sketches CRLF and the
   suite rewrote them LF. `.gitattributes` pins LF now. The editor bug behind
-  it is still open: `Editor.load` keeps the raw CRLF text as `lastWritten`,
-  CodeMirror normalises to `\n`, so a CRLF sketch reads dirty forever and is
-  rewritten LF on the next switch.
+  it -- `Editor.load` kept the raw CRLF text as `lastWritten` while CodeMirror
+  holds `\n`, so a CRLF sketch read dirty forever, refused `/e`, and was
+  rewritten LF on the next switch -- was fixed the same night (K4,
+  `a9a427a`): disk text goes through CodeMirror's own line splitting
+  (`asHeld`) at load and on an outside change. An edited CRLF sketch is
+  saved LF (Claude's call; keeping CRLF would be about five lines).
 - **Saves fail on Windows**: the rename in `sketch:write` failed with ENOENT
   or EPERM in 6 of 7 Windows runs; the next eval then ran the previous buffer
   and later checks cascaded. Likely two overlapping saves share the one
