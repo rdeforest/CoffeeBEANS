@@ -5,7 +5,16 @@
 number here was measured that night on Robert's Linux machine (the one
 described in AGENTS.md, Platform facts), in Electron 44.3.0 / Chrome
 152.0.7977.78 / V8 15.2.124.19, one Electron at a time under the suite
-lock. Anything not measured is marked **inferred**.*
+lock, between 20:22 and 21:32 PDT on 2026-10-04. Anything not measured
+is marked **inferred**. Reviewed skeptically by a second Claude agent the
+same night, who reproduced the probe table cell for cell and the live
+frame in the app, and found the gaps folded in below (revision of the same
+night).*
+
+The prototype is commit `c5c788d` on this branch. Every `tmp/...` log
+cited here lives only in that worktree's `tmp/`, which is gitignored: none
+are committed, and the probe and the prototype's test part regenerate
+them.
 
 ## The question
 
@@ -19,11 +28,14 @@ measures both and a third.
 
 ## The answer, short
 
-**(b) works, and works exactly.** With no `catch` anywhere on the stack
-above the sketch, V8's own catch prediction does the deciding: the
-sketch's uncaught errors pause at the throw with the frame live, and an
-error the sketch catches, the prompt's own errors, and everything else do
-not. The prototype keeps run reporting synchronous by running the sketch
+**(b) works, exactly, for errors thrown synchronously inside a run.**
+With no `catch` anywhere on the stack above the sketch, V8's own catch
+prediction does the deciding: such an error pauses at the throw with the
+frame live, and an error the sketch catches, the prompt's own errors and a
+Stop do not. **Errors outside the run -- in a timer, a promise callback,
+after an `await` -- are not handled**: once the debugger is armed they
+pause too, in every bootstrap shape including today's, and the prototype
+treats them badly (see "Errors outside the run"). The prototype keeps run reporting synchronous by running the sketch
 as the listener of an event the worker dispatches to itself
 (`dispatchEvent` reports a listener's error instead of throwing it to the
 caller). Eleven checks against the real app pass with it. The price is that
@@ -31,7 +43,8 @@ the Debugger domain has to be on for every run, not only when the buffer
 says `breakpoint` -- that is the decision Robert has to make -- and that
 the existing checks which make a sketch fail on purpose now stop at the
 failure (armed, the full suite fails 28 checks, almost all of them the
-knock-on of a few such pauses).
+knock-on of a few such pauses), and that errors outside the run need
+their own design.
 
 **(a) is a dead end:** every throw, caught or not, costs a round trip to
 the main process -- a sketch that throws and catches in a loop runs about
@@ -85,8 +98,9 @@ What that established, each measured:
    catcher does not change that.** Run again with the ignore-list empty:
    identical. (Recorded because newer DevTools treats exceptions caught by
    ignore-listed code specially in places; V8 15.2's prediction does not.)
-2. **Remove every catch above the sketch and `uncaught` is exact.** It
-   pauses on the author's mistakes and nothing else, with `data.uncaught:
+2. **Remove every catch above the sketch and `uncaught` is exact for the
+   run itself.** Of these five synchronous cases it pauses on the author's
+   two mistakes and nothing else (Stop aside, item 5), with `data.uncaught:
    true`. At the pause the author's frame is live: locals `a=41 b=1
    sum=42`, and `Debugger.evaluateOnCallFrame` reads `sum` (42).
 3. **A catch above the `dispatchEvent` still counts.** `dispatchInCatch`
@@ -189,7 +203,8 @@ The prototype in the app is one commit on this branch, marked
    TypeError: Cannot read properties of null (reading 'x')`.
 2. The pane holds `a 41`, `b 1`, `sum 42` -- the frame that threw.
 3. The prompt answers `sum * 2` with 84, in that frame.
-4. Continue ends the run as the error it was: status `error`, the usual
+4. Continue ends the run as the error it was (for an error inside the
+   run; see "Errors outside the run" for the rest): status `error`, the usual
    `run (line 5): ...` and traceback, `print 'after'` never ran.
 5. `COLORS.byName 'mauvish'` (thrown inside the runtime) stops on the
    author's line that called it, `hue` in the pane.
@@ -206,6 +221,40 @@ The prototype in the app is one commit on this branch, marked
 Checks 1-3 failed against the first, catch-above-dispatch version of the
 prototype -- the same app, armed, but with V8 predicting caught -- which
 is the evidence they test the behaviour and not the plumbing.
+
+Checks 9-11 cannot tell mechanisms apart (pointed out by the reviewer):
+9 passes whether the Stop got through by `setSkipAllPauses` or by the
+`Interrupted` filter in `onException`; 10 accepts status `error` or
+`ready`; 11 passes whether V8 never paused on the compiler's throw or
+paused and `onException` resumed it. Each shows the outcome, not why.
+
+### Errors outside the run -- found by the reviewer, not handled
+
+Measured by the reviewing agent the same night, with the debugger armed:
+
+- **In the probe, every shape (today's included):** a throw in a
+  `setTimeout` callback, in a `Promise.then` callback, or after an `await`
+  pauses -- after the run has already posted `done`. A throw before the
+  first `await` in an un-awaited async function pauses in the dispatch
+  shape, and the run still reports `done`.
+- **In the app, prototype armed:**
+  - A promise-callback throw pauses with reason `promiseRejection`, which
+    the prototype does not send to `onException`. The result is a silent
+    `line paused` with no message. Continue then sets the status to
+    `running` with nothing running (the `resumed` handler), and Stop says
+    "no yield point" and loses the image.
+  - An async function's throw before its first `await`: a silent pause,
+    and the error is never reported at all.
+  - A timer callback's throw: the message says "Continue to end the run"
+    after the run has ended, and Continue prints the error twice (as
+    `worker:` and `renderer:`).
+
+Today these errors do not pause at all (the debugger is armed only when
+the buffer says `breakpoint`), so arming for every run turns them from a
+reported error into these states. The real change has to route
+`promiseRejection` through `onException` and decide what a pause outside a
+run means: which status, what Continue does when there is no run to end,
+and how the error is reported once and only once.
 
 ### 2. What it costs -- measured, in the app
 
@@ -225,31 +274,42 @@ alternating `main` and armed (`tmp/frames-x-*.log`):
 
 | sketch, per frame | main | armed |
 |---|---|---|
-| one `circle` (frame clock bound) | 144.0-145.0 | 144.0-144.5 |
-| 150 `circleFill` r=90 | 144.0-144.5 | 144.0-144.5 |
 | a million `Math.sin` (CPU bound) | 35.5-36.5 | 35.5-36.0 |
+
+Two lighter sketches (one `circle`; 150 `circleFill`) were also run, and
+read 144-145 both ways. They are bound to the machine's 144Hz frame clock,
+so they say nothing about cost; only the `Math.sin` row does.
 
 | Run to ready (ms, 5 runs) | main 177-179 | flag off 153-179 | armed 180-206 |
 |---|---|---|---|
 
+The Run timings are quantised: the harness polls status every 25ms plus a
+round trip, and the values cluster at 153, 177-179 and 202-206 -- one poll
+step apart.
+
 Reading it:
 
-- **Code that does not throw costs nothing.** Plain loops and frame rates
-  do not move.
+- **Code that does not throw costs nothing.** Plain loops and the
+  CPU-bound frame rate do not move.
 - **A throw costs more, up to about half its speed**, from two sources.
   The Debugger domain being on at all (probe: about 23% on a throw, 5% on
   `null.x`; `uncaught` adds a little more, V8's prediction walking the
-  stack on every throw), and the dispatch shape itself: with the flag *off*, nothing
-  attached, a caught throw is about 19% slower than on `main`. Why the
-  shape costs anything is **not known** -- the likeliest reading (inferred)
-  is that V8 builds a message object for every throw when the nearest
-  handler outside JS is the verbose one Blink puts round an event listener.
+  stack on every throw), and the dispatch shape itself: 8-19% on a caught
+  throw, cause unknown. The 19% is the app with the flag off against
+  `main`, from sessions that were not alternated; the probe's like-for-like
+  comparison (same session, armed `none`, catch shape against dispatch)
+  shows about 8% (1,307,000 against 1,200,000). An earlier draft offered
+  Blink's verbose handler round event listeners as the reason; the
+  reviewer pointed out that it does not distinguish the shapes, so it is
+  withdrawn.
   At 800,000 caught throws a second a sketch would have to throw more than
   13,000 times a frame at 60fps before this showed; no example sketch
   throws at all.
-- **A Run takes about 25ms longer** armed: `Debugger.enable`, the
-  ignore-list and `setPauseOnExceptions` on each new worker, before it is
-  released to boot.
+- **A Run takes between about 0 and 50ms longer** armed: `Debugger.enable`,
+  the ignore-list and `setPauseOnExceptions` on each new worker, before it
+  is released to boot. The harness resolves about 25ms (one poll step, above),
+  so "one step slower" is all the numbers say. Timing those three commands
+  directly was not done.
 - The earlier frame-rate measurement of `Debugger.enable` (AGENTS.md, "the
   facts the spikes established") was inconclusive; this one, run under
   the lock with the two alternated, finds no difference on a CPU-bound
@@ -282,14 +342,21 @@ second carries the stack) but may read as two errors; again Robert's call.
   The only new sends are the resumes for `Interrupted` and for errors with
   no author frame, and both happen inside a pause the debugger has just
   received, when no evaluation can be out (evaluation is only offered
-  while `stopped`, and these pauses never set `stopped`). Measured
-  indirectly: the `debugging` part's endless-evaluation checks pass with
-  the flag on up to the point a region test's deliberate error leaves a
-  pause behind (below).
+  while `stopped`, and these pauses never set `stopped`). That is an
+  argument from the code, **not a measurement**. An earlier draft cited the
+  `debugging` part's endless-evaluation checks, run armed, as indirect
+  evidence; the reviewer found that in those logs the region test's
+  deliberate error had left its pause behind. So the endless-evaluation
+  checks ran against that pause (the console shows `*** already running
+  ***`), and "Stop during an endless evaluation still stops" failed with
+  status `error`. They show nothing either way about this fact. Re-running
+  them armed, with the region test's pause continued first, is the
+  measurement still owed.
 - **Armed only when the buffer says `breakpoint`** -- this is what changes.
   Pause-on-error needs the Debugger domain on before the sketch throws,
-  i.e. for every run. Measured consequences: a Run is ~25ms slower, a
-  caught throw up to ~45% slower, nothing else moves. With the domain
+  i.e. for every run. Measured consequences: a Run is 0-50ms slower, a
+  caught throw up to ~45% slower, and errors outside a run now pause
+  (above). With the domain
   always on, `breakpoint` is no longer free when nothing is watching
   (`stepping` check 7 says so and fails, by design), and the whole
   arm-from-the-buffer machinery (`watchBuffer`, `syncDebug`, the `arming`
@@ -330,7 +397,7 @@ falls into one of three groups:
   Error: halt` and set the *new* worker's status to `error`, and the
   unhandled event reached the window as `renderer: Uncaught Error: halt`.
   `start()` now replaces the old worker's `onerror` with a
-  `preventDefault` before terminating it. Rerun armed
+  `preventDefault` before terminating it (in `c5c788d`). Rerun armed
   (`BEANS_TESTS=image,repl,pauseonerror`, `tmp/suite-x-fix-on.log`): the
   `repl` part, all six of whose failures came after it, now passes whole,
   and neither message appears; only image 49 itself fails, as it should.
@@ -355,6 +422,8 @@ falls into one of three groups:
 - `scripts` in `debugger.coffee` grows by one entry per run and per prompt
   line for the life of a worker once the domain is always on. Inferred
   small; not measured.
+- Errors outside the run (timers, promise callbacks, after `await`): found
+  by the reviewer, not handled by the prototype. See that section.
 - macOS and Windows: nothing here was run there. Nothing in it is
   platform-specific that Claude knows of (the CDP and V8 behaviour are the
   same code); play-test it.
@@ -363,15 +432,22 @@ falls into one of three groups:
 
 **Take way (c): run the sketch as a dispatched event with no catch above
 it, and arm the debugger for every run with `pauseOnExceptions
-'uncaught'`.** V8 then decides what is uncaught, exactly, for free -- the
-sketch's own try/catch, the prompt, Stop and the runtime all come out
-right without the debugger knowing anything about them.
+'uncaught'`.** For errors thrown synchronously inside a run, V8 then
+decides what is uncaught, exactly, for free -- the sketch's own try/catch,
+the prompt, Stop and the runtime all come out right without the debugger
+knowing anything about them. Errors outside a run (timers, promise
+callbacks, after an `await`) also start pausing once the debugger is
+always armed, and need designing before this lands.
 
 **Size of the real change, estimated:** about 40 lines in `worker-boot.js`
 (the `uncaught` helper, the listener split, compile before dispatch),
 40-60 in `debugger.coffee` (`onException`, the frame to show, step and
 evaluate against it, `data.value` for primitives), 10-20 in the renderer
-(the message, the old worker's `onerror`, perhaps a status), and the
+(the message, the old worker's `onerror`, perhaps a status); on top of
+that, routing `promiseRejection` through `onException` and handling a
+pause outside a run (status, what Continue does, a single report) --
+perhaps another 30-50 lines across `debugger.coffee` and the renderer,
+plus checks for a timer, a promise callback and an async function. And the
 suite: a new part like the prototype's eleven checks, and the ~10 existing
 checks that fail on purpose taught to continue past the pause. If arming
 becomes permanent, the arm-from-the-buffer code (`watchBuffer`,
@@ -382,10 +458,15 @@ rewriting. A night's track either way.
 
 **Risks:**
 
-- Caught throws get up to ~45% slower (measured), and a Run ~25ms slower.
-  Code that does not throw is unaffected (measured).
-- The dispatch shape costs ~19% on a caught throw even with no debugger,
-  for a reason not established.
+- Caught throws get up to ~45% slower (measured), and a Run 0-50ms slower
+  (the harness cannot resolve it better). Code that does not throw is
+  unaffected (measured).
+- The dispatch shape costs 8-19% on a caught throw even with no debugger,
+  cause unknown.
+- **Errors outside a run** pause once the debugger is always armed. In
+  the prototype they give a silent pause, a status of `running` with
+  nothing running, a lost image after Stop, or a double report. This is
+  the biggest gap: they would be a regression from today's plain report.
 - The prediction trap: any future `catch` added above the run -- in the
   message listener, around `run()` -- silently turns pause-on-error off.
   A check like the prototype's first one guards it.
@@ -404,16 +485,22 @@ rewriting. A night's track either way.
    paused`; print the error at the pause, at the end, or both.
 4. **A switch?** A preference to turn pause-on-error off (for a sketch that
    wants its error to just end the run, or for speed) -- or none.
-5. **The suite:** errors pause in every part (and the deliberate-error
+5. **A pause outside a run** (timer, promise callback, after `await`):
+   stop there like any other error, or skip it and only report it?
+6. **The suite:** errors pause in every part (and the deliberate-error
    checks continue past them), or pause-on-error is off in the suite except
    in its own part.
 
 ## Measured or inferred, in one place
 
-Measured, 2026-10-05, by Claude: everything in the probe tables; the
-eleven app checks; the app cost table and Run timing; the full-suite results both
-ways; the dead-worker `onerror` leak. Inferred: why the dispatch shape
-costs anything; that the later `sound` failures armed are cascade; that
+Measured on the night of 2026-10-04/05 by Claude: everything in the probe
+tables; the eleven app checks; the app cost table and the (coarse) Run
+timing; the full-suite results both ways; the dead-worker `onerror` leak.
+Measured by the reviewing Claude agent the same night: the
+errors-outside-the-run behaviour, and that the endless-evaluation checks
+armed ran against a left-over pause. Not measured: that nothing reaches V8
+while a prompt evaluation is out under pause-on-error (argued from the
+code). Inferred: why the dispatch shape costs anything (unknown); that the later `sound` failures armed are cascade; that
 DevTools' own pause-on-uncaught now works; the size estimate; that
 `scripts` growth is small; that nothing differs on macOS or Windows.
 
@@ -422,7 +509,7 @@ DevTools' own pause-on-uncaught now works; the size estimate; that
 - `research/pause-on-error/probe/` -- the standalone probe (`main.coffee`,
   `boot.js`, `lib.js`, `page.html`, `index.js`) and `caught.coffee`, way
   (a)'s catch prediction.
-- The `PROTOTYPE` commit on `research/pause-on-error` --
+- The `PROTOTYPE` commit `c5c788d` on `research/pause-on-error` --
   `src/renderer/worker-boot.js`, `src/main/debugger.coffee`,
   `src/renderer/renderer.coffee`, `test/parts/pauseonerror.coffee`, and the
   part's name in `test/suite.coffee`. Not for merging as it stands.
