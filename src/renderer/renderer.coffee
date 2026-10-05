@@ -200,18 +200,243 @@ recall = (step) ->
   promptLine.value = entered[enteredAt] ? ''
   promptLine.setSelectionRange promptLine.value.length, promptLine.value.length
 
+# --- the prompt's keys --------------------------------------------------------
+
+# Readline's keys, as the node and coffee REPLs have them (Robert's call,
+# 2026-10-04): Node 24's "TTY keybindings" table and the REPL's
+# reverse-i-search, ported from lib/internal/readline/interface.js and
+# lib/internal/repl/utils.js by Claude on 2026-10-05. While the prompt has
+# focus they beat the app's shortcuts -- Ctrl-E is end of line here and
+# toggles the editor everywhere else. The keys that must work from anywhere
+# are safe: Ctrl-\, F8 and F10 are caught before the prompt sees them, and
+# Ctrl-. is not bound here.
+#
+# Rows of that table left unbound on purpose:
+#   Ctrl-Left/Right, Ctrl-Backspace/Delete  Chromium's own, with its own word
+#                                           boundaries -- left to it
+#   Ctrl-_ undo, Ctrl-6 redo                the input's native undo and redo
+#                                           instead; Ctrl-- is zoom out
+#   Ctrl-Z suspend                          no process to suspend; stays undo
+# and one bound over a native key: Ctrl-Y is yank, which takes it from
+# Windows' redo. Ctrl-Shift-Z still redoes.
+#
+# Ctrl, never Cmd: on a Mac Cmd-A still selects all, and these Ctrl keys are
+# what Cocoa's own text fields already mean by them. Alt is readline's Meta
+# except on a Mac, where Option types characters. AltGr arrives as Ctrl+Alt
+# on Windows, so Ctrl+Alt with a key that types a character is typing; with
+# one that types nothing -- Enter, an arrow -- it is a chord of its own, so
+# Ctrl-Alt-Enter on Linux is not Enter. Not getModifierState('AltGraph'):
+# what Chromium reports for it on Windows is unmeasured.
+ON_MAC        = /Mac/.test navigator.platform
+MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock']
+UNFINISHED    = ['Dead', 'Process']  # half a character: a dead key, or the IME's
+KILL_RING     = 32                   # readline's kMaxLengthOfKillRing
+PASS          = Symbol 'pass'        # a binding that hands the key back
+
+promptMark = document.getElementById 'promptMark'
+killRing   = []
+killAt     = 0
+yanking    = no
+searching  = null
+
+oneCharacter = (text) -> Array.from(text).length is 1
+
+chordOf = (event) ->
+  return null if event.metaKey
+  typed = oneCharacter event.key
+  altGr = event.ctrlKey and event.altKey and typed
+  ctrl  = event.ctrlKey and not altGr
+  alt   = event.altKey  and not altGr and not ON_MAC
+  shift = event.shiftKey and (ctrl or alt)
+  key   = if (ctrl or alt) and typed then event.key.toLowerCase() else event.key
+  "#{if ctrl then 'C-' else ''}#{if alt then 'M-' else ''}#{if shift then 'S-' else ''}#{key}"
+
+caret   = -> if promptLine.selectionDirection is 'backward' then promptLine.selectionStart else promptLine.selectionEnd
+leftOf  = -> promptLine.value[...caret()]
+rightOf = -> promptLine.value[caret()..]
+moveTo  = (at) -> promptLine.setSelectionRange at, at
+
+# By code point, so an emoji is one step, not two. Not /[\s\S]$/u: V8 finds
+# no match for that at all when the last character is outside the BMP
+# (checked by Claude in Node 26.10, 2026-10-05).
+charLeft  = -> Array.from(leftOf()).pop()?.length ? 0
+charRight = -> Array.from(rightOf())[0]?.length   ? 0
+
+# Readline's own word boundaries; the left ones read the text reversed.
+backwards      = (text) -> Array.from(text).reverse().join ''
+wordLeft       = -> caret() - /^\s*(?:[^\w\s]+|\w+)?/.exec(backwards leftOf())[0].length
+wordRight      = -> caret() + /^(?:\s+|[^\w\s]+|\w+)\s*/.exec(rightOf())[0].length
+eraseWordRight = -> caret() + /^(?:\s+|\W+|\w+)\s*/.exec(rightOf())[0].length
+
+# Through execCommand rather than by assigning the value, which would wipe
+# the input's own undo: Ctrl-Z is the ordinary key for "I didn't mean that",
+# and Ctrl-U is an easy way to need it.
+rewrite = (from, to, text = '') ->
+  promptLine.setSelectionRange from, to
+  document.execCommand 'insertText', false, text unless from is to and not text
+  undefined
+
+kill = (from, to) ->
+  text = promptLine.value[from...to]
+  rewrite from, to
+  return if not text or text is killRing[0]
+  killRing.unshift text
+  killAt = 0
+  killRing.length = KILL_RING if killRing.length > KILL_RING
+  undefined
+
+yank = ->
+  return unless killRing.length
+  yanking = yes
+  rewrite caret(), caret(), killRing[killAt]
+
+yankPop = ->
+  return unless yanking and killRing.length > 1
+  last   = killRing[killAt]
+  killAt = (killAt + 1) % killRing.length
+  rewrite caret() - last.length, caret(), killRing[killAt]
+
+submit = ->
+  askLine promptLine.value
+  promptLine.value = ''
+  enteredAt = entered.length
+
+# Ctrl-C copies a selection -- the ordinary key wins there, since readline has
+# no selection to mean anything else by it -- and otherwise drops the line,
+# the REPL's .break.
+clearLine = ->
+  return PASS if promptLine.selectionStart isnt promptLine.selectionEnd
+  rewrite 0, promptLine.value.length
+  enteredAt = entered.length
+
+PROMPT_KEYS =
+  'Enter':         submit
+  'ArrowUp':       -> recall -1
+  'ArrowDown':     -> recall  1
+  'C-p':           -> recall -1
+  'C-n':           -> recall  1
+  'C-a':           -> moveTo 0
+  'C-e':           -> moveTo promptLine.value.length
+  'C-b':           -> moveTo caret() - charLeft()
+  'C-f':           -> moveTo caret() + charRight()
+  'M-b':           -> moveTo wordLeft()
+  'M-f':           -> moveTo wordRight()
+  'C-h':           -> rewrite caret() - charLeft(), caret()
+  'C-d':           -> rewrite caret(), caret() + charRight()
+  'C-w':           -> rewrite wordLeft(), caret()
+  'M-Backspace':   -> rewrite wordLeft(), caret()
+  'M-d':           -> rewrite caret(), eraseWordRight()
+  'M-Delete':      -> rewrite caret(), eraseWordRight()
+  'C-u':           -> kill 0, caret()
+  'C-S-Backspace': -> kill 0, caret()
+  'C-k':           -> kill caret(), promptLine.value.length
+  'C-S-Delete':    -> kill caret(), promptLine.value.length
+  'C-y':           yank
+  'M-y':           yankPop
+  'C-l':           -> output.replaceChildren()
+  'C-c':           clearLine
+  'C-r':           -> startSearch 'bck'
+  'C-s':           -> startSearch 'fwd'
+
+# Reverse-i-search, as the node REPL does it: the line shows the match, the
+# mark says what is being looked for, each entry is shown once per query, and
+# any key that is not part of the search takes the match and then does what
+# it does -- so Enter runs it. Esc or Ctrl-C puts back the line from before.
+showSearch = ->
+  {dir, query, match} = searching
+  promptMark.textContent = "#{if query and not match? then 'failed-' else ''}#{dir}-i-search: #{query}_"
+
+startSearch = (dir) ->
+  searching = {dir, query: '', from: enteredAt, at: enteredAt, match: null, seen: new Set,
+               original: promptLine.value, caret: caret()}
+  showSearch()
+
+# From the entry the history was on, that one included, as node starts from
+# its historyIndex. An entry is shown once per query, which is also what
+# carries a second Ctrl-R past the match on show.
+searchOn = ->
+  {dir, query, seen} = searching
+  step  = if dir is 'bck' then -1 else 1
+  index = if dir is 'bck' then Math.min searching.at, entered.length - 1 else searching.at
+  while 0 <= index < entered.length
+    entry = entered[index]
+    if query and entry.includes(query) and not seen.has entry
+      seen.add entry
+      searching.at = searching.match = index
+      promptLine.value = entry
+      moveTo if dir is 'bck' then entry.lastIndexOf query else entry.indexOf query
+      return showSearch()
+    index += step
+  searching.match = null
+  promptLine.value = searching.original
+  moveTo searching.caret
+  showSearch()
+
+# Turning round forgets what was shown, so it can be found again on the way
+# back -- all but the match on show, which would otherwise be found first.
+searchToward = (dir) ->
+  unless dir is searching.dir
+    searching.seen.clear()
+    searching.seen.add entered[searching.match] if searching.match?
+  searching.dir = dir
+  searchOn()
+
+requery = (query) ->
+  Object.assign searching, {query, at: searching.from, match: null}
+  searching.seen.clear()
+  searchOn()
+
+endSearch = ->
+  enteredAt = searching.match if searching.match?
+  searching = null
+  promptMark.textContent = '>'
+
+cancelSearch = ->
+  Object.assign searching, match: null
+  promptLine.value = searching.original
+  moveTo searching.caret
+  endSearch()
+
+dropLast = -> requery searching.query[...-1]
+
+SEARCH_KEYS =
+  'C-r':       -> searchToward 'bck'
+  'C-s':       -> searchToward 'fwd'
+  'Backspace': dropLast
+  'C-h':       dropLast
+  'C-w':       dropLast
+  'Escape':    cancelSearch
+  'C-c':       cancelSearch
+
+claim = (event, verb, chord) ->
+  return if verb(chord) is PASS
+  event.preventDefault()
+  # Not just the default: the window's own Ctrl-E is listening further up.
+  event.stopPropagation()
+
+onPromptKey = (event) ->
+  return if event.key in MODIFIER_KEYS or event.isComposing
+  chord = chordOf event
+  if searching
+    return if event.key in UNFINISHED
+    verb = SEARCH_KEYS[chord] ? (((typed) -> requery searching.query + typed) if chord? and oneCharacter chord)
+    return claim event, verb, chord if verb
+    endSearch()
+  return unless chord?
+  yanking = no unless chord is 'M-y'
+  verb = PROMPT_KEYS[chord]
+  claim event, verb, chord if verb
+
+# A click moves the caret out from under a yank, so Alt-Y after it would
+# replace text that is not the yank.
+interruptPrompt = ->
+  yanking = no
+  endSearch() if searching
+
 listenForPrompt = ->
-  promptLine.addEventListener 'keydown', (event) ->
-    return if event.ctrlKey or event.metaKey or event.altKey
-    switch event.key
-      when 'Enter'
-        askLine promptLine.value
-        promptLine.value = ''
-        enteredAt = entered.length
-      when 'ArrowUp'   then recall -1
-      when 'ArrowDown' then recall  1
-      else return
-    event.preventDefault()
+  promptLine.addEventListener 'keydown',     onPromptKey
+  promptLine.addEventListener 'pointerdown', interruptPrompt
+  promptLine.addEventListener 'blur',        interruptPrompt
 
   # Clicking the log to read it should not cost you the prompt, but clicking
   # to select text should not steal it back either.
@@ -1096,9 +1321,11 @@ beans.onOpen pickSketch
 
 # The line-stepping keys are DevTools' own, and are caught before the editor
 # or the prompt can see them: Ctrl-\ is a prefix in vim, and a key that
-# pauses only when the right thing has focus is no use in a hurry.
+# pauses only when the right thing has focus is no use in a hurry. Not with
+# Alt as well: AltGr arrives as Ctrl+Alt on Windows, and AltGr+ß is how a
+# German keyboard types a backslash.
 window.addEventListener 'keydown', ((event) ->
-  modified = event.ctrlKey or event.metaKey
+  modified = (event.ctrlKey and not event.altKey) or event.metaKey
   verb = if event.key is 'F8' or (modified and event.key is '\\')
     togglePause
   else if event.key is 'F10'
