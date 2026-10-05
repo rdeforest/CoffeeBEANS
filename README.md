@@ -172,6 +172,13 @@ window reload the pane. Running is an operation on a region:
                         an object (keys, mouse, buffer), or a search
     > at the console    one line, evaluated in the live worker
 
+The commands work at the `>` prompt too, as `/run` or `:run` -- one table
+serves the prompt and vim's command line, so `/e name`, `/target 30` and
+`/help keys` mean what their `:` forms do. A prompt line starting with `/`
+or `:` is always a command, so CoffeeScript that opens with a regex goes in
+parens: `(/x/).test s`. A name that is not a command gets the list of the
+ones that are.
+
 **Eval** puts code into the worker you already have, so everything it knows
 stays. **Run** throws that worker away and starts a new one. They are
 different in kind rather than in scope, which is why they do not share a

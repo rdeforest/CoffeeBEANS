@@ -290,12 +290,11 @@ runFresh = ->
 
 # :e opens a sketch by name, creating it if new -- the app's version of
 # touching a file and reloading. A bare :e reloads the current one. The bang
-# is not a flag this vim build exposes; it stays in the argument string.
-editSketch = (params) ->
-  arg   = ((params?.argString ? '') or (params?.args ? []).join ' ').trim()
+# is not a flag vim's parser knows; it arrives as the start of the argument.
+editSketch = (arg) ->
   force = arg[0] is '!'
   arg   = arg[1..].trim() if force
-  name  = arg.split(/\s+/)[0]?.replace(/\.coffee$/, '') or current
+  name  = arg.split(/\s+/)[0].replace(/\.coffee$/, '') or current
   return true unless name
   if isDirty() and not force
     handlers.onMessage? 'no write since last change (add ! to override)'
@@ -310,24 +309,60 @@ beansKeymap = [
   {key: 'Ctrl-s',           run: (-> save(); true), preventDefault: yes}
 ]
 
+# One table, two ways in: vim's `:` line, and the prompt, where a line
+# starting with `/` or `:` is always a command. Both hand an entry the same
+# argument -- whatever follows the name, trimmed -- so `:e! foo` and
+# `/e! foo` cannot drift apart. `short` is the least a name may be cut to,
+# vim's rule, kept at the prompt so a name means the same in both places.
+# Nothing here needs vim: the prompt works with it switched off.
+COMMANDS = [
+  {name: 'write',    short: 'w',       run: -> save()}
+  {name: 'eval',     short: 'ev',      run: evalAll}
+  {name: 'run',      short: 'run',     run: runFresh}
+  # Kept because it is exactly what run does, and it was the name for a while.
+  {name: 'restart',  short: 'restart', run: runFresh}
+  # Vim's parser used to hand help its words already split; the topic is
+  # searched for as typed, so a run of spaces must not make it miss.
+  {name: 'help',     short: 'h',       run: (arg) -> handlers.onHelp? arg.replace /\s+/g, ' '}
+  {name: 'edit',     short: 'e',       run: editSketch}
+  {name: 'target',   short: 'tar',     run: (arg) -> setLimit Number arg.split(/\s+/)[0]}
+  # Frame at a time. `:step` from a running sketch pauses it first, so you do
+  # not have to catch it.
+  {name: 'pause',    short: 'pau',     run: -> handlers.onPause?()}
+  {name: 'step',     short: 'st',      run: -> handlers.onStep?()}
+  {name: 'continue', short: 'cont',    run: -> handlers.onGo?()}
+  # Line at a time: to the next line that runs, wherever it is.
+  {name: 'line',     short: 'li',      run: -> handlers.onLine?()}
+]
+
+lookup = (word) ->
+  COMMANDS.find (entry) -> entry.name.startsWith(word) and word.startsWith entry.short
+
+COMMAND_LINE = /^\s*([\/:])(\w*)([^]*)$/
+
+# The prompt's way in. Vim's parser splits a line the same way: a run of word
+# characters is the name and the rest, `!` included, is the argument.
+command = (line) ->
+  [, mark, word, arg] = line.match COMMAND_LINE
+  entry = lookup word
+  return entry.run arg.trim() if entry
+  names = ("#{mark}#{known.name}" for known in COMMANDS).join ' '
+  handlers.onProblem? "#{mark}#{word} is not a command -- there are #{names}"
+
+toVim = (entry) ->
+  Vim.defineEx entry.name, entry.short, (cm, params) -> entry.run (params.argString ? '').trim()
+
+# Vim lets a name with no short form be cut to nothing shorter; so does the
+# prompt, or an entry would work after `:` and never after `/`.
+defineCommand = (entry) ->
+  entry = {entry..., short: entry.short ? entry.name}
+  COMMANDS.push entry
+  toVim entry
+
 installVimCommands = ->
   Vim.defineAction 'beansEvalRegion', -> evalRegion()
   Vim.mapCommand '<C-r>', 'action', 'beansEvalRegion', {}, context: 'visual'
-  Vim.defineEx 'write',   'w',   -> save()
-  Vim.defineEx 'eval',    'ev',  -> evalAll()
-  Vim.defineEx 'run',     'run', -> runFresh()
-  # Kept because it is exactly what run does, and it was the name for a while.
-  Vim.defineEx 'restart', 'restart', -> runFresh()
-  Vim.defineEx 'help',    'h',   (cm, params) -> handlers.onHelp? params?.args?.join ' '
-  Vim.defineEx 'edit',    'e',   (cm, params) -> editSketch params
-  Vim.defineEx 'target',  'tar', (cm, params) -> setLimit Number((params?.args ? [])[0] ? 0)
-  # Frame at a time. `:step` from a running sketch pauses it first, so you do
-  # not have to catch it.
-  Vim.defineEx 'pause',    'pau',  -> handlers.onPause?()
-  Vim.defineEx 'step',     'st',   -> handlers.onStep?()
-  Vim.defineEx 'continue', 'cont', -> handlers.onGo?()
-  # Line at a time: to the next line that runs, wherever it is.
-  Vim.defineEx 'line',     'li',   -> handlers.onLine?()
+  toVim entry for entry in COMMANDS
 
 # --- public -----------------------------------------------------------------
 
@@ -386,5 +421,10 @@ Editor =
   view:      -> view
   save:   save
   focus:  -> view.focus()
+
+  isCommand:     (line) -> COMMAND_LINE.test line
+  command:       command
+  defineCommand: defineCommand
+  commands:      -> (entry.name for entry in COMMANDS)
 
 globalThis.Editor = Editor
