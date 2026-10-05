@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld('beans', {
   paths: ()           => ipcRenderer.invoke('beans:paths'),
   image: (url)        => ipcRenderer.invoke('image:load', url),
   onOpen: (handler) => ipcRenderer.on('sketch:open', () => handler()),
+  // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
+  vim:   ()        => ipcRenderer.invoke('settings:vim'),
+  onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
     arm:     (want)         => ipcRenderer.invoke('debug:arm', want),

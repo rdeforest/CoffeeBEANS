@@ -8,7 +8,10 @@ fsp  = require 'fs/promises'
 path = require 'path'
 
 module.exports = (t) ->
-  {js, wait, check, setDoc, selectLines, settle, click, handleEx, evalRegion, paths} = t
+  {js, wait, check, setDoc, selectLines, settle, click, handleEx, evalRegion, paths, vimKeys} = t
+
+  # The `:run` trap below lives in vim's command line.
+  await vimKeys yes
 
   # The element with the keyboard, named the way these checks talk about it.
   focused = -> js """

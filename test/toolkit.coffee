@@ -1,7 +1,8 @@
 # Everything a part needs to drive the real app, in one object. A part takes
 # only the handles it uses, so its first line says what it touches.
 
-path = require 'path'
+path                  = require 'path'
+{Menu, BrowserWindow} = require 'electron'
 
 wait = (ms) -> new Promise (resolve) -> setTimeout resolve, ms
 
@@ -48,8 +49,50 @@ module.exports = (win, paths) ->
       return doc if doc is wanted or Date.now() > deadline
       await wait 25
 
+  # Until the page answers `probe` with something truthy, and that answer.
+  t.waitFor = (probe, limit = 3000) ->
+    deadline = Date.now() + limit
+    loop
+      seen = await t.js probe
+      return seen if seen or Date.now() > deadline
+      await wait 25
+
+  # Keys as the OS would deliver them, to whatever has the page's focus. A
+  # keydown dispatched by hand reaches CodeMirror's keymaps but never inserts
+  # text, so it cannot tell an editor that types `:` from one that swallows it.
+  t.type = (text) ->
+    for key in text
+      win.webContents.sendInputEvent type: 'keyDown', keyCode: key
+      win.webContents.sendInputEvent type: 'char',    keyCode: key
+      win.webContents.sendInputEvent type: 'keyUp',   keyCode: key
+    undefined
+
+  # A keydown straight into the editor, for the bindings: same-tick, so a
+  # check can read what it did before anything else gets a turn.
+  t.chord = (key, mods = {}) -> t.js """
+    const down = new KeyboardEvent('keydown', { key: #{JSON.stringify key},
+      ctrlKey: #{!!mods.ctrl}, shiftKey: #{!!mods.shift}, bubbles: true, cancelable: true })
+    Editor.view().contentDOM.dispatchEvent(down)
+    return down.defaultPrevented
+  """
+
+  # --- Edit > Vim Keys ------------------------------------------------------
+
+  # The real menu item, clicked the way the menu clicks it, and then until the
+  # editor has followed -- the menu tells the page over IPC.
+  t.vimItem = -> Menu.getApplicationMenu().getMenuItemById 'vim'
+
+  t.vimKeys = (wanted) ->
+    item = t.vimItem()
+    item.click() unless item.checked is wanted
+    await t.waitFor "return Editor.vimKeys() === #{wanted}"
+
+  t.vimState = ->
+    menu:   t.vimItem()?.checked
+    editor: await t.js "return Editor.vimKeys?.()"
+
   # Through the real ex parser, so :help and :target are tested the way they
-  # are typed rather than by calling the handler behind them.
+  # are typed rather than by calling the handler behind them. Needs vim on.
   t.handleEx  = (cmd) -> t.js "CM.Vim.handleEx(CM.getCM(Editor.view()), #{JSON.stringify cmd}); return true"
   t.linesText = -> t.js "return document.getElementById('lines').textContent"
   t.overLine  = -> t.js "return (document.querySelector('.cm-over-limit') || {}).textContent ?? null"
@@ -58,9 +101,9 @@ module.exports = (win, paths) ->
   # --- the app around it ------------------------------------------------------
 
   t.click        = (id) -> t.js "document.getElementById('#{id}').click(); return true"
-  # There is no button for the whole buffer any more -- it is `:eval`, through
-  # the real ex parser, the same path :help and :target are tested on.
-  t.evalAll      = -> t.handleEx 'eval'
+  # There is no button for the whole buffer any more -- it is `/eval`, through
+  # the command table, which answers with or without vim.
+  t.evalAll      = -> t.js "Editor.command('/eval'); return true"
   t.status       = -> t.js "return document.getElementById('status').textContent"
   t.consoleText  = -> t.js "return document.getElementById('console').textContent"
   t.clearConsole = -> t.js "document.getElementById('console').innerHTML = ''; return true"
@@ -115,6 +158,33 @@ module.exports = (win, paths) ->
     return true
   """
 
+  # A second page of the app, brought up from nothing the way a launch brings
+  # one up, asked `probe` until it answers, and closed. Not a reload of the
+  # window under test: on Linux a page reloaded inside a minimised window gets
+  # no animation frames at all, backgroundThrottling or not -- a shown window
+  # ran 144.5 rAF/s before and after a reload, a shown-then-minimised one 144
+  # before and 0 after every reload, its sketch stuck `running` (measured by a
+  # Claude reviewer, 2026-10-05). A hidden Linux test run shows its window and
+  # then minimises it, so reloading it would stall the present loop for every
+  # part after.
+  t.freshPage = (probe, limit = 15000) ->
+    page = new BrowserWindow
+      show: no
+      webPreferences:
+        contextIsolation: yes
+        nodeIntegration:  no
+        preload:          path.join paths.root, 'src', 'main', 'preload.js'
+    page.webContents.setAudioMuted yes
+    try
+      await page.loadURL 'app://beans/src/renderer/index.html'
+      deadline = Date.now() + limit
+      loop
+        seen = await page.webContents.executeJavaScript "(async () => { #{probe} })()", yes
+        return seen if seen or Date.now() > deadline
+        await wait 25
+    finally
+      page.destroy()
+
   # --- between parts ----------------------------------------------------------
 
   # Polled rather than slept: a boot takes what it takes, and most of them take
@@ -135,7 +205,13 @@ module.exports = (win, paths) ->
   # Scratch first, and only then blank the buffer: Editor.load flushes the
   # outgoing text to whatever sketch is *current*, so blanking while a real
   # sketch is open would autosave the emptiness straight over it.
+  #
+  # Vim is off at the start of every part, the way a fresh install has it, and
+  # a part that drives vim turns it on. What the app came up with is kept
+  # first, for the check that a fresh install has no vim.
   t.reset = ->
+    t.launched ?= await t.vimState()
+    await t.vimKeys off
     await t.js "await Editor.load('scratch'); return true"
     await t.setDoc ''
     await wait 400                   # past the autosave debounce
