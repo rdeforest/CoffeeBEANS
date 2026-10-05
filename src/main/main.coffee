@@ -87,13 +87,51 @@ ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(na
 # the editor, and have the editor autosave the emptiness back. A rename is
 # atomic: a reader sees the old file or the new one. The temp name must not
 # end in .coffee or the watcher would pick it up as a sketch of its own.
-ipcMain.handle 'sketch:write', (event, name, text) ->
-  file    = sketchFile name
+writeSketch = (file, text) ->
   await fsp.mkdir path.dirname(file), recursive: yes     # :e sub/new makes sub/
   staging = path.join path.dirname(file), ".#{path.basename file}.saving"
   await fsp.writeFile staging, text, 'utf8'
-  await fsp.rename staging, file
+  await renameOnto staging, file
   true
+
+# Windows refuses a rename while something else has either file open: Defender
+# or the indexer reading the staging file just written, or the target. EPERM
+# on the CI's windows-latest runner, 2026-10-05. That lasts milliseconds, so
+# the rename is tried again, backing off, for about 1.3s in all. Not longer:
+# switching sketches waits on the outgoing save, and a save that still fails
+# goes to the renderer as an error, and the next edit saves again anyway.
+# graceful-fs waits up to a minute for the same thing, which suits npm, not
+# an editor. Elsewhere these codes mean a real refusal, so no retry there.
+RENAME_WAITS = [10, 20, 40, 80, 160, 320, 640]
+TRANSIENT    = ['EPERM', 'EACCES', 'EBUSY']
+
+renameOnto = (staging, file) ->
+  for pause in RENAME_WAITS
+    try
+      return await fsp.rename staging, file
+    catch error
+      throw error unless process.platform is 'win32' and error.code in TRANSIENT
+      console.log "sketch:write: #{error.code} renaming onto #{file}, again in #{pause}ms"
+      await new Promise (resolve) -> setTimeout resolve, pause
+  await fsp.rename staging, file
+
+# Saves of one sketch run one at a time, in the order they were asked for.
+# Overlapping, they shared the staging file: one save's rename carried off
+# another's file (ENOENT, 11 of 12 overlapping saves when Claude reproduced
+# it on Linux, 2026-10-05), and the disk kept whichever finished last rather
+# than the last one asked for. Each waits for the one ahead however that one
+# ended; its failure has already gone to its own caller.
+saving = new Map
+
+ipcMain.handle 'sketch:write', (event, name, text) ->
+  file  = sketchFile name
+  write = -> writeSketch file, text
+  ahead = saving.get(file) ? Promise.resolve()
+  done  = ahead.then write, write
+  saving.set file, done
+  forget = -> saving.delete file if saving.get(file) is done
+  done.then forget, forget
+  done
 ASSETS = path.join DATA, 'assets'
 
 # Cached on first fetch, and thereafter never touched again. A sketch shown

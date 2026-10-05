@@ -1,6 +1,9 @@
 # Running, stopping, restarting and failing: the states the app can get
 # into around a sketch, including the ones that used to wedge it.
 
+fsp  = require 'fs/promises'
+path = require 'path'
+
 module.exports = (t) ->
   {js, wait, check, setDoc, evalAll, consoleText, clearConsole, click, status,
    settle, settled, quiet, evalRegion} = t
@@ -184,3 +187,21 @@ module.exports = (t) ->
   check 'a print arrives while the sketch is still running',
     midRun.includes('EARLY') and not midRun.includes('LATE') and running is 'running' and after.includes('LATE'),
     "mid=#{JSON.stringify midRun.trim()} status=#{running}"
+
+  # Saves that overlap must all land, in the order asked. They shared one
+  # staging file until 2026-10-05, so one write's rename moved another's file
+  # out from under it (ENOENT on Windows CI, and here), and the text left on
+  # disk was whichever write happened to finish last.
+  overlap = 'save-overlap'
+  results = await js """
+    const writes = [];
+    for (let i = 0; i < 12; i++) writes.push(beans.write('#{overlap}', 'print ' + i + ' ' + 'x'.repeat(4000 - 300 * i) + '\\n'));
+    return (await Promise.allSettled(writes)).map(r => r.status === 'fulfilled' ? 'ok' : r.reason.message);
+  """
+  onDisk = await fsp.readFile path.join(t.paths.sketches, "#{overlap}.coffee"), 'utf8'
+  last   = "print 11 #{'x'.repeat 4000 - 300 * 11}\n"
+  failed = (r for r in results when r isnt 'ok')
+  check 'overlapping saves of one sketch all land, the last one asked for on disk',
+    failed.length is 0 and onDisk is last,
+    "#{failed.length} failed #{JSON.stringify failed[0] ? ''} disk starts #{JSON.stringify onDisk[0...12]} length #{onDisk.length}"
+  await fsp.rm path.join(t.paths.sketches, "#{overlap}.coffee"), force: yes
