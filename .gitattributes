@@ -1,0 +1,7 @@
+# LF everywhere, whatever core.autocrlf says. Windows git otherwise checks
+# out CRLF, and the first Windows CI run (2026-10-04) then failed "suite does
+# not touch real sketches": hello.coffee came back at 785 bytes, its LF size,
+# because the editor rewrote the CRLF copy with LF endings.
+* text=auto eol=lf
+
+*.png binary

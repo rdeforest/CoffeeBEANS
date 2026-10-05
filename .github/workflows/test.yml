@@ -26,10 +26,8 @@ jobs:
     # A wedged app never exits; the suite alone takes about two minutes.
     timeout-minutes: 20
     steps:
-      # Windows git checks out CRLF. The first Windows run then failed "suite
-      # does not touch real sketches": hello.coffee came back at 785 bytes,
-      # its LF size, so something in the suite rewrote it with LF endings.
-      - run: git config --global core.autocrlf false
+      # Line endings are pinned to LF by .gitattributes, not here, so a
+      # Windows contributor's checkout matches CI's.
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
