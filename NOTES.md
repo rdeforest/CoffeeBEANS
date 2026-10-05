@@ -440,7 +440,7 @@ Changes ride the same ring, so they land within a render quantum.
   producing them, rendered in the worker -- the lowest layer, which the ring
   already has room for.
 
-## Seeded randomness (todo)
+## Seeded randomness
 
 Asked for by Robert on 2026-10-04: a way to seed `rnd`. Worth having for its
 own sake -- a sketch shared with a friend cannot share its randomness today,
@@ -452,7 +452,12 @@ and Applesoft BASIC seeded by giving `RND` a negative argument. Proposal,
 following the Microsoft name:
 
     randomize 42      # the same numbers every run from here on
-    randomize()       # fresh from the clock, as now
+    randomize()       # fresh, from crypto.getRandomValues
+
+A fresh seed comes from `crypto.getRandomValues`, not the clock: two
+`randomize()` calls inside one clock tick would repeat the same numbers.
+Changed from the clock by Claude, 2026-10-05; Robert may prefer the clock
+back.
 
 Decided by Robert, 2026-10-04:
 

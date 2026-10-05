@@ -213,6 +213,9 @@ SECTIONS = [
     ['pi e',                'Math.PI, Math.E']
     ['rnd()',               '0..1']
     ['rnd n',               '0..n']
+    ['randomize 42',        'the same rnd numbers every run from here on']
+    ['randomize()',         'fresh numbers again, as every run starts with']
+    ['rnd.currentSeed',     'randomize this later to carry on from here']
   ]
 ]
 
