@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 290 checks
+    npm test                                 all 296 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -447,10 +447,21 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   `a9a427a`): disk text goes through CodeMirror's own line splitting
   (`asHeld`) at load and on an outside change. An edited CRLF sketch is
   saved LF (Claude's call; keeping CRLF would be about five lines).
-- **Saves fail on Windows**: the rename in `sketch:write` failed with ENOENT
-  or EPERM in 6 of 7 Windows runs; the next eval then ran the previous buffer
-  and later checks cascaded. Likely two overlapping saves share the one
-  staging name `.<name>.saving`. Not fixed.
+- **Saves failed on Windows, and a stale read reverted the editor** (fixed
+  the same night, S1). Overlapping `sketch:write` calls shared one staging
+  name, `.<name>.saving`, so one save's rename carried off another's file
+  (ENOENT; 11 of 12 overlapping saves reproduced on Linux). Saves of one
+  file now queue in main, and on Windows a rename refused with
+  EPERM/EACCES/EBUSY is retried for about 1.3s, logged. Worse, and the cause
+  of every Windows CI failure that night: the watcher read the file 60ms
+  after an event with no idea a save was in flight, and `applyExternal` took
+  the old text for an outside edit -- the next eval ran the previous
+  buffer. The watcher now waits for that file's save chain. Still open: a
+  read sent while the renderer's write is crossing IPC can revert the editor
+  until the echo; the fix not taken is a write number echoed in
+  `sketch:changed`. And with no conflict detection, an outside edit made
+  during one of our saves is lost silently. Main hands the suite a `faults`
+  hook (slow, refused renames) to test this; it does nothing otherwise.
 - **macOS missed the first save in a folder created outside the app** once
   (`a folder created outside the app is watched, every save`), in the one
   by-hand run. Not investigated.
