@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 239 checks
+    npm test                                 all 252 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -330,6 +330,15 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   caught and `pauseOnExceptions: 'uncaught'` never fires. Needs either
   pause-on-all plus auto-resume outside user code, or restructuring how sketch
   errors propagate. Must read as *an error*, not a silent freeze.
+  Researched 2026-10-05: `docs/research/pause-on-error.md` recommends the
+  second way (run the sketch as an event listener with no catch above it)
+  and lists what needs Robert's decision first.
+- **Preferences live in main's data folder**, `settings.json` beside
+  `sketches/` (`src/main/settings.coffee`), not the renderer's localStorage:
+  the Edit menu shows Vim Keys and is built before any page loads, so main
+  has to own it. JSON because YAML would be a new dependency. A file that
+  will not parse, or is not an object, is logged and the defaults used.
+  Decided by Claude, 2026-10-05 (K2); Robert may overrule.
 
 ## The scope wall
 
@@ -410,6 +419,14 @@ Each of these passed on the Mac and failed on Linux, so check both.
   has to be focused a tick later (`toCanvas`), and a run that fails inside
   that tick cancels it. The `focus` part types `:run` through the real panel
   for exactly this; calling the ex handler directly would never catch it.
+- **A page reloaded inside a minimised window gets no animation frames at
+  all on Linux**, `backgroundThrottling: no` or not: a shown window kept
+  144.5 rAF/s across two reloads, a shown-then-minimised one went from 144 to
+  0 and its sketch sat at `running`. So the hidden test window (shown, then
+  minimised) is never reloaded; `t.freshPage` opens a second window instead.
+  Measured by a Claude reviewer, 2026-10-05. Untested, inferred: the
+  `render-process-gone` recovery reloads too, so a crash while minimised may
+  come back drawing nothing until the window is restored.
 
 Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
 
