@@ -14,6 +14,7 @@ state =
   brush:      null
   frameStart: null
   started:    0
+  seed:       0
 
 # Everything that draws writes to `target`. The screen is just the target
 # that happens to live in shared memory; a Surface is one that does not, so
@@ -524,13 +525,53 @@ buffer.fps = (n) ->
   Atomics.store state.i32, H.FPS, n | 0
   undefined
 
+# --- randomness -------------------------------------------------------------
+
+# Mulberry32, chosen by Robert 2026-10-04 (NOTES.md, Seeded randomness): its
+# whole state is one 32-bit number, so that number *is* a seed, and
+# rnd.currentSeed handed back to randomize carries on from exactly here.
+# `| 0` keeps the state a 32-bit integer; the reference's bare `+=` lets it
+# grow as a double, which loses bits after a few million draws.
+random = ->
+  state.seed = (state.seed + 0x6D2B79F5) | 0
+  t  = Math.imul state.seed ^ (state.seed >>> 15), state.seed | 1
+  t ^= t + Math.imul t ^ (t >>> 7), t | 61
+  ((t ^ (t >>> 14)) >>> 0) / 4294967296
+
+rnd = (n) -> if n? then random() * n else random()
+
+Object.defineProperty rnd, 'currentSeed', get: -> state.seed >>> 0
+
+# A fraction is refused rather than truncated: `randomize rnd()` looks like a
+# fresh seed and would be seed 0 every time. Negative and oversized whole
+# numbers wrap, as the generator's own arithmetic does. A fresh seed comes
+# from crypto, not the clock (Claude's call, 2026-10-05): two randomize()
+# calls inside one clock tick would otherwise repeat the same numbers.
+# Only a bare randomize() is fresh: `randomize save.seed` with the field
+# missing passes undefined, and should fail rather than quietly reseed.
+randomize = (args...) ->
+  if args.length is 0
+    state.seed = crypto.getRandomValues(new Uint32Array 1)[0] | 0
+    return undefined
+  [n] = args
+  unless Number.isInteger n
+    shown = if typeof n is 'string' then JSON.stringify n else String n
+    throw new Error "randomize: the seed must be a whole number, got #{shown}"
+  state.seed = n | 0
+  undefined
+
 # --- install ----------------------------------------------------------------
 
+# Math.random is replaced rather than shadowed so that `random is Math.random`
+# holds and every name for randomness draws from the one stream (Robert's
+# rule: anything of Math's in a sketch's namespace is its Math counterpart).
 installMath = ->
+  Math.random = random
   for name in Object.getOwnPropertyNames Math
     continue if name in ['constructor']
     globalThis[name.toLowerCase()] = Math[name]
-  globalThis.rnd = (n) -> if n? then Math.random() * n else Math.random()
+  Object.assign globalThis, {rnd, randomize}
+  randomize()
   undefined
 
 globalThis.attach = (sab) ->
