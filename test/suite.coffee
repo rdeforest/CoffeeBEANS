@@ -62,14 +62,12 @@ module.exports = (win, paths) ->
 
   console.log "\n#{if t.failures then "#{t.failures} FAILED" else 'all passed'}"
 
-  # Only ever remove a data directory the test run created inside the repo, and
-  # only after a full green run -- a part on its own has not earned the claim
-  # that everything is fine.
+  # A full green run's data folder is removed by test/run.coffee once Electron
+  # has exited: removing it from in here failed with EBUSY on Windows, where
+  # Electron still holds its userData (DATA/electron) open. A part on its own
+  # has not earned the claim that everything is fine, so it leaves it too.
   disposable = process.env.BEANS_DATA_HOME and paths.data.startsWith paths.root + path.sep
-  if disposable and not t.failures and not asked.length
-    await fsp.rm paths.data, recursive: yes, force: yes
-    console.log "removed #{paths.data}"
-  else if disposable
+  if disposable and (t.failures or asked.length)
     console.log "left #{paths.data} in place for troubleshooting"
 
   t.failures

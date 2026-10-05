@@ -3,7 +3,18 @@
 
 module.exports = (t) ->
   {js, wait, check, setDoc, evalAll, consoleText, clearConsole, click, status,
-   settled, evalRegion} = t
+   settle, settled, quiet, evalRegion} = t
+
+  # The same poll as debugging's and sound's: until the app says so, however
+  # long that takes, with a ceiling so a broken app fails rather than hangs.
+  until_ = (probe, limit = 15000) ->
+    deadline = Date.now() + limit
+    loop
+      value = await probe()
+      return value if value
+      return null if Date.now() > deadline
+      await wait 25
+
   # 23. a sketch that is not there must not take the boot sequence with it
   missingName = 'definitely-not-a-sketch'
   await js "return (async () => { try { await beans.read('#{missingName}') } catch (e) { return 'threw' } })()"
@@ -11,7 +22,7 @@ module.exports = (t) ->
   await js "await Editor.load('scratch'); return true"
   await evalAll()
   alive = true
-  await wait 600
+  await settle()
   check 'a failed read does not stop the app', alive is true and (await js "return typeof Panels.size('editor')") is 'number'
 
   # 33. a stop must not poison the live worker: the next region that swaps runs
@@ -21,7 +32,7 @@ module.exports = (t) ->
   await evalAll()
   await wait 300
   await click 'stop'
-  await wait 300
+  await settled()                    # its own "*** stopped ***" is not the check's
   await clearConsole()
   await setDoc "buffer.swap\nprint 'ALIVE'\n"
   await wait 500
@@ -38,39 +49,79 @@ module.exports = (t) ->
   await wait 300
   greyed = await js "return document.getElementById('evalRegion').disabled"
   await evalRegion()
-  text = await settled()
+  # Not settled(): this sketch never finishes, so that waited out its whole
+  # 30s ceiling on every run before reading the console.
+  await until_ -> /already running/.test await consoleText()
+  text = await consoleText()
   await click 'stop'
-  await wait 300
+  await settle()
   idle    = await status()
   enabled = await js "return !document.getElementById('evalRegion').disabled"
   check 'run while running is refused', greyed and text.includes('already running') and idle is 'ready' and enabled, "#{JSON.stringify text.trim()} status=#{idle} greyed=#{greyed} enabled=#{enabled}"
 
-  # 35. a run right after a stop must not be killed by the stop's deadline
+  # 35. a run right after a stop must not be killed by the stop's deadline.
+  # Stop and Run go in one call, 50ms apart in the page, so the Run lands
+  # inside the 250ms deadline however slow the round trips are; two separate
+  # calls on a 2-core CI runner could miss it, get "no yield point" for the
+  # old worker, and fail for the wrong reason.
   await setDoc "loop\n  0\n"
   await wait 500
   await clearConsole()
   await evalAll()
   await wait 200
-  await click 'stop'
-  await wait 50
   await setDoc "screen 320, 200\nbuffer.on\nprint 'FRESH'\nloop\n  buffer.swap\n"
-  await click 'runFresh'
-  await wait 800
+  await js """
+    document.getElementById('stop').click()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    document.getElementById('runFresh').click()
+    return true
+  """
+  ranAt = Date.now()                 # the stop was 50ms before this
+  # Until the new sketch has printed, or the deadline has shot it: however
+  # long a boot takes. A fixed 800ms read an empty console on CI, both while
+  # still booting and once running.
+  await until_ -> /FRESH|no yield point/.test await consoleText()
+  # Then past the deadline for certain, so a shot that is still coming has
+  # landed: the point here is that it does not happen.
+  await wait Math.max 0, ranAt + 1000 - Date.now()
+  await quiet()
   text = await consoleText()
   live = await status()
   check 'a run during a stop deadline survives', text.includes('FRESH') and not text.includes('no yield point') and live is 'running', "#{JSON.stringify text.trim()} status=#{live}"
   await click 'stop'
-  await wait 300
+  await settle()
 
-  # 36. a flood of prints is capped, and the last line still arrives
-  await setDoc "print i for i in [1..200000]\nprint 'LAST'\n"
+  # 36. a flood the console cannot hold is capped to its tail. 20,000 lines
+  # of 1..5 digits are 88,894 bytes of text plus a 4-byte length each, about
+  # 169 KB against the 1 MiB print ring (PRINT_BYTES): it fits six times over
+  # even if the renderer drained nothing, so every line reaches the console
+  # and the cap alone decides what is kept -- 18002..20000 and LAST.
+  await setDoc "print i for i in [1..20000]\nprint 'LAST'\n"
   await wait 500
   await clearConsole()
   await evalAll()
-  await wait 2500
+  await settled()
+  ends = await js """
+    const lines = document.getElementById('console')
+    return {count: lines.childElementCount, first: lines.firstElementChild?.textContent,
+            last: lines.lastElementChild?.textContent}
+  """
+  check 'console caps a flood and keeps the tail',
+    ends.count is 2000 and ends.first is '18002' and ends.last is 'LAST', JSON.stringify ends
+
+  # 61. a flood the ring cannot hold drops lines and says so. A full ring
+  # drops new lines rather than block the sketch (NOTES.md, The console goes
+  # through shared memory), so which lines survive is a race with the drain
+  # and LAST is not promised. The closing line is longer than the whole ring,
+  # so at least that one is dropped however fast the renderer keeps up.
+  await setDoc "print i for i in [1..200000]\nprint 'x'.repeat 1 << 20\n"
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text  = await settled()
   count = await js "return document.getElementById('console').childElementCount"
-  text  = await consoleText()
-  check 'console caps a flood and keeps the tail', count <= 2000 and text.includes('LAST'), "#{count} lines"
+  check 'a flood past the ring is counted and still capped',
+    count <= 2000 and /\d+ lines? dropped, console ring full/.test(text), "#{count} lines, ends #{JSON.stringify text[-120..]}"
 
   # 39. a runtime error reports the CoffeeScript line it happened on
   await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"
