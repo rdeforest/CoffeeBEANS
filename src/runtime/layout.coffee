@@ -26,7 +26,7 @@ HEADER =
   PRINT_HEAD: 37     # bytes; written only by the worker
   PRINT_TAIL: 38     # bytes; written only by the renderer
   PRINT_LOST: 39     # lines dropped because the ring was full
-  ASK_STATE:  40     # 0 idle, 1 a question is waiting, 2 answered, 3 threw
+  ASK_STATE:  40     # 0 idle, 1 a question is waiting, 2 answered, 3 threw, 4 being answered
   ASK_LEN:    41     # bytes of the question, then of the answer
   SOUND_HEAD: 42     # floats; written only by the worker
   SOUND_TAIL: 43     # floats; written only by the audio thread
@@ -37,11 +37,12 @@ HEADER =
   SOUND_BUSY: 48     # how many voices have a note sounding
   SOUND_RATE: 49     # the audio thread's sample rate, once it is running
   KEYS_UP:    50     # 50..57, sticky: went up since the sketch last looked
+  ASK_KIND:   58     # what the question in the ask buffer wants; see ASK_FOR
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 58..63 spare: gamepads, whatever comes
+HEADER_WORDS = 64        # 59..63 spare: gamepads, whatever comes
 BUFFERS      = 2
 
 # Where a loaded image lands on its way from the main process to the worker.
@@ -87,6 +88,9 @@ globalThis.LAYOUT =
   printOffset:     PRINT_OFFSET
   ASK_BYTES:       ASK_BYTES
   askOffset:       ASK_OFFSET
+  # A line to evaluate, answered with what it shows as; or Tab's question,
+  # {path, word}, answered with the names that fit, as JSON.
+  ASK_FOR:         {value: 0, completion: 1}
   SOUND_FLOATS:    SOUND_FLOATS
   soundOffset:     SOUND_OFFSET
   CONTROL_RATE:    500     # samples a second for a note's frequency and volume curves

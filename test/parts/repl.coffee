@@ -2,11 +2,13 @@
 # runs in, answered at a yield point so a running sketch can be questioned
 # without being stopped.
 
+fsp             = require 'fs/promises'
+pathTo          = require 'path'
 {BrowserWindow} = require 'electron'
 
 module.exports = (t) ->
   {js, wait, check, setDoc, evalAll, consoleText, clearConsole,
-   click, status, settle, settled, ask} = t
+   click, status, settle, settled, ask, paths} = t
 
   # 1. a line comes back with its value
   await clearConsole()
@@ -406,4 +408,311 @@ module.exports = (t) ->
   check 'F8, Ctrl-\\, F10 and Ctrl-. still work with the prompt focused',
     steps.join(' ') is 'F8:line paused C-\\:running F10:line paused F8:running C-.:ready',
     "#{steps.join ' '} prompt still focused=#{focusedAfter} console=#{JSON.stringify (await consoleText())[-200..]}"
+  await setDoc ''
+
+  # --- Tab ---------------------------------------------------------------------
+
+  # Bash's Tab (AGENTS.md, Tab completion). Real Tab keys, so a Tab the prompt
+  # failed to claim would move the focus instead. Every Tab ends in an answer
+  # or a beep, so the wait is for the question to be back in, then the line.
+  beeps = -> js "return globalThis.Prompt.beeps ? Prompt.beeps() : -1"
+  # Names of its own: this whole part is one scope, and `before` and `got`
+  # are already taken above.
+  tab = (line) ->
+    beepsBefore = await beeps()
+    await promptAt line, line.length
+    await press 'Tab'
+    await until_ -> not await js "return Prompt.pending()"
+    tabbed = await promptNow()
+    tabbed.beeped = (await beeps()) - beepsBefore
+    tabbed
+
+  await setDoc """
+counter = hits: 0
+Object.defineProperty counter, 'probe', get: ->
+  counter.hits += 1
+  deep: 1
+ball  = velocity: 1, x: 2
+world = ball: ball
+myWidget = 1
+"""
+  await wait 500
+  await evalAll()
+  await settled()
+  await clearConsole()
+
+  # 14. a unique prefix finishes, from each place a name can come from
+  unique = [['myWid', 'myWidget'], ['randomi', 'randomize'], ['world.ball.vel', 'world.ball.velocity'],
+            ['x = rectF', 'x = rectFill'], ['/ru', '/run'], [':ru', ':run']]
+  for [typed, wanted] in unique
+    got = await tab typed
+    check "Tab finishes #{JSON.stringify typed}", got.value is wanted and got.from is wanted.length and
+      got.focused and got.beeped is 0, JSON.stringify got
+
+  # 15. ambiguous: as far as they agree, a beep, and a second Tab lists them
+  first  = await tab 'circ'
+  before = (await consoleText()).length
+  await press 'Tab'
+  await t.quiet()
+  listed = (await consoleText())[before..]
+  check 'an ambiguous Tab finishes as far as every name agrees, and beeps',
+    first.value is 'circle' and first.beeped is 1, JSON.stringify first
+  check 'a second Tab lists them', /\bcircle\b/.test(listed) and listed.includes('circleFill') and
+    (await promptNow()).value is 'circle', JSON.stringify listed
+
+  # Any other key in between, even one that comes back to the same line and
+  # caret, makes the next Tab ask again rather than list what it had.
+  await press 'C-a', 'C-e'
+  beepsAt     = await beeps()
+  before      = (await consoleText()).length
+  await press 'Tab'
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  relisted = (await consoleText())[before..]
+  check 'a key between two Tabs means the second asks again instead of listing',
+    relisted is '' and (await beeps()) - beepsAt is 1, JSON.stringify relisted
+
+  # 16. the worker's own globals are not CoffeeBEANS's vocabulary
+  stray = await tab 'Atom'
+  check 'Tab does not offer the worker\'s globals', stray.value is 'Atom' and stray.beeped is 1 and stray.focused,
+    JSON.stringify stray
+
+  # 17. a getter is named but never run, and never walked through
+  named   = await tab 'counter.pr'
+  through = await tab 'counter.probe.de'
+  hits    = await ask "'hits=' + counter.hits"
+  check 'Tab names a getter, will not walk through one, and never runs it',
+    named.value is 'counter.probe' and through.value is 'counter.probe.de' and through.beeped is 1 and
+      hits.includes('"hits=0"'), "named=#{JSON.stringify named} through=#{JSON.stringify through} hits=#{JSON.stringify hits}"
+
+  # The runtime's own: mouse.wheel consumes the movement it reports, so a Tab
+  # that read it would leave nothing for the line after.
+  await js """
+    document.getElementById('stage').dispatchEvent(new WheelEvent('wheel', {deltaY: 3, bubbles: true, cancelable: true}))
+    return true
+  """
+  wheel = await tab 'mouse.whe'
+  moved = await ask 'mouse.wheel'
+  check 'Tab names a runtime getter, mouse.wheel, without consuming it',
+    wheel.value is 'mouse.wheel' and wheel.beeped is 0 and moved is '> mouse.wheel3',
+    "wheel=#{JSON.stringify wheel} moved=#{JSON.stringify moved}"
+
+  # Tab in a reverse search takes the match and completes the word at the
+  # caret, which the search leaves at the start of what it found.
+  await ask 'myWid +1'
+  await promptAt '', 0
+  await press 'C-r'
+  await typeText ' '
+  found = await promptNow()
+  await press 'Tab'
+  await until_ -> not await js "return Prompt.pending()"
+  searched = await promptNow()
+  check 'Tab in a reverse search ends it and completes at the match',
+    found.value is 'myWid +1' and found.from is 5 and
+      searched.value is 'myWidget +1' and searched.from is 8 and searched.mark is '>',
+    "found=#{JSON.stringify found} after=#{JSON.stringify searched}"
+
+  # 18. a running sketch's own locals, lent to the question as the prompt's
+  # are; a question still out makes Tab beep rather than queue; and an answer
+  # to a line that has changed since is dropped. The sketch yields only
+  # every half second, so a question stays out long enough to see. The
+  # change goes in the same tick as the Tab, so the answer cannot beat it.
+  await setDoc """
+slowLocal = 1
+loop
+  until0 = Date.now() + 500
+  null while Date.now() < until0
+  buffer.swap
+"""
+  await wait 500
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  local = await tab 'slowLoc'
+  check 'Tab finishes a running sketch\'s own local', local.value is 'slowLocal', JSON.stringify local
+
+  tabAndType = (line, then_) -> js """
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = #{JSON.stringify line}
+    p.setSelectionRange(p.value.length, p.value.length)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    const out = Prompt.pending()
+    p.value = #{JSON.stringify then_}
+    return out
+  """
+  wasOut = await tabAndType 'slowLoc', 'slowLoc + 1'
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  stale = await promptNow()
+  check 'an answer that arrives after the line has changed is dropped',
+    wasOut and stale.value is 'slowLoc + 1', "asked=#{wasOut} #{JSON.stringify stale}"
+
+  # The line and caret stand still when the focus leaves, so they cannot be
+  # what says the answer is stale: a completion typed into the editor would
+  # land in the sketch, and the autosave would write it to disk.
+  sketchFile = pathTo.join paths.sketches, "#{await js 'return Editor.name()'}.coffee"
+  docBefore  = await js "return Editor.all()"
+  diskBefore = await fsp.readFile sketchFile, 'utf8'
+  leftOut = await js """
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'slowLoc'
+    p.setSelectionRange(7, 7)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    const out = Prompt.pending()
+    Editor.focus()
+    return out
+  """
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  await wait 500          # past the editor's 250ms autosave
+  docAfter  = await js "return Editor.all()"
+  diskAfter = await fsp.readFile sketchFile, 'utf8'
+  left      = await promptNow()
+  check 'an answer that arrives after the focus has left the prompt is dropped, not typed into the editor',
+    leftOut and docAfter is docBefore and diskAfter is diskBefore and left.value is 'slowLoc',
+    "asked=#{leftOut} doc=#{JSON.stringify docAfter} disk=#{JSON.stringify diskAfter} prompt=#{JSON.stringify left}"
+
+  # In one tick for the same reason: the line's answer cannot get in first.
+  before  = await beeps()
+  refused = await js """
+    Prompt.ask('slowLocal')
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'slowLoc'
+    p.setSelectionRange(7, 7)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    return {value: p.value, out: Prompt.pending()}
+  """
+  beeped = (await beeps()) - before
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  after = await promptNow()
+  check 'Tab while a line is out beeps and does not queue',
+    beeped is 1 and refused.out and refused.value is 'slowLoc' and after.value is 'slowLoc',
+    "beeped=#{beeped} refused=#{JSON.stringify refused} after=#{JSON.stringify after}"
+  await click 'stop'
+  await settle()
+
+  # 18b. a line gives way to nothing but an answer in progress. This sketch
+  # has no yield point until space is held, so a Tab's question sits there
+  # unclaimed; the line after it takes its place instead of being refused.
+  await setDoc """
+gate = 1
+loop
+  null until keys.down 'space'
+  buffer.swap
+"""
+  await wait 500
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  before   = (await consoleText()).length
+  withdrew = await js """
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'gat'
+    p.setSelectionRange(3, 3)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    const tabOut = Prompt.pending()
+    Prompt.ask('gate + 41')
+    return {tabOut, value: p.value}
+  """
+  await t.key 'keydown', 'Space'
+  await until_ -> not await js "return Prompt.pending()"
+  await t.key 'keyup', 'Space'
+  await t.quiet()
+  gave = (await consoleText())[before..]
+  check 'a line withdraws a Tab the worker has not claimed, and is answered',
+    withdrew.tabOut and gave.includes('42') and not gave.includes('still') and
+      (await promptNow()).value is 'gat',
+    "#{JSON.stringify withdrew} console=#{JSON.stringify gave}"
+
+  # Line after line is refused as it always was. One tick, so the first
+  # answer cannot be drained before the second is asked.
+  before = (await consoleText()).length
+  await js "Prompt.ask('1'); Prompt.ask('2'); return true"
+  await t.key 'keydown', 'Space'
+  await until_ -> not await js "return Prompt.pending()"
+  await t.key 'keyup', 'Space'
+  await t.quiet()
+  twice = (await consoleText())[before..]
+  check 'a line while a line is out is still refused as waiting on the last line',
+    twice.includes('*** still waiting on the last line ***'), JSON.stringify twice
+  await click 'stop'
+  await settle()
+
+  # Once the worker has claimed the Tab it has to finish, and the line is
+  # refused -- saying so, not claiming a line was out. An author's Proxy is
+  # the one thing a Tab runs, which is what makes this window wide enough to
+  # see; the trap's print says the worker is inside it.
+  await setDoc """
+slowProxy = new Proxy {}, ownKeys: (target) ->
+  print 'claimed'
+  until0 = Date.now() + 1500
+  null while Date.now() < until0
+  Reflect.ownKeys target
+done = 1
+"""
+  await wait 500
+  await evalAll()
+  await settled()
+  await clearConsole()
+  await js """
+    const p = document.getElementById('promptLine')
+    p.focus()
+    p.value = 'slowProxy.'
+    p.setSelectionRange(10, 10)
+    p.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true}))
+    return true
+  """
+  claimed = await until_ -> (await consoleText()).includes 'claimed'
+  await js "Prompt.ask('3 * 3'); return true"
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  busy = await consoleText()
+  check 'a line while the worker is answering Tab is refused, and says that is why',
+    claimed and busy.includes('*** still answering Tab ***') and not busy.includes('last line'),
+    JSON.stringify busy
+
+  # 19. line paused, Tab asks the paused frame: these names live nowhere else
+  await setDoc """
+screen 320, 200
+turn = (angleDelta) ->
+  vec = magnitude: angleDelta
+  breakpoint
+  vec
+turn 5
+"""
+  await wait 500
+  await evalAll()
+  paused = await until_ (-> (await status()) is 'line paused'), 10000
+  await until_ -> js "return !document.getElementById('vars').hidden"
+  param  = await tab 'angleDel'
+  member = await tab 'vec.magn'
+  check 'line paused, Tab finishes the paused frame\'s names and their members',
+    paused and param.value is 'angleDelta' and member.value is 'vec.magnitude',
+    "paused=#{paused} param=#{JSON.stringify param} member=#{JSON.stringify member}"
+
+  # A line that does not compile, typed in the paused frame, says why.
+  unparsed = await ask 'this is not coffee ('
+  check 'line paused, a line that does not compile shows the error',
+    unparsed.includes('missing )') and (await status()) is 'line paused', JSON.stringify unparsed
+
+  # 20. and nothing reaches V8 while the prompt is evaluating in that frame:
+  # Tab beeps, nothing is sent after, and Tab works again once it is back
+  await js "Prompt.ask('n = 0; loop then n += 1'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await promptAt 'angleDel', 8
+  before = await beeps()
+  await press 'Tab'
+  beeped = (await beeps()) - before
+  await until_ (-> not await js "return Prompt.pending()"), 15000
+  await t.quiet()
+  held  = await promptNow()
+  again = await tab 'angleDel'
+  check 'Tab while the paused frame is evaluating beeps, sends nothing, and works once it is back',
+    beeped is 1 and held.value is 'angleDel' and again.value is 'angleDelta',
+    "beeped=#{beeped} held=#{JSON.stringify held} again=#{JSON.stringify again}"
+  await js "Stepping.resume(); return true"
+  await until_ (-> (await status()) is 'ready'), 10000
   await setDoc ''

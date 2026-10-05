@@ -140,6 +140,12 @@ askBytes  = new Uint8Array sab, LAYOUT.askOffset, LAYOUT.ASK_BYTES
 entered   = []
 enteredAt = 0
 
+# Tab's question while it is out -- the line and caret it was asked about, so
+# an answer that arrives after either has moved can be dropped -- and the
+# last ambiguous answer, which a second Tab on the same line lists.
+completing = null
+tabbed     = null
+
 askLine = (source) ->
   return unless source.trim()
   say "> #{source}", 'echo'
@@ -151,11 +157,28 @@ askLine = (source) ->
   # runs to look at it -- so the line goes to the paused frame instead. That
   # is also the better answer: this call's `angle`, not the image's.
   return askPaused source if linePaused
+  withdrawTab() if completing
   if Atomics.load(i32, H.ASK_STATE) isnt 0
-    return say '*** still waiting on the last line ***', 'sys'
-  bytes = new TextEncoder().encode source
+    return say (if completing then '*** still answering Tab ***' else '*** still waiting on the last line ***'), 'sys'
+  askWorker source, LAYOUT.ASK_FOR.value
+
+# A Tab still out gives way to a line: taken back if the worker has not
+# claimed it yet, its answer dropped if one is already in -- not offered,
+# which would rewrite the very line being sent. One the worker is answering
+# has to finish first, and only that refuses the line. Without this, a Tab at
+# a sketch with no yield point would block every later line until Stop.
+withdrawTab = ->
+  return if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 4
+  completing = null
+  drainAsk()
+
+# The one way a question reaches a worker that is not line paused, a line or
+# Tab's alike; ASK_KIND says which, so drainAsk knows whose the answer is.
+askWorker = (text, kind) ->
+  bytes = new TextEncoder().encode text
   return say '*** line too long ***', 'err' if bytes.length > LAYOUT.ASK_BYTES
   askBytes.set bytes
+  Atomics.store i32, H.ASK_KIND,  kind
   Atomics.store i32, H.ASK_LEN,   bytes.length
   Atomics.store i32, H.ASK_STATE, 1
   # An idle worker is parked in its event loop and will never look at shared
@@ -168,16 +191,23 @@ debugAsking = 0
 
 movedOn = -> say '*** it moved on before it could answer ***', 'sys'
 
+# And the one way into a line-paused frame, for the same two. Counted while
+# out, so step, continue, the pane and Tab all wait their turn: nothing may
+# reach V8 until it is back.
+evaluatePaused = (source) ->
+  debugAsking += 1
+  try
+    await beans.debug.evaluate source
+  finally
+    debugAsking -= 1
+
 # The pane is redrawn only once the evaluation is counted back in, so the
 # objects it re-opens are not asked for while one is still out.
 askPaused = (source) ->
-  debugAsking += 1
   try
-    reply = await beans.debug.evaluate source
+    reply = await evaluatePaused source
   catch error
     return say String(error.message ? error), 'err'
-  finally
-    debugAsking -= 1
   return movedOn() unless reply
   showVars reply.pane if reply.pane and reply.pane.seq is linePaused
   say reply.text, reply.kind
@@ -190,11 +220,15 @@ drainAsk = ->
   # state is cleared before we decode so a bad answer cannot wedge the prompt
   # by throwing here every 16ms forever.
   answer = new Uint8Array askBytes.subarray 0, Atomics.load i32, H.ASK_LEN
+  kind   = Atomics.load i32, H.ASK_KIND
   Atomics.store i32, H.ASK_STATE, 0
-  say decoder.decode(answer), (if state is 3 then 'err' else 'value')
+  text = decoder.decode answer
+  return completed text, state is 3 if kind is LAYOUT.ASK_FOR.completion
+  say text, (if state is 3 then 'err' else 'value')
   undefined
 
 recall = (step) ->
+  tabbed = null
   return unless entered.length
   enteredAt = Math.min entered.length, Math.max 0, enteredAt + step
   promptLine.value = entered[enteredAt] ? ''
@@ -296,7 +330,87 @@ yankPop = ->
   killAt = (killAt + 1) % killRing.length
   rewrite caret() - last.length, caret(), killRing[killAt]
 
+# --- Tab ----------------------------------------------------------------------
+
+# Bash's Tab, as designed in AGENTS.md ("Tab completion"): as far as every
+# candidate agrees, a beep when that is ambiguous, and the candidates listed
+# on a second Tab. Only the worker knows the names worth offering, so it is
+# asked, by the same path a line takes -- through the paused frame while line
+# paused, so `ang` finds this call's `angle`. Whatever cannot be asked right
+# now -- a line still out, an evaluation in a paused frame -- beeps rather
+# than queues. A sketch with no yield point never answers, and Tab does
+# nothing, as the prompt does nothing.
+#
+# The word is a dotted name ending at the caret. Anything else -- `a[0].`,
+# `f().`, `@x` -- would mean evaluating something to find out what it is,
+# and Tab never evaluates; it beeps.
+DOTTED  = /(?:^|[^\w$.@])((?:[A-Za-z_$][\w$]*\.)*)([A-Za-z_$][\w$]*)?$/
+COMMAND = /^[\/:](\w*)$/
+
+commonPrefix = (a, b) ->
+  at = 0
+  at += 1 while at < a.length and a[at] is b[at]
+  a[...at]
+
+# The answer to a question asked at `line`, with the caret at `at`. Dropped
+# if the line has moved on since: completing what is no longer there would
+# write into the middle of something else. Dropped too if the focus has left
+# the prompt, where the line and caret stand still: rewrite types into
+# whatever has focus, and in the editor that is the sketch, autosaved.
+offer = ({line, at, word}, names) ->
+  return unless document.activeElement is promptLine and promptLine.value is line and caret() is at
+  fits = (name for name in names when name.startsWith word)
+  return beep() unless fits.length
+  common = fits.reduce commonPrefix
+  rewrite at, at, common[word.length..] if common.length > word.length
+  return if fits.length is 1
+  tabbed = {line: promptLine.value, at: caret(), names: fits}
+  beep()
+
+completed = (text, threw) ->
+  asked      = completing
+  completing = null
+  return say "completion: #{text}", 'err' if threw
+  offer asked, JSON.parse text if asked
+
+complete = ->
+  line = promptLine.value
+  at   = caret()
+  return beep() unless promptLine.selectionStart is promptLine.selectionEnd
+  if tabbed?.line is line and tabbed.at is at
+    return say tabbed.names.join('   '), 'sys'
+  before  = line[...at]
+  command = COMMAND.exec before
+  return offer {line, at, word: command[1]}, Editor.commands() if command
+  found = DOTTED.exec before
+  path  = found?[1].split('.')[...-1] ? []
+  word  = found?[2] ? ''
+  return beep() unless path.length or word
+  asked = {line, at, word}
+  return completePaused asked, path if linePaused
+  return beep() unless worker and Atomics.load(i32, H.ASK_STATE) is 0
+  completing = asked
+  askWorker JSON.stringify({path, word}), LAYOUT.ASK_FOR.completion
+
+# The frame's own names come from the pane's last report. The first name is
+# read in the frame only when it is one of them -- a variable, which cannot
+# be a getter; anything else is left to the worker's descriptor walk.
+completePaused = (asked, path) ->
+  return beep() if debugAsking
+  local    = path[0] in pausedNames
+  question = JSON.stringify {path, word: asked.word, local}
+  source   = "REPL.complete #{question}, #{JSON.stringify pausedNames}, #{if local then path[0] else 'undefined'}"
+  completing = asked
+  try
+    reply = await evaluatePaused source
+  catch error
+    completing = null
+    return say String(error.message ? error), 'err'
+  return completing = null unless reply
+  completed (if reply.kind is 'value' then JSON.parse reply.text else reply.text), reply.kind isnt 'value'
+
 submit = ->
+  tabbed = null
   askLine promptLine.value
   promptLine.value = ''
   enteredAt = entered.length
@@ -311,6 +425,8 @@ clearLine = ->
 
 PROMPT_KEYS =
   'Enter':         submit
+  # Shift-Tab still takes the keyboard back out of the prompt.
+  'Tab':           (chord, event) -> if event.shiftKey then PASS else complete()
   'ArrowUp':       -> recall -1
   'ArrowDown':     -> recall  1
   'C-p':           -> recall -1
@@ -409,7 +525,7 @@ SEARCH_KEYS =
   'C-c':       cancelSearch
 
 claim = (event, verb, chord) ->
-  return if verb(chord) is PASS
+  return if verb(chord, event) is PASS
   event.preventDefault()
   # Not just the default: the window's own Ctrl-E is listening further up.
   event.stopPropagation()
@@ -417,10 +533,14 @@ claim = (event, verb, chord) ->
 onPromptKey = (event) ->
   return if event.key in MODIFIER_KEYS or event.isComposing
   chord = chordOf event
+  # A second Tab lists only if nothing came between, not just the same line.
+  tabbed = null unless chord is 'Tab'
   if searching
     return if event.key in UNFINISHED
     verb = SEARCH_KEYS[chord] ? (((typed) -> requery searching.query + typed) if chord? and oneCharacter chord)
     return claim event, verb, chord if verb
+    # Any other key takes the match and does what it does. Tab too, on
+    # purpose: it completes the word at the caret, where the search left it.
     endSearch()
   return unless chord?
   yanking = no unless chord is 'M-y'
@@ -458,6 +578,7 @@ globalThis.Prompt =
   ask:     askLine
   pending: -> Atomics.load(i32, H.ASK_STATE) isnt 0 or debugAsking > 0
   entered: -> entered.slice()
+  beeps:   -> beeps
 
 # --- input ------------------------------------------------------------------
 
@@ -696,7 +817,8 @@ stepFrame = ->
 
 # The pause we are in, as the debugger numbered it, or null. The number is
 # what makes an object id in the variables pane mean anything.
-linePaused = null
+linePaused  = null
+pausedNames = []          # every name the paused frame's scopes hold, for Tab
 
 # Suspend now, on whatever line is running. From a frame pause the swap has to
 # be let go, or the sketch never reaches a line to stop on.
@@ -756,7 +878,8 @@ lineOnScreen = (where) ->
 beans.debug.onEvent (event) ->
   switch event.type
     when 'paused'
-      linePaused = event.seq
+      linePaused  = event.seq
+      pausedNames = (entry.name for entry in scope.vars for scope in event.scopes).flat()
       setStatus 'line paused'
       Editor.showLine lineOnScreen event.where
       showVars event
@@ -1035,6 +1158,24 @@ frame = do ->
   tick
 
 # --- sound ------------------------------------------------------------------
+
+# Kept for Tab's beep, which is the renderer's own and not a sketch's note:
+# the worker is the sound ring's only writer, and a beep must sound while a
+# sketch is busy, paused, or not there at all.
+audio = null
+beeps = 0                 # counted for the suite, which runs muted
+
+beep = ->
+  beeps += 1
+  return unless audio
+  at   = audio.currentTime
+  tone = new OscillatorNode audio, type: 'sine', frequency: 880
+  gain = new GainNode audio, gain: 0.04
+  gain.gain.setTargetAtTime 0, at + 0.04, 0.015
+  tone.connect(gain).connect audio.destination
+  tone.start at
+  tone.stop at + 0.12
+  undefined
 
 # The audio thread gets the same shared memory as everyone else and reads its
 # notes straight out of it; see sound-worklet.coffee. Compiled here and handed

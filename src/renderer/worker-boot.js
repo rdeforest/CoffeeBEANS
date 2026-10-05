@@ -207,6 +207,74 @@
     return name && name !== 'Object' ? `${name} ${braced}` : braced
   }
 
+  // --- Tab at the prompt ----------------------------------------------------
+
+  // The CoffeeBEANS vocabulary, and nothing else of the worker's: what attach
+  // installs, and the two names a module publishes for sketches. Atomics,
+  // postMessage and WebAssembly are left out on purpose (AGENTS.md, Tab
+  // completion). Set at boot, by difference, so a new command is in it
+  // without anyone remembering to list it.
+  let vocabulary = []
+  const PUBLISHED = ['breakpoint', 'COLORS']
+  const PLUMBING  = ['Interrupted']
+
+  const descriptorOf = (value, name) => {
+    for (let o = Object(value); o !== null; o = Object.getPrototypeOf(o)) {
+      const found = Object.getOwnPropertyDescriptor(o, name)
+      if (found) return found
+    }
+    return undefined
+  }
+
+  // Where a dotted name ends, found by reading descriptors and never by
+  // reading the property: a getter stops the walk instead of being run.
+  // buffer.swap draws a frame, keys.poll claims hits, mouse.wheel consumes,
+  // and breakpoint would stop the sketch -- Tab must not do any of that.
+  // A Proxy is the exception nothing here can refuse: an author's
+  // getOwnPropertyDescriptor, getPrototypeOf and ownKeys traps do run.
+  const walk = (value, names) => {
+    for (const name of names) {
+      if (value === null || value === undefined) return undefined
+      const found = descriptorOf(value, name)
+      if (!found || !('value' in found)) return undefined
+      value = found.value
+    }
+    return value
+  }
+
+  // Everything that can follow a dot, up to but not including
+  // Object.prototype, whose __defineGetter__ and friends nobody is looking
+  // for. An array's or a string's own names are its indices -- a million of
+  // them for a big one, and none anybody types after a dot.
+  const membersOf = (value) => {
+    const object = Object(value)
+    const indexed = Array.isArray(object) || ArrayBuffer.isView(object) || object instanceof String
+    const names = indexed ? ['length'] : Object.getOwnPropertyNames(object)
+    for (let o = Object.getPrototypeOf(object); o !== null && o !== Object.prototype; o = Object.getPrototypeOf(o))
+      names.push(...Object.getOwnPropertyNames(o))
+    return names
+  }
+
+  // `local` says the first name is a variable of the frame the debugger is
+  // paused in, and `root` is its value, read there; anything else starts from
+  // the image or the vocabulary. `frameNames` are that frame's variables.
+  const complete = ({ path, word, local }, frameNames = [], root) => {
+    let names
+    if (path.length === 0) {
+      names = [...frameNames, ...Object.keys(image), ...vocabulary]
+    } else {
+      const [first, ...rest] = path
+      const start = local ? root
+        : first in image ? image[first]
+        : vocabulary.includes(first) ? walk(globalThis, [first])
+        : undefined
+      const value = walk(start, rest)
+      names = value === null || value === undefined ? [] : membersOf(value)
+    }
+    const fits = (name) => name.startsWith(word) && IDENTIFIER.test(name) && !name.startsWith('__')
+    return [...new Set(names.filter(fits))].sort()
+  }
+
   // Set once the layout module is loaded; until then there is nowhere to read
   // a question from, and a message that arrives early has nothing to do.
   let askWords = null
@@ -220,20 +288,24 @@
   // point, which would ask us to serve the question we are already serving.
   const serveAsk = () => {
     if (!askBytes || serving) return
-    if (Atomics.load(askWords, LAYOUT.HEADER.ASK_STATE) !== 1) return
+    // Claimed, not just read: until the worker takes it, the renderer may
+    // still withdraw a Tab's question to make way for a line.
+    if (Atomics.compareExchange(askWords, LAYOUT.HEADER.ASK_STATE, 1, 4) !== 1) return
     serving = true
     // A sketch that is still running has its names in its own scope, so it
     // lends them to the image for the length of the question and takes back
     // whatever the answer changed. That is what makes `boids[0].vx *= 2` at
-    // the prompt reach the boid that is actually flying.
+    // the prompt reach the boid that is actually flying -- and `boi` and Tab
+    // find it.
     const frame = frames[frames.length - 1]
+    const completing = Atomics.load(askWords, LAYOUT.HEADER.ASK_KIND) === LAYOUT.ASK_FOR.completion
     let reply, state
     try {
       if (frame) frame.harvest()
       // Copied out of shared memory first: TextDecoder will not read a view
       // onto a SharedArrayBuffer.
-      const asked = new Uint8Array(askBytes.subarray(0, Atomics.load(askWords, LAYOUT.HEADER.ASK_LEN)))
-      reply = show(evalLine(decoder.decode(asked)))
+      const asked = decoder.decode(new Uint8Array(askBytes.subarray(0, Atomics.load(askWords, LAYOUT.HEADER.ASK_LEN))))
+      reply = completing ? JSON.stringify(complete(JSON.parse(asked))) : show(evalLine(asked))
       state = 2
     } catch (error) {
       reply = String((error && error.message) || error)
@@ -243,10 +315,16 @@
       serving = false
     }
     // Cut the string, not the bytes: truncating UTF-8 mid-character would put
-    // a replacement character on the end of every long answer.
-    const bytes = encoder.encode(reply.length > SHOWN ? reply.slice(0, SHOWN) + ' ...' : reply)
-    askBytes.set(bytes.subarray(0, LAYOUT.ASK_BYTES))
-    Atomics.store(askWords, LAYOUT.HEADER.ASK_LEN, Math.min(bytes.length, LAYOUT.ASK_BYTES))
+    // a replacement character on the end of every long answer. Never a
+    // completion's, which is JSON and would no longer parse.
+    if (!completing && reply.length > SHOWN) reply = reply.slice(0, SHOWN) + ' ...'
+    let bytes = encoder.encode(reply)
+    if (bytes.length > LAYOUT.ASK_BYTES) {
+      bytes = encoder.encode('too many names to send back')
+      state = 3
+    }
+    askBytes.set(bytes)
+    Atomics.store(askWords, LAYOUT.HEADER.ASK_LEN, bytes.length)
     Atomics.store(askWords, LAYOUT.HEADER.ASK_STATE, state)
     Atomics.notify(askWords, LAYOUT.HEADER.ASK_STATE)
   }
@@ -331,15 +409,26 @@
     const handlers = {
       async boot() {
         for (const path of MODULES) await loadModule(path)
+        const before = new Set(Object.getOwnPropertyNames(globalThis))
         attach(data.sab)
+        vocabulary = [
+          ...Object.getOwnPropertyNames(globalThis).filter((name) => !before.has(name) && !PLUMBING.includes(name)),
+          ...PUBLISHED,
+        ]
         askWords = new Int32Array(data.sab, 0, LAYOUT.HEADER_WORDS)
         askBytes = new Uint8Array(data.sab, LAYOUT.askOffset, LAYOUT.ASK_BYTES)
         // How the runtime reaches us from a yield point. A property on
         // globalThis rather than a name at this scope, which is the rule the
         // whole file is built around.
         // `show` is for the debugger, which answers the prompt against a
-        // paused frame and wants the answer to read like any other.
-        globalThis.REPL = { serve: serveAsk, show }
+        // paused frame and wants the answer to read like any other; and
+        // `complete` is how Tab asks that frame, in the same JSON the
+        // shared-memory answer comes back in.
+        globalThis.REPL = {
+          serve: serveAsk,
+          show,
+          complete: (question, frameNames, root) => JSON.stringify(complete(question, frameNames, root)),
+        }
         postMessage({ type: 'ready' })
       },
       // An idle worker is sitting in this queue and will never look at shared

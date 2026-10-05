@@ -490,7 +490,7 @@ module.exports = (win) ->
     try
       js = CoffeeScript.compile source, bare: yes
     catch error
-      return {error: error.message, kind: 'err'}
+      return {text: error.message, kind: 'err'}
     # Bare compilation declares every assigned name with a leading `var`,
     # which inside an evaluation would make a new variable and leave the
     # frame's own untouched -- `angle = 0` would change nothing.
