@@ -136,7 +136,8 @@ dedent = (text) ->
 # lastWritten is set before the write, so the watcher's echo of our own write
 # is recognised and ignored. A write that *fails* has to put it back, or the
 # editor believes an edit reached disk that never did and silently drops it at
-# the next reload.
+# the next reload. Unless a later save has moved lastWritten on since: putting
+# this one's `was` back over that would claim an older text is on disk.
 save = ->
   clearTimeout saveTimer
   return unless current and view
@@ -147,7 +148,7 @@ save = ->
   try
     await beans.write current, text
   catch error
-    lastWritten = was
+    lastWritten = was if lastWritten is text
     handlers.onProblem? "could not save #{current}: #{error.message}"
   undefined
 

@@ -105,15 +105,29 @@ writeSketch = (file, text) ->
 RENAME_WAITS = [10, 20, 40, 80, 160, 320, 640]
 TRANSIENT    = ['EPERM', 'EACCES', 'EBUSY']
 
+# The suite's way to hold a save in flight, or to have a rename refused the
+# way Windows refuses it, neither of which it can arrange from outside. Only
+# the suite is handed this object (createWindow); nothing else touches it, so
+# outside a test run every field stays at its zero and the hook does nothing.
+faults = {slow: 0, refuse: 0, windows: no}
+
+rename = (staging, file) ->
+  if faults.slow
+    await new Promise (resolve) -> setTimeout resolve, faults.slow
+  if faults.refuse > 0
+    faults.refuse -= 1
+    throw Object.assign new Error("EPERM: refused by the suite, rename '#{staging}'"), code: 'EPERM'
+  fsp.rename staging, file
+
 renameOnto = (staging, file) ->
   for pause in RENAME_WAITS
     try
-      return await fsp.rename staging, file
+      return await rename staging, file
     catch error
-      throw error unless process.platform is 'win32' and error.code in TRANSIENT
+      throw error unless (process.platform is 'win32' or faults.windows) and error.code in TRANSIENT
       console.log "sketch:write: #{error.code} renaming onto #{file}, again in #{pause}ms"
       await new Promise (resolve) -> setTimeout resolve, pause
-  await fsp.rename staging, file
+  await rename staging, file
 
 # Saves of one sketch run one at a time, in the order they were asked for.
 # Overlapping, they shared the staging file: one save's rename carried off
@@ -121,11 +135,17 @@ renameOnto = (staging, file) ->
 # it on Linux, 2026-10-05), and the disk kept whichever finished last rather
 # than the last one asked for. Each waits for the one ahead however that one
 # ended; its failure has already gone to its own caller.
+#
+# The watcher reads both maps: `saving` holds a file's chain while any save
+# of it is in flight, `begun` counts the saves ever asked for (see reload in
+# watchSketches).
 saving = new Map
+begun  = new Map
 
 ipcMain.handle 'sketch:write', (event, name, text) ->
   file  = sketchFile name
   write = -> writeSketch file, text
+  begun.set file, (begun.get(file) ? 0) + 1
   ahead = saving.get(file) ? Promise.resolve()
   done  = ahead.then write, write
   saving.set file, done
@@ -200,15 +220,32 @@ watchSketches = (win) ->
   timers   = {}
   watchers = new Map
 
+  # Never read a sketch while a save of it is in flight. The editor sets
+  # lastWritten to the new text before the write lands, and takes any text
+  # that is neither that nor its own as an outside edit. A read that caught
+  # the disk still holding the old text -- the echo of the save before, or
+  # any event during the staging write and rename -- arrived as exactly that,
+  # and the editor went back to the old text until the new save's own echo
+  # put it right: long enough for /eval to run the previous buffer. That was
+  # every Windows CI failure in the 2026-10-05 overnight session (traced by
+  # a Claude CI investigator), where the rename retry stretches the window.
+  # So a read waits for the file's saves to settle and then looks again, and
+  # a read that a save began under is thrown away for a fresh one. An outside
+  # edit still arrives, only after our own writes are on disk.
   reload = (name) ->
     clearTimeout timers[name]
     timers[name] = setTimeout (->
       return if win.isDestroyed()
+      file  = sketchFile name
+      again = -> reload name
+      return saving.get(file).then again, again if saving.has file
+      before = begun.get file
       try
-        text = await fsp.readFile sketchFile(name), 'utf8'
-        win.webContents.send 'sketch:changed', {name, text}
+        text = await fsp.readFile file, 'utf8'
       catch error
-        console.log "watch: #{name}: #{error.message}"
+        return console.log "watch: #{name}: #{error.message}"
+      return again() unless begun.get(file) is before
+      win.webContents.send 'sketch:changed', {name, text} unless win.isDestroyed()
     ), 60
 
   forget = (dir) ->
@@ -363,7 +400,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"

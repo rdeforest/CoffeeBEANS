@@ -205,3 +205,89 @@ module.exports = (t) ->
     failed.length is 0 and onDisk is last,
     "#{failed.length} failed #{JSON.stringify failed[0] ? ''} disk starts #{JSON.stringify onDisk[0...12]} length #{onDisk.length}"
   await fsp.rm path.join(t.paths.sketches, "#{overlap}.coffee"), force: yes
+
+  # A save in flight must not let the watcher revert the editor. The editor
+  # took any read of the old text as an outside edit, went back to it, and
+  # flipped forward again on the new save's echo -- invisible afterwards, but
+  # long enough in between for /eval to run the previous buffer, which is how
+  # every Windows CI failure of the 2026-10-05 overnight session looked. This
+  # net is what those checks did, many times over: it passed on Linux before
+  # the fix too, and is here for the CI runners, where it did not.
+  wrong = []
+  for round in [1..20]
+    marker = "SAVE_ROUND_#{round}"
+    await clearConsole()
+    await setDoc "print '#{marker}'\n"
+    await wait 70 * (round % 5)                 # land on every side of the autosave
+    await evalAll()
+    printed = await settled()
+    doc     = await js "return Editor.all()"
+    wrong.push "#{round}: printed #{JSON.stringify printed.trim()} doc #{JSON.stringify doc}" unless printed.includes(marker) and doc.includes(marker)
+  await wait 1000
+  kept = await js "return Editor.all()"
+  wrong.push "a second on: doc #{JSON.stringify kept}" unless kept.includes 'SAVE_ROUND_20'
+  check 'twenty edit-and-run rounds each run their own text, and the editor keeps it',
+    wrong.length is 0, wrong[0...3].join ' | '
+
+  # The same race, made to happen: the suite holds a save before its rename
+  # (main's `faults`) and puts the old text back on disk meanwhile, as a late
+  # echo would. The editor must keep the new text throughout, and an outside
+  # write once the save has landed must still arrive.
+  {faults} = t.paths
+  race     = 'save-race'
+  raceFile = path.join t.paths.sketches, "#{race}.coffee"
+  raceText = -> fsp.readFile raceFile, 'utf8'
+  try
+    await fsp.writeFile raceFile, "print 'OLD'\n", 'utf8'
+    await js "await Editor.load('#{race}'); return true"
+    faults.slow = 1500
+    await setDoc "print 'NEW'\n"
+    await js "Editor.save(); return true"
+    await wait 100
+    await fsp.writeFile raceFile, "print 'OLD'\n", 'utf8'
+    await wait 500                              # past the watcher's 60ms, the read and the IPC
+    during = await js "return Editor.all()"
+    faults.slow = 0
+    landed = await t.untilDoc "print 'NEW'\n"
+    await wait 1500                             # the held rename lands and is read back
+    disk   = await raceText()
+    check 'a watcher read during a save in flight does not put the old text back',
+      during is "print 'NEW'\n" and disk is "print 'NEW'\n",
+      "during #{JSON.stringify during} landed #{JSON.stringify landed} disk #{JSON.stringify disk}"
+
+    await fsp.writeFile raceFile, "print 'OUTSIDE'\n", 'utf8'
+    outside = await t.untilDoc "print 'OUTSIDE'\n"
+    check 'and an outside write after it still reaches the editor',
+      outside is "print 'OUTSIDE'\n", JSON.stringify outside
+
+    # Windows refusing the rename, as Defender or the indexer does: a few
+    # refusals are waited out; one that outlasts the retries reaches the
+    # editor, which says so and keeps the edit as unsaved.
+    faults.windows = yes
+    faults.refuse  = 3
+    await clearConsole()
+    await setDoc "print 'RETRIED'\n"
+    await js "await Editor.save(); return true"
+    disk  = await raceText()
+    dirty = await js "return Editor.dirty()"
+    left  = faults.refuse
+    check 'a rename refused a few times is retried and the save lands',
+      disk is "print 'RETRIED'\n" and not dirty and left is 0,
+      "disk #{JSON.stringify disk} dirty #{dirty} refusals left #{left}"
+
+    faults.refuse = 100
+    await setDoc "print 'REFUSED'\n"
+    await js "await Editor.save(); return true"
+    faults.refuse = 0
+    await quiet()
+    said  = await consoleText()
+    disk  = await raceText()
+    dirty = await js "return Editor.dirty()"
+    doc   = await js "return Editor.all()"
+    check 'a rename refused past the retries says it could not save and leaves the edit unsaved',
+      said.includes("could not save #{race}") and disk is "print 'RETRIED'\n" and dirty and doc is "print 'REFUSED'\n",
+      "said #{JSON.stringify said.trim()} disk #{JSON.stringify disk} dirty #{dirty} doc #{JSON.stringify doc}"
+  finally
+    Object.assign faults, slow: 0, refuse: 0, windows: no
+    await js "await Editor.load('scratch'); return true"
+    await fsp.rm raceFile, force: yes
