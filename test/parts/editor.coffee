@@ -2,8 +2,9 @@
 # autosave, reloads from disk, :e, :target and :help, and the command table
 # the prompt shares with vim.
 
-fsp     = require 'fs/promises'
-path    = require 'path'
+fsp      = require 'fs/promises'
+path     = require 'path'
+Settings = require '../../src/main/settings'
 
 # How vim saves by default: the old file renamed aside, a new one written in
 # its place, the backup removed. Every save is a new inode -- the case that
@@ -18,12 +19,120 @@ module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
    settled, evalRegion, untilDoc} = t
-  # 1. editor is mounted and vim is driving it
-  mounted = await js "return !!document.querySelector('.cm-editor')"
-  fatCursor = await js "return !!document.querySelector('.cm-fat-cursor') || !!document.querySelector('.cm-vim-panel')"
-  check 'editor mounts',        mounted
-  check 'vim mode active',      fatCursor, '(block cursor present)'
+  {waitFor, type, chord, vimKeys, vimItem} = t
 
+  # 1. the editor is mounted, with ordinary keys unless Edit > Vim Keys says
+  # otherwise (Robert, 2026-10-04: most people on Steam will not want vim).
+  mounted = await js "return !!document.querySelector('.cm-editor')"
+  check 'editor mounts', mounted
+
+  # What the app came up with, before any part touched the setting. A run
+  # starts from an empty data folder, so this is a fresh install.
+  check 'a fresh install edits with ordinary keys, and Edit > Vim Keys is unticked',
+    t.launched?.menu is false and t.launched?.editor is false, JSON.stringify t.launched
+
+  await js "await Editor.load('scratch'); return true"
+
+  # Typed, not dispatched: the OS's keys, into the focused editor.
+  caretAtEnd = "Editor.focus(); const v = Editor.view(); v.dispatch({selection: {anchor: v.state.doc.length}}); return true"
+  vimPanel   = "return !!document.querySelector('.cm-vim-panel')"
+  await setDoc "a = 1\n"
+  await js caretAtEnd
+  await type ':'
+  typed = await untilDoc "a = 1\n:"
+  check 'with ordinary keys, : types a colon into the buffer',
+    typed is "a = 1\n:" and not (await js vimPanel), JSON.stringify typed
+
+  # The switch is live and keeps everything: the text, the cursor, and the
+  # undo history. The cursor move between the two edits keeps them separate
+  # undo steps, so one undo afterwards takes back only the X.
+  editorState = -> js """
+    const v = Editor.view()
+    return {doc: v.state.doc.toString(), head: v.state.selection.main.head}
+  """
+  await setDoc "one\ntwo\n"
+  await cursorOnLine 2
+  await js "const v = Editor.view(); v.dispatch({changes: {from: 4, insert: 'X'}, selection: {anchor: 6}}); Editor.focus(); return true"
+  before = await editorState()
+  await vimKeys yes
+  # codemirror-vim draws its block cursor after a measure, so it is waited
+  # for rather than read once: on a slow CI runner one read came too soon.
+  fat     = await waitFor "return !!document.querySelector('.cm-fat-cursor')"
+  ticked  = await editorState()
+  await type ':'
+  panel   = await waitFor vimPanel
+  untyped = await js "return Editor.all()"
+  check 'ticking Vim Keys switches to vim live, keeping the buffer and the cursor',
+    fat and vimItem().checked and JSON.stringify(ticked) is JSON.stringify(before),
+    JSON.stringify {fat, before, ticked}
+  check 'and then : opens vim\'s command line instead of typing',
+    panel and untyped is before.doc, JSON.stringify {panel, untyped}
+
+  await js "CM.Vim.handleKey(CM.getCM(Editor.view()), '<Esc>'); Editor.focus(); return true"
+  await vimKeys no
+  gone = await waitFor "return !document.querySelector('.cm-fat-cursor') && !document.querySelector('.cm-vim-panel')"
+  unticked = await editorState()
+  await chord 'z', ctrl: yes
+  undone = await js "return Editor.all()"
+  check 'unticking it switches back live, keeping the buffer, the cursor and the undo history',
+    gone and not vimItem().checked and JSON.stringify(unticked) is JSON.stringify(before) and undone is "one\ntwo\n",
+    JSON.stringify {gone, unticked, undone}
+
+  # A selection made with ordinary keys is vim's to act on once vim is on.
+  await setDoc "one\ntwo\nthree\n"
+  await js "const v = Editor.view(); v.dispatch({selection: {anchor: 4, head: 7}}); Editor.focus(); return true"
+  await vimKeys yes
+  await type 'd'
+  cut = await untilDoc "one\n\nthree\n"
+  await js "CM.Vim.handleKey(CM.getCM(Editor.view()), '<Esc>'); return true"
+  await vimKeys no
+  check 'a selection made before ticking Vim Keys is the one vim\'s d deletes',
+    cut is "one\n\nthree\n", JSON.stringify cut
+
+  # The keys that make the editor a place to run code, in both modes.
+  untilDisk = (wanted, limit = 3000) ->
+    deadline = Date.now() + limit
+    loop
+      text = await fsp.readFile scratch, 'utf8'
+      return text if text is wanted or Date.now() > deadline
+      await wait 25
+
+  for vimOn in [no, yes]
+    await vimKeys vimOn
+    named = if vimOn then 'with vim keys' else 'with ordinary keys'
+
+    await setDoc "print 'FIRST'\n\nprint 'SECOND'\n"
+    await cursorOnLine 3
+    await clearConsole()
+    await chord 'Enter', ctrl: yes
+    text = await settled()
+    check "#{named}, Ctrl-Enter evals the paragraph at the cursor",
+      text.includes('SECOND') and not text.includes('FIRST'), JSON.stringify text.trim()
+
+    await setDoc "print 'FRESH'\n"
+    await clearConsole()
+    await chord 'Enter', ctrl: yes, shift: yes
+    text = await settled()
+    check "#{named}, Ctrl-Shift-Enter runs in a fresh worker",
+      text.includes('fresh worker') and text.includes('FRESH'), JSON.stringify text.trim()
+
+    # Saved by the key, not by the autosave a moment later: the edit is
+    # pending until Ctrl-S and not after, all inside one turn of the page.
+    wanted = "print 'SAVED #{vimOn}'\n"
+    saved = await js """
+      const v = Editor.view()
+      v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: #{JSON.stringify wanted}}})
+      const pending = Editor.dirty()
+      v.contentDOM.dispatchEvent(new KeyboardEvent('keydown',
+        {key: 's', code: 'KeyS', ctrlKey: true, bubbles: true, cancelable: true}))
+      return {pending, after: Editor.dirty()}
+    """
+    onDisk = await untilDisk wanted
+    check "#{named}, Ctrl-S saves at once",
+      saved.pending and not saved.after and onDisk is wanted, JSON.stringify {saved, onDisk}
+
+  # Everything below drives vim's command line.
+  await vimKeys yes
   await js "await Editor.load('scratch'); return true"
 
   # 2. edits reach disk without an explicit save
@@ -403,3 +512,30 @@ module.exports = (t) ->
   check 'a bare /e! at the prompt (and :e! in vim) reloads the sketch, discarding the edit',
     JSON.stringify(reloaded) is JSON.stringify(prompt: want, vim: want),
     JSON.stringify reloaded
+
+  # --- the choice is remembered ---------------------------------------------
+
+  # Written to the data folder, staged and renamed into place, and read back
+  # by Settings.read, which is what a launch calls before it builds the menu;
+  # and a page built from nothing, as a reload or a launch builds one, comes
+  # up with vim on while the menu stays ticked. A cold launch itself is not
+  # exercised: the suite runs inside the one it has.
+  file = path.join paths.data, 'settings.json'
+  await vimKeys yes
+  stored  = Settings.read file
+  staging = (await fsp.readdir paths.data).filter (name) -> name.endsWith '.saving'
+  back    = await t.freshPage "return typeof Editor !== 'undefined' && !!Editor.view() && Editor.vimKeys()"
+  check 'Vim Keys survives a reload (a page built afresh), and is saved where a launch reads it',
+    stored.vim is true and staging.length is 0 and back and vimItem().checked,
+    JSON.stringify {stored, staging, back}
+
+  # A settings file the app did not write, or a write cut short, must not cost
+  # the launch: `null` used to crash the menu before any window opened.
+  probe  = path.join paths.data, 'settings-probe.json'
+  broken = ['null', '5', '"x"', '[true]', '{"vim": tr', '']
+  read   = for text in broken
+    await fsp.writeFile probe, text, 'utf8'
+    Settings.read probe
+  await fsp.rm probe
+  check 'a settings file that is not a JSON object reads as every default',
+    read.every((found) -> JSON.stringify(found) is '{}'), JSON.stringify read

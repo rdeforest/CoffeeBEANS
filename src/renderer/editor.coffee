@@ -2,7 +2,7 @@
 # it, and the file on disk is the single source of truth so vim in another
 # window stays coherent.
 
-{EditorState, EditorSelection, StateField, StateEffect, Prec,
+{EditorState, EditorSelection, Compartment, StateField, StateEffect, Prec,
  EditorView, Decoration, keymap, lineNumbers, highlightActiveLine,
  highlightActiveLineGutter, drawSelection,
  defaultKeymap, history, historyKeymap, indentWithTab,
@@ -364,6 +364,22 @@ installVimCommands = ->
   Vim.mapCommand '<C-r>', 'action', 'beansEvalRegion', {}, context: 'visual'
   toVim entry for entry in COMMANDS
 
+# --- vim, if asked for -------------------------------------------------------
+
+# Ordinary keys unless Edit > Vim Keys is ticked (Robert, 2026-10-04: most
+# people on Steam will not want vim). Main keeps the setting, because the menu
+# shows it; the editor only follows. Swapped in place, so the buffer, the
+# cursor and the undo history all survive the switch.
+vimSlot = new Compartment
+VIM     = vim()
+
+# codemirror-vim only learns of a selection from a transaction it sees, so
+# one made before the switch is handed over again; otherwise vim ignores it
+# and the first `d` leaves it standing (seen by Claude, 2026-10-05).
+setVim = (wanted) ->
+  view.dispatch effects: vimSlot.reconfigure if wanted then VIM else []
+  view.dispatch selection: view.state.selection if wanted
+
 # --- public -----------------------------------------------------------------
 
 Editor =
@@ -375,7 +391,7 @@ Editor =
       state:  EditorState.create
         doc: ''
         extensions: [
-          vim()
+          vimSlot.of []           # first, as codemirror-vim asks, so it sees keys before the rest
           lineNumbers()
           highlightActiveLine()
           highlightActiveLineGutter()
@@ -399,6 +415,8 @@ Editor =
             reportLines()
         ]
     beans.onChanged applyExternal
+    beans.onVim setVim
+    beans.vim().then setVim
     reportLines()
     view
 
@@ -421,6 +439,9 @@ Editor =
   view:      -> view
   save:   save
   focus:  -> view.focus()
+
+  vimKeys: -> vimSlot.get(view.state) is VIM
+  dirty:   isDirty
 
   isCommand:     (line) -> COMMAND_LINE.test line
   command:       command

@@ -7,7 +7,7 @@ SECTIONS = [
   title: 'Running code'
   lines: [
     ['Ctrl-Enter',        'eval the selection, or the paragraph at the cursor']
-    ['Ctrl-r',            'same, from visual mode (normal mode keeps redo)']
+    ['Ctrl-r',            'same, from vim\'s visual mode (normal mode keeps redo)']
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
     ['Ctrl-e',            'show or hide the editor']
@@ -37,6 +37,7 @@ SECTIONS = [
     ['/target <n>',       'flag the first source line past n; /target 0 clears']
     ['/help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']
+    ['Edit > Vim Keys',   'vim keys in the editor; ordinary keys until ticked']
     ['/ or : commands',   'typed at the > prompt, or after : in vim;']
     ['',                  'a line starting with either is always a command,']
     ['',                  'so CoffeeScript opening with a regex goes in']

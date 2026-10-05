@@ -21,6 +21,13 @@ SKETCHES = path.join DATA, 'sketches'
 # the real app reopening a test fixture.
 app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOME
 
+SETTINGS     = path.join DATA, 'settings.json'
+Settings     = require './settings'
+settings     = Settings.read SETTINGS
+saveSettings = -> Settings.save SETTINGS, settings
+
+ipcMain.handle 'settings:vim', -> settings.vim is true
+
 prepareDataHome = ->
   {added} = await data.prepare DATA, EXAMPLES
   console.log "added to #{SKETCHES}: #{added.join ', '}" if added.length
@@ -354,9 +361,23 @@ installMenu = ->
   ,
     label: 'Edit'
     # Deliberately no undo/redo: those roles drive the native edit stack,
-    # and CodeMirror keeps its own history. Use vim's u and Ctrl-r.
+    # and CodeMirror keeps its own history, behind its own undo keys (or
+    # vim's u and Ctrl-r).
     submenu: [
       {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}
+      {type: 'separator'}
+      {
+        # Electron flips `checked` before calling this. Every window is told,
+        # not just the focused one: there may be none focused.
+        id:      'vim'
+        label:   'Vim Keys'
+        type:    'checkbox'
+        checked: settings.vim is true
+        click: (item) ->
+          settings.vim = item.checked
+          saveSettings()
+          win.webContents.send 'settings:vim', item.checked for win in BrowserWindow.getAllWindows()
+      }
     ]
   ,
     label: 'View'

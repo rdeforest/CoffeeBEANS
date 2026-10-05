@@ -159,12 +159,13 @@ expected to land beside `sketches/`.
 
 ## Editing
 
-The editor pane is CodeMirror with vim keybindings, and the file on disk is
-the only source of truth -- edits autosave, and writes from vim in another
-window reload the pane. Running is an operation on a region:
+The editor pane is CodeMirror with ordinary keys -- or vim's, once Edit >
+Vim Keys is ticked; the app remembers -- and the file on disk is the only
+source of truth: edits autosave, and writes from vim in another window
+reload the pane. Running is an operation on a region:
 
     Ctrl-Enter          eval the selection, or the paragraph under the cursor
-    Ctrl-r              same, from visual mode
+    Ctrl-r              same, from vim's visual mode
     Ctrl-Shift-Enter    run -- fresh worker, then the whole buffer
     :w                  force a save        :eval      eval the whole buffer
     :run                fresh worker        Ctrl-.     stop
@@ -195,7 +196,7 @@ the sketch starting itself again.
 **Where the keyboard goes.** Run and `:eval` hand it to the canvas, because
 a sketch you just ran is almost always one you are about to play with.
 Region eval leaves it in the editor: that is the loop of redefining something
-and carrying on typing, and the next keystroke belongs to vim. If the run
+and carrying on typing, and the next keystroke belongs to the editor. If the run
 fails, a syntax error puts the cursor on the offending character and marks
 its line. A runtime error lists its stack beside the console, innermost
 first, with that line marked in the editor, and gives the `>` prompt the
