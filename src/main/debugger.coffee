@@ -46,6 +46,9 @@ SETUP_LIMIT = 2000
 EVAL_LIMIT  = 3000
 ITEMS       = 200            # members listed when an object is opened
 
+# Where a getter's owner waits for the expression that runs it; see runGetter.
+STASH       = '__beansGetterOwner'
+
 # --- source maps ------------------------------------------------------------
 
 BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -144,10 +147,14 @@ remoteText = (value) ->
       if value.preview then previewText value.preview else value.description
     else value.description ? String value.value
 
-describe = (property) ->
+# `owner` is the object a member was listed from, which is what a click on a
+# getter needs to run it; a scope's own names have none.
+describe = (property, owner) ->
   name = property.name
   unless property.value
-    return {name, text: '(getter, not run)', getter: yes} if property.get
+    # A symbol-keyed getter cannot be named in the expression that runs it.
+    runnable = owner unless property.symbol
+    return {name, text: '(getter, not run)', getter: yes, owner: runnable} if property.get
     return {name, text: '(setter only)'}
   value = property.value
   entry = {name, text: remoteText value}
@@ -172,6 +179,7 @@ answer 'debug:step',    'step'
 answer 'debug:resume',  'resume'
 answer 'debug:eval',    'evaluate'
 answer 'debug:members', 'members'
+answer 'debug:getter',  'getter'
 
 module.exports = (win) ->
   contents = win.webContents
@@ -511,20 +519,67 @@ module.exports = (win) ->
     {text, kind: 'value', pane: {seq: stopped.seq, where: stopped.where, scopes: await scopesOf top, yes}}
 
   # Opening an object in the pane. Only while the pause that produced the id
-  # is still the one we are in; after a resume the id means nothing.
+  # is still the one we are in; after a resume the id means nothing. Not while
+  # an evaluation is out either: nothing may reach V8 until it is back.
   members = (pauseSeq, id) ->
     return null unless stopped?.seq is pauseSeq
+    return 'evaluating' if asking
     {result} = await send 'Runtime.getProperties',
       objectId: id, ownProperties: yes, generatePreview: yes
     # Own enumerable members, plus getters, which are exactly the ones the
     # author needs to see are there and not being run.
-    listed = (describe p for p in result when p.name isnt '__proto__' and (p.enumerable or p.get))
+    listed = (describe p, id for p in result when p.name isnt '__proto__' and (p.enumerable or p.get))
     extra  = listed.length - ITEMS
     listed = listed[0...ITEMS]
     listed.push {name: '...', text: "#{extra} more"} if extra > 0
     listed
 
+  # A getter the author clicked in the pane, run once. It is an evaluation in
+  # the paused frame like the prompt's, so it takes the same turn -- step,
+  # continue and the prompt are refused while it runs, Stop waits it out --
+  # and the same limit. A step already on its way means the pause it was
+  # clicked in is over.
+  getter = (pauseSeq, owner, name) ->
+    return null unless stopped?.seq is pauseSeq and not chase
+    return 'evaluating' if asking
+    asking = runGetter owner, name
+    try
+      return await asking
+    finally
+      asking = null
+
+  # Only evaluateOnCallFrame can be told to give up (Runtime.callFunctionOn
+  # has no timeout), and it takes an expression, not an object. So the owner
+  # is parked on the worker's global first, and the expression takes it off
+  # again before it runs anything of the author's. If the evaluation fails for
+  # any reason but being given up on, the owner stays parked there, which is
+  # harmless: nothing reads it, and the next worker starts without it.
+  # Whatever happens, the pane comes back with the answer: a getter can change
+  # what the rest of it shows.
+  runGetter = (owner, name) ->
+    await send 'Runtime.callFunctionOn',
+      objectId: owner, functionDeclaration: "function () { globalThis.#{STASH} = this }"
+    top   = stopped.frames[0]
+    reply = await getterValue top, name
+    reply.pane = {seq: stopped.seq, where: stopped.where, scopes: await scopesOf top, yes}
+    reply
+
+  # Thrown and given up read as errors, said in the pane's voice rather than
+  # the console's.
+  getterValue = (top, name) ->
+    try
+      {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
+        callFrameId: top.callFrameId, generatePreview: yes, throwOnSideEffect: no, timeout: EVAL_LIMIT
+        expression: "(function (o) { delete globalThis.#{STASH}; return o[#{JSON.stringify name}] })(globalThis.#{STASH})"
+    catch error
+      throw error unless /terminated/.test error.message
+      return {text: "gave up after #{EVAL_LIMIT / 1000}s", kind: 'err'}
+    if exceptionDetails
+      thrown = exceptionDetails.exception?.description?.split('\n')[0] ? exceptionDetails.text
+      return {text: "threw #{thrown}", kind: 'err'}
+    {text: remoteText(result), kind: 'value'}
+
   id = contents.id
-  controllers.set id, {arm, pause, step, resume, evaluate, members}
+  controllers.set id, {arm, pause, step, resume, evaluate, members, getter}
   win.on 'closed', -> controllers.delete id
   undefined

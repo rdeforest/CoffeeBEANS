@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 197 checks
+    npm test                                 all 238 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
@@ -187,11 +187,20 @@ Done:
 - **Region line numbers are buffer line numbers.** A region is padded with
   blank lines down to where it sits, so errors, tracebacks and pauses all
   name the line in the file.
+- **Click-to-run for a getter in the pane** (2026-10-05, `cdc09cb`). A
+  member getter shows `(getter, not run)`; a click runs it once through
+  `evaluateOnCallFrame` (`throwOnSideEffect: false`, bounded by
+  `EVAL_LIMIT`), its owner parked on a worker global because
+  `callFunctionOn` takes no timeout. It takes the same turn as the prompt:
+  refused while an evaluation is out, and nothing else -- expanding a row
+  included -- reaches V8 while it runs. One result shows at a time, and any
+  other redraw puts it back to `(getter, not run)`. Scope-level and
+  symbol-keyed getters are not offered. The runtime's own accessors
+  (`buffer.swap`, `keys.poll`, `mouse.wheel`) are a click away too, as they
+  always were at the prompt.
 
 Not done, each waiting on a reason:
 
-- **Click-to-run for a getter in the pane.** It shows `(getter, not run)`;
-  the prompt can run it (`o.boom`), which is the escape hatch for now.
 - **Pausing on uncaught errors** -- still blocked, see Decisions.
 
 ## Facts line stepping established
