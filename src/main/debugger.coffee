@@ -46,6 +46,11 @@ SETUP_LIMIT = 2000
 EVAL_LIMIT  = 3000
 ITEMS       = 200            # members listed when an object is opened
 
+# PROTOTYPE (research/pause-on-error, Claude, 2026-10-05): with this set the
+# debugger is armed for every run, not only when the buffer says
+# `breakpoint`, and pauses where a sketch's uncaught error is thrown.
+ERRORS = Boolean process.env.BEANS_PAUSE_ON_ERROR
+
 # --- source maps ------------------------------------------------------------
 
 BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -262,6 +267,7 @@ module.exports = (win) ->
         await within SETUP_LIMIT, do ->
           await cdp.sendCommand 'Debugger.enable', {}, id
           await cdp.sendCommand 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, id
+          await cdp.sendCommand 'Debugger.setPauseOnExceptions', {state: 'uncaught'}, id if ERRORS
       catch error
         enabled = no if session is id
         tell type: 'problem', text: "debugger: #{error.message}"
@@ -342,16 +348,32 @@ module.exports = (win) ->
       shown.push {title, vars} if vars.length or scope.type is 'local'
     shown
 
-  report = (frames) ->
-    top   = frames[0]
+  # `at` is the frame to show: the top one, except at an error thrown inside
+  # the runtime, where it is the first frame the author wrote.
+  report = (frames, at = 0, error = null) ->
+    top   = frames[at]
     where = locate top
-    stopped = {frames, where, seq: ++seq}
-    tell {type: 'paused', seq, where, scopes: await scopesOf top}
+    stopped = {frames, at, where, error, seq: ++seq}
+    tell {type: 'paused', seq, where, error, scopes: await scopesOf top}
+
+  # A Stop throws Interrupted from the yield point the sketch is parked in;
+  # that is the sketch being let go, not an error to stop at.
+  onException = (params) ->
+    chase = null
+    return onward 'Debugger.resume' if params.data?.className is 'Interrupted'
+    frames = params.callFrames
+    at     = frames.findIndex (frame) -> locate(frame) and not ours frame
+    # Nothing of the author's on the stack: an error of ours, reported the
+    # ordinary way once it has unwound.
+    return onward 'Debugger.resume' if at < 0
+    message = params.data?.description?.split('\n')[0] ? 'error'
+    report frames, at, message
 
   # Every pause comes through here, wanted or not, and most are not the one to
   # show: the breakpoint's own frame, a helper, our plumbing, or the same line
   # a step started on. Those are stepped past without the renderer hearing.
   onPaused = (params) ->
+    return onException params if params.reason is 'exception'
     frames = params.callFrames
     top    = frames[0]
     script = scriptOf top
@@ -417,7 +439,7 @@ module.exports = (win) ->
 
   # The renderer's whole vocabulary.
   arm = (want) ->
-    wanted = want
+    wanted = want or ERRORS
     forced = no unless stopped or chase
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
@@ -441,6 +463,7 @@ module.exports = (win) ->
   step = ->
     return false unless stopped
     return 'evaluating' if asking
+    return resume() if stopped.error
     top   = stopped.frames[0]
     where = locate top
     chase =
@@ -487,7 +510,7 @@ module.exports = (win) ->
     # which inside an evaluation would make a new variable and leave the
     # frame's own untouched -- `angle = 0` would change nothing.
     js = js.replace /^\s*var [^;]*;\s*/, ''
-    top = stopped.frames[0]
+    top = stopped.frames[stopped.at]
     try
       {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
         callFrameId: top.callFrameId, expression: js, generatePreview: yes, timeout: EVAL_LIMIT

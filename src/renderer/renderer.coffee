@@ -530,6 +530,14 @@ beans.debug.onEvent (event) ->
       setStatus 'line paused'
       Editor.showLine lineOnScreen event.where
       showVars event
+      # PROTOTYPE (research/pause-on-error, Claude, 2026-10-05): a pause at an
+      # error has to read as the error, not as a sketch that went quiet.
+      if event.error
+        where = if event.where?.line? then " (line #{event.where.line})" else ''
+        say "error#{where}: #{event.error}", 'err'
+        say '    stopped where it happened -- ask the prompt, then Continue (F8) to end the run', 'sys'
+        Editor.showError lineOnScreen event.where
+        promptLine.focus()
     when 'resumed'
       linePaused = null
       Editor.showLine null
@@ -876,6 +884,11 @@ send = ({source, name, cut}) ->
   worker.postMessage {type: 'run', source, name}
 
 start = (thenRun = null) ->
+  # PROTOTYPE (research/pause-on-error): a worker terminated while stopped at
+  # an error reports that error to its Worker object on the way out (seen in
+  # the full suite run armed, 2026-10-05), and its old onerror would set
+  # 'error' over the new worker's status -- or, unhandled, reach the window.
+  worker?.onerror = (event) -> event.preventDefault()
   worker?.terminate()
   drainPrints()                       # anything the old worker already wrote
   Atomics.store i32, H.PRINT_HEAD, 0

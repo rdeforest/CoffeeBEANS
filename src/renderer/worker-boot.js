@@ -309,6 +309,31 @@
     })
   }
 
+  // PROTOTYPE (research/pause-on-error, Claude, 2026-10-05). A sketch runs
+  // as an event listener of its own, because dispatchEvent reports a
+  // listener's exception rather than throwing it to its caller. With no catch
+  // on the stack V8 predicts a sketch's error as uncaught, so the debugger's
+  // pauseOnExceptions 'uncaught' stops at the throw with the frame live --
+  // while an error the sketch catches itself, or the prompt's, still does
+  // not. The error event fires inside dispatchEvent (measured), so this stays
+  // synchronous and run() reports exactly as it did when it caught.
+  let escaped = null
+  self.addEventListener('error', (event) => {
+    if (!escaped) return
+    event.preventDefault()
+    escaped.thrown = { error: event.error }
+  })
+  const uncaught = (body) => {
+    const outcome = (escaped = { thrown: null })
+    self.addEventListener('beans-run', body, { once: true })
+    try {
+      self.dispatchEvent(new Event('beans-run'))
+    } finally {
+      escaped = null
+    }
+    return outcome.thrown
+  }
+
   const MODULES = [
     '/src/runtime/breakpoint.coffee',
     '/src/runtime/layout.coffee',
@@ -327,7 +352,7 @@
   // addEventListener, not self.onmessage: sketches compile bare into this same
   // scope, and `onmessage = anything` would otherwise null out our inbox with
   // no error. Same reasoning for any other on* handler.
-  self.addEventListener('message', async ({ data }) => {
+  self.addEventListener('message', ({ data }) => {
     const handlers = {
       async boot() {
         for (const path of MODULES) await loadModule(path)
@@ -350,19 +375,24 @@
         serveAsk()
       },
       run() {
-        try {
-          runSketch(data.source, data.name || 'sketch.coffee')
-          postMessage({ type: 'done' })
-        } catch (error) {
-          if (error instanceof Interrupted) postMessage({ type: 'stopped' })
-          else fail('run', error)
-        }
+        const thrown = uncaught(() => runSketch(data.source, data.name || 'sketch.coffee'))
+        if (!thrown) postMessage({ type: 'done' })
+        else if (thrown.error instanceof Interrupted) postMessage({ type: 'stopped' })
+        else fail('run', thrown.error)
       },
     }
-    try {
-      await handlers[data.type]()
-    } catch (error) {
-      fail(data.type, error)
-    }
+    // PROTOTYPE: a run must have no catch anywhere above it, not even one
+    // above the dispatchEvent that would never see the error -- V8's
+    // prediction counts it, and then nothing pauses (measured, probe style
+    // dispatchInCatch). So the listener is plain, and only the others are
+    // wrapped.
+    if (data.type === 'run') return handlers.run()
+    ;(async () => {
+      try {
+        await handlers[data.type]()
+      } catch (error) {
+        fail(data.type, error)
+      }
+    })()
   })
 })()

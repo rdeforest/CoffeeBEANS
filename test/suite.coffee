@@ -20,6 +20,7 @@ path = require 'path'
 PARTS = [
   'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'input', 'sound', 'perf'
+  'pauseonerror'           # PROTOTYPE, research/pause-on-error
 ]
 
 module.exports = (win, paths) ->
