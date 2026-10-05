@@ -10,8 +10,8 @@ plantTurning   = false
 plantAngle     = 0
 TWO_TO_THE_31  = 2**31
 
-w2 = 1/2 * w = 320 * 1
-h2 = 1/2 * h = 200 * 1
+w2 = 1/2 * w = 320 * 2
+h2 = 1/2 * h = 200 * 2
 
 RIGHT = [ 1,  0,  0]
 LEFT  = [-1,  0,  0]
@@ -196,7 +196,7 @@ drawPoints = (fn) ->
   #low = min p1, p2, p3
   #hi  = max p1, p2, p3
 
-  for i in [1..10000]
+  for i in [1..100000]
     p = [x,y,z] = scaleToStage [p1, p2, p3]
     #line3d scaleToStage([0.5,0.5,0.5]), p
     point3d p
