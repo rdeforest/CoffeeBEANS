@@ -114,14 +114,50 @@ module.exports = (t) ->
   # through shared memory), so which lines survive is a race with the drain
   # and LAST is not promised. The closing line is longer than the whole ring,
   # so at least that one is dropped however fast the renderer keeps up.
+  #
+  # And the notice comes last. That drop is the final thing the sketch does,
+  # so every line it did print was written before it. When the drain read the
+  # drop count after the ring, a drop made mid-drain was announced ahead of
+  # the thousands of lines still past the head it had read, and the cap then
+  # trimmed it away -- about 1 run in 6 here, red on CI (found by Claude,
+  # 2026-10-05). The old drain lost between 3 and 6 rounds of 12 when a
+  # Claude fixer and reviewer ran it, the same night: at the worst of those
+  # (1 in 4) ten rounds all pass by luck 6% of the time, at 2 in 5 under 1%.
+  # Each round costs about a fifth of a second.
   await setDoc "print i for i in [1..200000]\nprint 'x'.repeat 1 << 20\n"
   await wait 500
-  await clearConsole()
-  await evalAll()
-  text  = await settled()
-  count = await js "return document.getElementById('console').childElementCount"
+  rounds = for round in [1..10]
+    await clearConsole()
+    await evalAll()
+    await settled()
+    await js """
+      const lines = document.getElementById('console')
+      return {count: lines.childElementCount, last: lines.lastElementChild?.textContent}
+    """
+  missed = rounds.filter ({count, last}) -> count > 2000 or not /^\*\*\* \d+ lines? dropped, console ring full \*\*\*$/.test last
   check 'a flood past the ring is counted and still capped',
-    count <= 2000 and /\d+ lines? dropped, console ring full/.test(text), "#{count} lines, ends #{JSON.stringify text[-120..]}"
+    missed.length is 0, "#{missed.length} of #{rounds.length} rounds missed: #{JSON.stringify missed[..2]}"
+
+  # A drop on its own is still printing in flight. The flood above cannot
+  # tell: its ring is never empty when the drop lands, so pending() is true
+  # for the bytes and the drop rides along. Here the ring stays empty and only
+  # the drop count moves. The test spins the renderer's own thread from the
+  # run onward, so no drain can take the count before pending() reads it; the
+  # worker still runs, being another thread.
+  await setDoc "print 'x'.repeat 1 << 20\n"
+  await wait 500
+  await clearConsole()
+  await quiet()
+  seen = await js """
+    const before = Printing.pending()
+    Editor.command('/eval')
+    const deadline = performance.now() + 5000
+    while (performance.now() < deadline && !Printing.pending()) {}
+    return {before, during: Printing.pending()}
+  """
+  text = await settled()
+  check 'a dropped line counts as printing still pending',
+    not seen.before and seen.during and /\*\*\* 1 line dropped/.test(text), "#{JSON.stringify seen}, #{JSON.stringify text}"
 
   # 39. a runtime error reports the CoffeeScript line it happened on
   await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"
