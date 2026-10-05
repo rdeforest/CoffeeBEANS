@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 182 checks
+    npm test                                 all 197 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
