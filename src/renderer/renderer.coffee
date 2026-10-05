@@ -99,6 +99,13 @@ readRing = (position, length) ->
   taken.subarray 0, length
 
 drainPrints = ->
+  # The drop count is taken before the head, never after. The worker counts a
+  # drop only after storing the head of every line it wrote first, so the head
+  # read below covers them all and the notice follows them: late at worst,
+  # never early. Taken after, a drop made mid-drain was announced ahead of the
+  # lines still in the ring past the old head, and a big enough backlog pushed
+  # it out past the console cap (found by Claude in CI, 2026-10-05).
+  lost = Atomics.exchange i32, H.PRINT_LOST, 0
   head = Atomics.load i32, H.PRINT_HEAD
   tail = Atomics.load i32, H.PRINT_TAIL
   while tail isnt head
@@ -116,7 +123,6 @@ drainPrints = ->
     say decoder.decode readRing tail, length
     tail = (tail + length) % LAYOUT.PRINT_BYTES
   Atomics.store i32, H.PRINT_TAIL, tail
-  lost = Atomics.exchange i32, H.PRINT_LOST, 0
   say "*** #{lost} line#{if lost is 1 then '' else 's'} dropped, console ring full ***", 'sys' if lost > 0
   undefined
 
@@ -605,13 +611,15 @@ listenForPrompt = ->
   undefined
 
 # Is anything printed still on its way to the screen -- bytes the ring has not
-# handed over, or lines queued but not yet in the DOM. Both are read in one
-# go on the one thread that moves either, so a false here means everything a
-# sketch printed is on screen. The suite waits on this instead of guessing an
-# interval; a loaded machine makes every guess wrong eventually.
+# handed over, a drop not yet announced, or lines queued but not yet in the
+# DOM. All are read in one go on the one thread that drains them, so a false
+# here means everything a sketch printed, or failed to, is on screen. The
+# suite waits on this instead of guessing an interval; a loaded machine makes
+# every guess wrong eventually.
 globalThis.Printing =
   pending: ->
-    Atomics.load(i32, H.PRINT_HEAD) isnt Atomics.load(i32, H.PRINT_TAIL) or queued.length > 0
+    Atomics.load(i32, H.PRINT_HEAD) isnt Atomics.load(i32, H.PRINT_TAIL) or queued.length > 0 or
+      Atomics.load(i32, H.PRINT_LOST) isnt 0
 
 globalThis.Prompt =
   ask:     askLine
