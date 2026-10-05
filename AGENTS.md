@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 252 checks
+    npm test                                 all 275 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -154,14 +154,15 @@ From Robert's playtesting, 2026-10-04:
 
 - **The editor defaults to ordinary keys; vim is an option.** Most people on
   Steam will not want vim. Emacs keys if anyone asks (after some mockery);
-  WordStar users get pointed at Turbo Pascal.
+  WordStar users get pointed at Turbo Pascal. Done 2026-10-05 (Edit > Vim
+  Keys).
 - **The prompt behaves like the node and coffee REPLs** -- readline's emacs
-  keys and Tab completion. Tab completion is no longer parked (its design is
-  at the bottom of this file).
+  keys and Tab completion. Both done 2026-10-05 (Tab completion is at the
+  bottom of this file).
 - **Commands at the prompt**, as `/run` or `:run`: a line starting with
   either is always a command, and CoffeeScript that starts with a regex goes
   in parens. Vim's ex commands and the prompt share one table. The vim
-  switch is a remembered checkbox in the Edit menu.
+  switch is a remembered checkbox in the Edit menu. Done 2026-10-05.
 
 Earlier priorities, by Robert on 2026-09-28: debugging (done 2026-09-29);
 sound (first pass done 2026-09-29; the modular synth and effects wait on the
@@ -486,9 +487,36 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   the UI zoom, scale itself up to fill the stage on its own, or have an
   option? Raised 2026-09-29; nothing decided.
 
-## Tab completion (designed; wanted since 2026-10-04)
+## Tab completion (built 2026-10-05)
 
-Estimated at ~150 lines plus ~5 checks in `repl`. Decided:
+Built as designed below (P2, `99270f4`; 23 checks in `repl`). What the
+building added:
+
+- **`ASK_KIND`** (header word 58) says whether the ask buffer holds a line or
+  a completion question, and **`ASK_STATE` 4** means "being answered": the
+  worker claims every question with `compareExchange` 1 -> 4. So a line typed
+  while a Tab is still unclaimed withdraws the Tab (1 -> 0) and goes through;
+  only a Tab the worker is already answering refuses it, as "still answering
+  Tab". Before this a pending Tab blocked every later line.
+- **An answer is dropped unless the prompt still has focus**, as well as
+  unless the line and caret are unchanged: the answer is written with
+  `execCommand`, which types into whatever is focused, and a late answer once
+  typed itself into the editor and was autosaved.
+- **The vocabulary is computed by difference** around `attach()`, plus
+  `breakpoint` and `COLORS`, minus `Interrupted`; a new runtime command is
+  included without a list to keep. `Math.`/`Atomics.` roots do not complete;
+  names after an index or a call (`a[0].`, `f().`) do not either, since that
+  would mean evaluating.
+- **An author's Proxy runs its traps** during a member walk. JavaScript gives
+  the worker no way to tell a Proxy apart; the runtime has none.
+- **The beep is the renderer's own oscillator**, not a note through the
+  worklet: the worker is the only writer of the sound ring, and a beep must
+  sound when no sketch is running. The suite counts beeps with
+  `Prompt.beeps()`; whether it sounds right takes an ear.
+- `/` and `:` command names complete from `Editor.commands()`, no worker
+  needed. Tab inside a reverse search takes the match and then completes.
+
+The design, decided 2026-10-04:
 
 - **Bash style.** Tab completes as far as every candidate agrees, and beeps
   when that is ambiguous; a second Tab lists the candidates in the console.
