@@ -280,6 +280,7 @@
   let askWords = null
   let askBytes = null
   let serving = false
+  let owner = null            // which worker this is; see checkOwner in the runtime
 
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
@@ -323,9 +324,14 @@
       bytes = encoder.encode('too many names to send back')
       state = 3
     }
+    // A Run while the line was out has given the memory to a new worker and
+    // reset the ask for it. The line most likely unwound with 'stopped', and
+    // written back that would show up red in the new run's console. The
+    // exchange covers a Run landing between the check and the store.
+    if (Atomics.load(askWords, LAYOUT.HEADER.OWNER) !== owner) return
     askBytes.set(bytes)
     Atomics.store(askWords, LAYOUT.HEADER.ASK_LEN, bytes.length)
-    Atomics.store(askWords, LAYOUT.HEADER.ASK_STATE, state)
+    Atomics.compareExchange(askWords, LAYOUT.HEADER.ASK_STATE, 4, state)
     Atomics.notify(askWords, LAYOUT.HEADER.ASK_STATE)
   }
 
@@ -410,7 +416,8 @@
       async boot() {
         for (const path of MODULES) await loadModule(path)
         const before = new Set(Object.getOwnPropertyNames(globalThis))
-        attach(data.sab)
+        owner = data.owner
+        attach(data.sab, owner)
         vocabulary = [
           ...Object.getOwnPropertyNames(globalThis).filter((name) => !before.has(name) && !PLUMBING.includes(name)),
           ...PUBLISHED,

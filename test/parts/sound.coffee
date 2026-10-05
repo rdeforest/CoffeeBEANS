@@ -181,3 +181,29 @@ print 'a4=' + sound.hz('A4') + ' c4=' + sound.hz('C4').toFixed(2) + ' bb3=' + so
   await t.settle()
   gone = await until_ (-> (await busy()) is 0), 1000
   check 'run starts in silence', gone, "busy=#{await busy()}"
+
+  # 11. Run over a sketch that keeps queueing notes. The new worker's epoch
+  # drops what was queued, but the old worker went on for two seconds after
+  # terminate() (Chromium only forces a busy worker then), and every note it
+  # queued in that time played over the new run.
+  await setDoc """
+screen 320, 200
+buffer.fps 20
+loop
+  sound 440, 0.04
+  buffer.swap
+"""
+  await wait 400
+  await evalAll()
+  playing = await until_ (-> (await busy()) > 0), 3000
+  await setDoc "print 'quiet'\n"
+  await wait 400
+  await click 'runFresh'
+  hushed = await until_ (-> (await busy()) is 0 and (await peak()) is 0), 1000
+  begun  = await started()
+  await wait 600
+  after  = await started()
+  check 'run over a sketch queueing notes: nothing it queues afterwards plays',
+    playing and hushed and after is begun and (await busy()) is 0,
+    "playing=#{playing} hushed=#{hushed} started #{begun} then #{after} busy=#{await busy()}"
+  await t.settle()

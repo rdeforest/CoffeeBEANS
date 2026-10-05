@@ -461,3 +461,45 @@ print 'two'
     "paused=#{listPause} pending=#{listingOut} early=#{early} order=#{order.join()} stepped=#{stepped}"
   await click 'stop'
   await until_ -> (await status()) is 'ready'
+
+  # 19. Run from a line pause leaves the old worker nothing to do. Chromium's
+  # terminate() only forces a busy worker two seconds later, and terminating
+  # lets a line-paused one go, so it used to run on: printing into the new
+  # console and taking the new sketch's frames. `k` counts the new sketch's
+  # swaps against the frames presented since it began, one for one when the
+  # frames are all its own (AGENTS.md); a zombie halved it.
+  await setDoc """
+screen 320, 200
+n = 0
+breakpoint
+print 'OLD ran on'
+loop
+  n += 1
+  print 'OLD ' + n if n %% 30 is 0
+  buffer.swap
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  await nextPause 0
+  await setDoc """
+screen 320, 200
+f0 = frames
+k  = 0
+loop
+  k += 1
+  buffer.swap
+"""
+  await wait 500
+  await click 'runFresh'
+  await until_ -> (await status()) is 'running'
+  shown = 0
+  await until_ (-> shown = Number /(\d+)\s*$/.exec(await ask 'frames - f0')?[1]; shown >= 100), 15000
+  [mine, presented] = (Number n for n in /(\d+) (\d+)"\s*$/.exec(await ask "k + ' ' + (frames - f0)")?[1..2] ? [])
+  await t.quiet()
+  said = await consoleText()
+  check 'run from a line pause: the old worker prints nothing and takes no frames',
+    not said.includes('OLD') and mine / presented > 0.8,
+    "swaps #{mine} of #{presented} frames, console=#{JSON.stringify said.trim()[-300..]}"
+  await click 'stop'
+  await until_ -> (await status()) is 'ready'

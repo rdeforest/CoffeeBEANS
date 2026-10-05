@@ -38,11 +38,12 @@ HEADER =
   SOUND_RATE: 49     # the audio thread's sample rate, once it is running
   KEYS_UP:    50     # 50..57, sticky: went up since the sketch last looked
   ASK_KIND:   58     # what the question in the ask buffer wants; see ASK_FOR
+  OWNER:      59     # which worker the memory belongs to; any other unwinds at once
 
 MAX_WIDTH    = 3840
 MAX_HEIGHT   = 2160
 MAX_PIXELS   = MAX_WIDTH * MAX_HEIGHT
-HEADER_WORDS = 64        # 59..63 spare: gamepads, whatever comes
+HEADER_WORDS = 64        # 60..63 spare: gamepads, whatever comes
 BUFFERS      = 2
 
 # Where a loaded image lands on its way from the main process to the worker.

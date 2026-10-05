@@ -1286,9 +1286,14 @@ standDown = -> Atomics.store i32, H.INTERRUPT, 0
 messages =
   ready: ->
     setStatus 'ready'
-    return unless pending
-    send pending
+    send pending if pending
     pending = null
+    # A line typed while the worker was booting poked it before it had
+    # anywhere to read the line from, and it is still waiting. Poked again,
+    # behind the run: a sketch with a yield point answers it there, from its
+    # own names, and one without answers it once it has finished. Served at
+    # the end of boot instead, it would be answered from an empty image.
+    worker.postMessage type: 'ask'
   load:    (data) -> answerLoad data.url
   done:    -> standDown(); setStatus 'ready'
   stopped: -> standDown(); say '*** stopped ***', 'sys'; setStatus 'ready'
@@ -1358,6 +1363,11 @@ send = ({source, name, cut}) ->
   worker.postMessage {type: 'run', source, name}
 
 start = (thenRun = null) ->
+  # terminate() does not stop a busy worker for two seconds (see checkOwner in
+  # the runtime), so the old one is first told the memory is no longer its
+  # own, and woken if it is parked on a frame, before anything is reset.
+  Atomics.add    i32, H.OWNER, 1
+  Atomics.notify i32, H.SWAP
   worker?.terminate()
   drainPrints()                       # anything the old worker already wrote
   Atomics.store i32, H.PRINT_HEAD, 0
@@ -1383,7 +1393,7 @@ start = (thenRun = null) ->
   worker.onerror = (event) ->
     say "worker: #{event.message ? 'failed to start'}", 'err'
     setStatus 'error'
-  worker.postMessage type: 'boot', sab: sab
+  worker.postMessage type: 'boot', sab: sab, owner: Atomics.load i32, H.OWNER
   setStatus 'booting'
 
 stop = ->

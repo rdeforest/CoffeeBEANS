@@ -831,3 +831,27 @@ done = 1
     waited and inTrap and later.value isnt 'oldName' and later.value.startsWith('old'),
     "paused=#{waited} inTrap=#{inTrap} prompt=#{JSON.stringify later}"
   await setDoc ''
+
+  # 22. A line typed while the worker is booting. The poke reaches a worker
+  # still loading its modules, with nowhere yet to read the line from, and a
+  # sketch with no yield point never looks again: the line sat unanswered,
+  # and every later one said it was still waiting, until the next restart.
+  # Run once first, so the debugger is already disarmed for an empty buffer
+  # and the Run under test starts its worker in the same tick.
+  await wait 400
+  await click 'runFresh'
+  await settle()
+  await clearConsole()
+  asked = await js """
+    document.getElementById('runFresh').click()
+    const at = document.getElementById('status').textContent
+    Prompt.ask('6 * 7')
+    return at
+  """
+  answered = await until_ (-> not await js "return Prompt.pending()"), 5000
+  await t.quiet()
+  text = await consoleText()
+  check 'a line typed while the worker boots is answered',
+    asked is 'booting' and answered and text.includes('42'),
+    "status=#{asked} answered=#{answered} console=#{JSON.stringify text}"
+  await settle()

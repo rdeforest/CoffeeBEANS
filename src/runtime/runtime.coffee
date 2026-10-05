@@ -15,6 +15,8 @@ state =
   frameStart: null
   started:    0
   seed:       0
+  owner:      null       # this worker's number; see checkOwner
+  disowned:   no
 
 # Everything that draws writes to `target`. The screen is just the target
 # that happens to live in shared memory; a Surface is one that does not, so
@@ -39,8 +41,40 @@ Object.defineProperty display, 'onScreen',
 # gets picked up here -- which is why the prompt answers between frames of a
 # running sketch instead of waiting for it to finish.
 checkInterrupt = ->
+  checkOwner()
   REPL?.serve?()
   throw new Interrupted() if Atomics.load(state.i32, H.INTERRUPT) is 1
+
+# Run makes a new worker and terminates this one, but Chromium terminates
+# gracefully: it queues the shutdown behind whatever the worker is doing and
+# only forces it two seconds later. A sketch in a `loop` never gets back to
+# its queue, so for those two seconds it would go on printing, taking frames
+# and answering the new worker's questions. Unwinding to the queue lets the
+# shutdown run at once. Measured by Claude, 2026-10-05, Electron 44.
+#
+# Interrupted can be caught, though, and a sketch whose loop catches
+# everything would go round again and draw over the new run, set its screen
+# modes and queue its notes. So the first time the memory turns out not to be
+# its own, the worker lets go of it: every view onto it is pointed at a
+# private copy of the layout instead, nothing it does afterwards reaches the
+# new run, and every yield point from then on throws again. The copy is full
+# size so every offset stays valid; its pages are zero and untouched, so it
+# costs address space, not memory, for the second or so the worker has left.
+checkOwner = ->
+  return if Atomics.load(state.i32, H.OWNER) is state.owner and not state.disowned
+  views new ArrayBuffer LAYOUT.TOTAL_BYTES unless state.disowned
+  state.disowned = yes
+  throw new Interrupted()
+
+# Everything in the worker that touches shared memory goes through here, so
+# that letting go of it is one call. INPUT reads through `state` itself.
+views = (memory) ->
+  state.i32      = new Int32Array  memory, 0, LAYOUT.HEADER_WORDS
+  state.u32      = new Uint32Array memory
+  state.ring     = new Uint8Array  memory, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
+  display.pixels = state.u32
+  SOUND.attach memory, checkInterrupt, checkOwner
+  undefined
 
 refreshBase = ->
   front        = Atomics.load state.i32, H.FRONT
@@ -70,6 +104,8 @@ doSwap = (flip = yes) ->
     # Whether the frame landed or a stop got there first, the renderer may
     # have flipped; a stale base would have the next run draw on screen.
     refreshBase()
+  # A new worker clears the swap, which ends this wait without a frame.
+  checkOwner()
   INPUT.claimHits()      # a frame boundary is also an input boundary
   state.frameStart = performance.now()
   undefined
@@ -496,6 +532,7 @@ writeRing = (position, bytes) ->
   (position + bytes.length) % RING
 
 print = (args...) ->
+  checkOwner()
   bytes = encoder.encode args.join ' '
   head  = Atomics.load state.i32, H.PRINT_HEAD
   tail  = Atomics.load state.i32, H.PRINT_TAIL
@@ -506,7 +543,10 @@ print = (args...) ->
     Atomics.add state.i32, H.PRINT_LOST, 1
     return undefined
   sizingView.setUint32 0, bytes.length, true
-  Atomics.store state.i32, H.PRINT_HEAD, writeRing writeRing(head, sizing), bytes
+  after = writeRing writeRing(head, sizing), bytes
+  # Exchanged, not stored: a Run between the owner check and here resets the
+  # head, and a plain store would publish this line into the new run's ring.
+  Atomics.compareExchange state.i32, H.PRINT_HEAD, head, after
   undefined
 
 # A sleep measured in frames, never a flip. When wait flipped, a
@@ -574,13 +614,10 @@ installMath = ->
   randomize()
   undefined
 
-globalThis.attach = (sab) ->
-  state.i32 = new Int32Array  sab, 0, LAYOUT.HEADER_WORDS
-  state.u32  = new Uint32Array sab
-  state.ring = new Uint8Array sab, LAYOUT.printOffset, LAYOUT.PRINT_BYTES
-  display.pixels = state.u32
+globalThis.attach = (sab, owner) ->
+  state.owner = owner
+  views sab
   state.brush = solid COLORS.white
-  SOUND.attach sab, checkInterrupt
   installMath()
   {keys, mouse} = INPUT.attach state
   Object.assign globalThis, {

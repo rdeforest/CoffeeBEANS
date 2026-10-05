@@ -129,3 +129,109 @@ catch error
   check 'the runtime is named so it can be ignore-listed',
     text.includes('runtimeNamed=true') and text.includes('sketchNamed=true'),
     JSON.stringify text.trim()
+
+  # 9. The same for Run over a running sketch: no debugger at all, and the
+  # old worker used to go on for two seconds, because Chromium's terminate()
+  # waits that long before forcing a busy worker. `k` counts the new sketch's
+  # swaps against the frames presented since it began; a zombie halved it.
+  await setDoc """
+screen 320, 200
+n = 0
+loop
+  n += 1
+  print 'OLD ' + n if n %% 30 is 0
+  buffer.swap
+"""
+  await wait 500
+  await evalAll()
+  await wait 400
+  await setDoc """
+screen 320, 200
+f0 = frames
+k  = 0
+loop
+  k += 1
+  buffer.swap
+"""
+  await wait 500
+  await click 'runFresh'
+  deadline = Date.now() + 15000
+  await wait 25 until (await status()) is 'running' or Date.now() > deadline
+  # Not before the Run: it prints what the old worker wrote before it.
+  await clearConsole()
+  shown = 0
+  until shown >= 100 or Date.now() > deadline
+    shown = Number /(\d+)\s*$/.exec(await ask 'frames - f0')?[1]
+  [mine, presented] = (Number n for n in /(\d+) (\d+)"\s*$/.exec(await ask "k + ' ' + (frames - f0)")?[1..2] ? [])
+  await t.quiet()
+  said = await consoleText()
+  check 'run over a running sketch: the old worker prints nothing and takes no frames',
+    not said.includes('OLD') and mine / presented > 0.8,
+    "swaps #{mine} of #{presented} frames, console=#{JSON.stringify said.trim()[-300..]}"
+  await click 'stop'
+  await settle()
+
+  # 10. Interrupted can be caught. A loop that catches everything goes round
+  # again after the one that ends it, and for the two seconds before Chromium
+  # forces the worker it used to draw red over the new run, resize its screen
+  # and turn on double buffering -- unless the old worker has let go of the
+  # shared memory. `bad` counts the new sketch's frames whose pixel is not the
+  # one it drew; the canvas width is what the renderer reads from the header.
+  #
+  # The line is asked in the same tick as the Run, while the old worker is
+  # still spinning: it must wait for the new sketch, which answers from its
+  # own names at its first yield point, and the old one must not take it.
+  await setDoc """
+screen 100, 80
+who = 'old'
+loop
+  try
+    screen 100, 80
+    buffer.on
+    buffer.fps 5
+    cls COLORS.red
+    buffer.swap
+  catch e
+    null
+"""
+  await wait 500
+  await evalAll()
+  deadline = Date.now() + 15000
+  await wait 25 until (await status()) is 'running' or Date.now() > deadline
+  await wait 400
+  await setDoc """
+screen 200, 120
+who = 'new'
+cls COLORS.lime
+bad  = 0
+seen = 0
+loop
+  seen += 1
+  bad  += 1 unless pget(5, 5) is COLORS.lime
+  buffer.swap
+"""
+  await wait 500
+  await clearConsole()
+  await t.js """
+    document.getElementById('runFresh').click()
+    Prompt.ask('who')
+    return true
+  """
+  deadline = Date.now() + 10000
+  await wait 25 while (await t.js "return Prompt.pending()") and Date.now() < deadline
+  await t.quiet()
+  answered = await consoleText()
+  widths = new Set
+  for i in [0...20]
+    widths.add await t.js "return document.getElementById('screen').width"
+    await wait 25
+  counts = await ask "bad + ' ' + seen"
+  [bad, seen] = (Number n for n in /(\d+) (\d+)"\s*$/.exec(counts)?[1..2] ? [])
+  check 'a line asked as Run is pressed is answered by the new sketch, not the old',
+    answered.includes('"new"') and not answered.includes('old'),
+    JSON.stringify answered.trim()[-200..]
+  check 'an old worker that catches its stop draws nothing and sets no mode over the new run',
+    bad is 0 and seen > 0 and widths.size is 1 and widths.has(200),
+    "bad=#{bad} of #{seen} frames, widths=#{[widths...].join()}"
+  await click 'stop'
+  await settle()

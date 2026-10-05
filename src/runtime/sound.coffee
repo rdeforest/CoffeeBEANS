@@ -87,13 +87,18 @@ state =
   i32:        null
   ring:       null
   yieldPoint: null
+  ownerCheck: null
   voices:     new Map       # a sketch's name for a voice -> the number the audio thread uses
   notes:      0
 
-attach = (sab, yieldPoint) ->
-  state.i32  = new Int32Array sab, 0, LAYOUT.HEADER_WORDS
-  state.ring = new Float32Array sab, LAYOUT.soundOffset, LAYOUT.SOUND_FLOATS
+# `ownerCheck` is not a yield point -- it serves no prompt -- so a note can
+# be changed from inside a frame without one, but it still refuses a worker
+# that a Run has replaced (checkOwner in the runtime).
+attach = (memory, yieldPoint, ownerCheck) ->
+  state.i32        = new Int32Array   memory, 0, LAYOUT.HEADER_WORDS
+  state.ring       = new Float32Array memory, LAYOUT.soundOffset, LAYOUT.SOUND_FLOATS
   state.yieldPoint = yieldPoint
+  state.ownerCheck = ownerCheck
   undefined
 
 # Any number or name is a voice. Names are kept as given, so `1` and `'1'`
@@ -119,6 +124,7 @@ reserve = (size) ->
     Atomics.wait state.i32, H.SOUND_TAIL, tail, 20
 
 post = (message) ->
+  state.ownerCheck()
   throw new Error "sound: that note is too long to queue -- split it into shorter ones" if message.length > LAYOUT.SOUND_FLOATS / 4
   N    = LAYOUT.SOUND_FLOATS
   head = reserve message.length
