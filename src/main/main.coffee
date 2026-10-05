@@ -232,6 +232,13 @@ watchSketches = (win) ->
   # So a read waits for the file's saves to settle and then looks again, and
   # a read that a save began under is thrown away for a fresh one. An outside
   # edit still arrives, only after our own writes are on disk.
+  #
+  # That closes the window only for saves main already knows about. The
+  # renderer sets lastWritten and then sends sketch:write, so a read that
+  # completes and is sent while that write is still crossing IPC carries the
+  # old text and still reverts the editor until the echo. Not taken: a write
+  # sequence number the renderer sends and main echoes in sketch:changed, so
+  # applyExternal could ignore a read older than its latest write.
   reload = (name) ->
     clearTimeout timers[name]
     timers[name] = setTimeout (->

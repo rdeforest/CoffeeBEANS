@@ -249,7 +249,7 @@ module.exports = (t) ->
     during = await js "return Editor.all()"
     faults.slow = 0
     landed = await t.untilDoc "print 'NEW'\n"
-    await wait 1500                             # the held rename lands and is read back
+    await until_ -> (await raceText()) is "print 'NEW'\n"
     disk   = await raceText()
     check 'a watcher read during a save in flight does not put the old text back',
       during is "print 'NEW'\n" and disk is "print 'NEW'\n",
@@ -265,6 +265,7 @@ module.exports = (t) ->
     # editor, which says so and keeps the edit as unsaved.
     faults.windows = yes
     faults.refuse  = 3
+    await quiet()                               # nothing queued from the checks above
     await clearConsole()
     await setDoc "print 'RETRIED'\n"
     await js "await Editor.save(); return true"
