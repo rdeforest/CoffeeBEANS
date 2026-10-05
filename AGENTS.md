@@ -68,6 +68,10 @@ in voxel-mvp that is the step that caught the cross-track bugs.
   upstream first (above).
 - Whether two suites can run at once without the frame-timing checks failing
   is not known yet. Run them one at a time until it is measured.
+- **Never `git stash`** in a night with worktrees: `refs/stash` is shared by
+  every worktree of the repo. On 2026-10-05 two agents stashed at the same
+  moment and each popped the other's chunk into the wrong worktree. Set a
+  change aside as a patch file (`git diff HEAD > tmp/mine.patch`) instead.
 
 **The morning brief**, at the bottom of the plan: what needs Robert first;
 what landed; what was decided without him; what was not done and why; and a
@@ -76,7 +80,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 297 checks
+    npm test                                 all 305 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -252,6 +256,22 @@ Verified in Electron 44 while building it; do not re-derive.
   "Execution was terminated", and the paused frame stays usable.
 - **`t.settle()` counts both pauses as settled.** A check that waits for a
   Stop to finish has to wait for `ready` itself.
+
+- **`Worker.terminate()` gives a busy worker two seconds.** Chromium queues
+  the shutdown behind whatever the worker is running and only forces
+  `TerminateExecution` after `kForcibleTerminationDelay` = 2s
+  (`worker_thread.cc`). So every Run over a running sketch -- not only one
+  from a line pause -- left the old worker printing into the new console,
+  taking the new sketch's frames and able to claim its prompt line, for 2.0s
+  (measured by Claude, 2026-10-05, Electron 44). Fixed (H2): header word
+  `OWNER`, bumped by `start()` before `terminate()`; the runtime's
+  `checkOwner` (yield points, `print`, `sound`, `screen`, the buffer modes,
+  `load`) repoints every shared view at a private buffer on the first
+  mismatch and throws `Interrupted`, and `serveAsk` checks the owner before
+  claiming a line. Still open: a sketch with no yield point writes shared
+  pixels for the full 2s, and one that kept its own `display.pixels` keeps
+  the shared array. Messages a terminated worker posts are dropped by
+  Chromium (error events excepted).
 
 ## Facts the spikes established
 
