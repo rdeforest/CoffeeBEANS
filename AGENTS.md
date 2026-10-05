@@ -76,7 +76,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 283 checks
+    npm test                                 all 290 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -500,7 +500,13 @@ building added:
   worker claims every question with `compareExchange` 1 -> 4. So a line typed
   while a Tab is still unclaimed withdraws the Tab (1 -> 0) and goes through;
   only a Tab the worker is already answering refuses it, as "still answering
-  Tab". Before this a pending Tab blocked every later line.
+  Tab". Before this a pending Tab blocked every later line. Withdrawal goes by
+  `ASK_KIND`, never by whether a Tab is out: a paused-frame Tab sets
+  `completing` too, and once took back a waiting *line* (H1, `3c9d555`).
+- **Every evaluation in a line-paused frame** -- a line, a Tab, a getter
+  click -- goes through `evaluatePaused`, one counter (`debugAsking`), and
+  waits for member listings still out; a listing is bounded by `EVAL_LIMIT`
+  in main so it always settles.
 - **An answer is dropped unless the prompt still has focus**, as well as
   unless the line and caret are unchanged: the answer is written with
   `execCommand`, which types into whatever is focused, and a late answer once
