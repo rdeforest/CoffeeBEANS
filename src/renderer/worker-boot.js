@@ -75,16 +75,14 @@
 
   // CoffeeScript puts every top-level name of a compilation unit into one
   // leading `var` statement, which is all we need to know what to harvest.
-  // Block comments can precede it; nothing else can.
+  // Comments can precede it, line and block in any mix: a sketch that opens
+  // with `#` lines compiles to `//` lines ahead of the `var`. So can a
+  // statement that is nothing but a literal -- a docstring, a number, a
+  // backtick of JavaScript that is more than a comment -- and that is not
+  // skipped: a sketch that opens with one keeps none of its names.
+  const LEADING_COMMENTS = /^(?:\s*(?:\/\/.*|\/\*[\s\S]*?\*\/))*\s*/
   const declaredNames = (js) => {
-    let head = js
-    for (;;) {
-      head = head.replace(/^\s+/, '')
-      if (!head.startsWith('/*')) break
-      const closed = head.indexOf('*/')
-      if (closed < 0) return []
-      head = head.slice(closed + 2)
-    }
+    const head = js.replace(LEADING_COMMENTS, '')
     if (!head.startsWith('var ')) return []
     const stop = head.indexOf(';')
     if (stop < 0) return []
