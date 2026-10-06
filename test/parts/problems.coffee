@@ -1,12 +1,14 @@
 # Failures nobody asked about -- a rejection in main nobody caught, a
 # settings file that will not read or save, a file of the app's own that
-# will not load -- said in the console, where a player looks, and not only
-# on a terminal a player never sees. The audit behind these is
-# docs/research/unhandled-exceptions.md (Claude, 2026-10-06).
+# will not load, a page's last save, a folder the watcher cannot watch -- said
+# in the console, where a player looks, and not only on a terminal a player
+# never sees. The audit behind these is docs/research/unhandled-exceptions.md
+# (Claude, 2026-10-06).
 
-fsp      = require 'fs/promises'
-path     = require 'path'
-Settings = require '../../src/main/settings'
+fsp             = require 'fs/promises'
+path            = require 'path'
+{BrowserWindow} = require 'electron'
+Settings        = require '../../src/main/settings'
 
 # Main has dealt with every rejection made before this resolves: Node reports
 # unhandled ones once the microtasks run out, ahead of the next turn.
@@ -16,8 +18,12 @@ nextTurn = -> new Promise (resolve) -> setImmediate resolve
 countIn = (shown, text) -> shown.split(text).length - 1
 
 module.exports = (t) ->
-  {check, waitFor, freshPage, consoleText, vimKeys, paths} = t
-  {unserved, listening, loadPage} = paths
+  {check, waitFor, freshPage, consoleText, vimKeys, wait, paths} = t
+  {unserved, listening, loadPage, sayProblem, held, faults, refuseNavigation} = paths
+
+  # What a promise gave, or `timed out`: a check here that hangs would hold
+  # the suite lock every other run is queued on.
+  within = (ms, promise) -> Promise.race [promise, wait(ms).then -> 'timed out']
 
   # A rejection in main that nothing catches. Before, the terminal had a
   # warning and the window nothing at all.
@@ -85,21 +91,194 @@ module.exports = (t) ->
     not shown.includes('ERR_ABORTED') and shown.includes('the window could not load: ERR_FAILED'),
     JSON.stringify shown[-200..]
 
-  # Said while no page is listening -- before the window, or while it reloads
-  # -- it waits, and the next page to listen says it, once. Here the window
-  # is taken off the list for the length of the check, as a reload would.
-  away = [listening...]
-  listening.clear()
-  try
-    Promise.reject new Error 'problems: while nobody listened'
-    await nextTurn()
-    early = await consoleText()
-    later = await freshPage """
+  # The next checks take the test window off the list, as a reload or a
+  # closed window would, so that the page each opens is the only one
+  # listening, if any is.
+  aside = (body) ->
+    away = [listening...]
+    listening.clear()
+    try
+      await body()
+    finally
+      # Not a page destroyed since: one the last check destroyed can still be
+      # on the list when this one starts, and its 'destroyed' has come and
+      # gone by now. Put back, it made every later problem throw out of
+      # sayProblem, and Electron's box hang the run (Claude, 2026-10-06).
+      listening.add contents for contents in away when not contents.isDestroyed()
+
+  openPage = (query = '') ->
+    page = new BrowserWindow
+      show: no
+      webPreferences:
+        contextIsolation: yes
+        nodeIntegration:  no
+        preload:          path.join paths.root, 'src', 'main', 'preload.js'
+    page.webContents.setAudioMuted yes
+    await page.loadURL "app://beans/src/renderer/index.html#{query}"
+    page
+
+  reload = (page) ->
+    reloaded = new Promise (resolve) -> page.webContents.once 'did-finish-load', resolve
+    page.webContents.reload()
+    await reloaded
+
+  # The console of a page that is up, once it shows `text` or `limit` is out.
+  pageSays = (page, text, limit = 5000) ->
+    deadline = Date.now() + limit
+    loop
+      shown = await page.webContents.executeJavaScript "document.getElementById('console').textContent"
+      return shown if shown.includes(text) or Date.now() > deadline
+      await wait 25
+
+  waitIn = (page, probe, limit = 5000) ->
+    deadline = Date.now() + limit
+    loop
+      seen = await page.webContents.executeJavaScript probe
+      return seen if seen or Date.now() > deadline
+      await wait 25
+
+  listens = (page, limit = 5000) ->
+    deadline = Date.now() + limit
+    await wait 25 until listening.has(page.webContents) or Date.now() > deadline
+    listening.has page.webContents
+
+  # A page that has started loading another is not sent problems: they are
+  # held, and the page that comes up says them, once. Without that the
+  # problem went to the page on its way out, and was lost with it.
+  await aside ->
+    page = await openPage()
+    try
+      heard = await listens page
+      leaving = new Promise (resolve) -> page.webContents.once 'did-start-loading', resolve
+      landed  = new Promise (resolve) -> page.webContents.once 'did-finish-load', resolve
+      page.webContents.reload()
+      await leaving
+      Promise.reject new Error 'problems: while the page reloaded'
+      await nextTurn()
+      await landed
+      shown = await pageSays page, 'while the page reloaded'
+      check 'a problem from while a page reloads is held, and said once by the page that comes up',
+        heard and countIn(shown, 'main: problems: while the page reloaded') is 1, JSON.stringify shown[-200..]
+
+    finally
+      page.destroy()
+
+  # And one whose renderer has died. Nothing reloads this page, as the test
+  # window lets a crash lie (createWindow). It is a page of its own session,
+  # so it cannot share the test window's renderer process -- the app's own
+  # windows did, measured by Claude, 2026-10-06 -- and the crash cannot take
+  # the suite down with it; it asks for problems as the preload lets any page.
+  await aside ->
+    page = new BrowserWindow
+      show: no
+      webPreferences:
+        contextIsolation: yes
+        nodeIntegration:  no
+        partition:        'problems-crash'
+        preload:          path.join paths.root, 'src', 'main', 'preload.js'
+    try
+      await page.loadURL 'data:text/html,<p>to be crashed</p>'
+      asked  = await page.webContents.executeJavaScript "typeof beans === 'object' && (beans.onProblem(() => {}), true)"
+      heard  = asked and await listens page
+      tested = BrowserWindow.getAllWindows().find (other) -> other isnt page
+      shared = page.webContents.getOSProcessId() is tested.webContents.getOSProcessId()
+      unless shared
+        gone = new Promise (resolve) -> page.webContents.once 'render-process-gone', resolve
+        page.webContents.forcefullyCrashRenderer()
+        await gone
+        Promise.reject new Error 'problems: after the page crashed'
+        await nextTurn()
+        later = await freshPage """
+          const shown = document.getElementById('console').textContent
+          return shown.includes('after the page crashed') && shown
+        """
+      check 'a problem from after a page crashed is held for the next page, not sent to the dead one',
+        heard and not shared and countIn("#{later}", 'main: problems: after the page crashed') is 1,
+        JSON.stringify {heard, shared, later: "#{later}"[-200..]}
+    finally
+      page.destroy()
+
+  # Held, they stop at `held`: a page whose loader failed never asks for
+  # them. The rest are counted, and the count said with the first.
+  await aside ->
+    sayProblem "problems: held #{n}" for n in [1..held + 2]
+    shown = await freshPage """
       const shown = document.getElementById('console').textContent
-      return shown.includes('while nobody listened') && shown
+      return shown.includes('more problems') && shown
     """
-  finally
-    listening.add contents for contents in away
-  check 'a problem from while no page listened is held, and said once by the next page that does',
-    not early.includes('while nobody listened') and countIn("#{later}", 'main: problems: while nobody listened') is 1,
-    JSON.stringify {early: early[-200..], later}
+  check "problems held while no page listens stop at #{held}, and the rest are counted",
+    shown and countIn(shown, 'problems: held ') is held and shown.includes("problems: held #{held}") and
+      not shown.includes("problems: held #{held + 1}") and shown.includes('main: 2 more problems, on the terminal only'),
+    JSON.stringify "#{shown}"[-200..]
+
+  # A page's last save (U1's sketch:flush) that fails as the page reloads.
+  # Before, only the terminal heard; now the page that comes up says it. A
+  # hundred refusals, so Windows' rename retry gives up too.
+  sketch = 'problems-flush'
+  file   = path.join paths.sketches, "#{sketch}.coffee"
+  await fsp.writeFile file, "print 'OLD'\n", 'utf8'
+  await aside ->
+    page = await openPage "?sketch=#{sketch}"
+    try
+      opened  = await waitIn page, "typeof Editor !== 'undefined' && Editor.name() === '#{sketch}'"
+      pending = await page.webContents.executeJavaScript """
+        (() => { const v = Editor.view()
+                 v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: "print 'NEW'\\n" } })
+                 return Editor.dirty() })()
+      """
+      faults.refuse = 100
+      await reload page
+      faults.refuse = 0
+      shown = await pageSays page, "could not save #{sketch}"
+    finally
+      faults.refuse = 0
+      page.destroy()
+      # And the staging file the refused rename left: writeSketch does not
+      # clear it after a failure (see the audit).
+      await fsp.rm path.join(paths.sketches, ".#{sketch}.coffee.saving"), force: yes
+      await fsp.rm file, force: yes
+    check 'a page\'s last save that fails as it reloads is said by the page that comes up, once',
+      opened and pending and countIn(shown, "could not save #{sketch}") is 1, JSON.stringify shown[-200..]
+
+  # A navigation the page itself starts -- a file dropped on the window
+  # outside the editor, a link -- replaced the app with the file. Refused in
+  # a page of its own, not the test window, so that a regression costs this
+  # check and not the rest of the run. A refused navigation still starts
+  # loading and stops, and the page must go on hearing main's problems.
+  await aside ->
+    page = await openPage()
+    refuseNavigation page.webContents
+    try
+      heard   = await listens page
+      refused = new Promise (resolve) -> page.webContents.once 'will-navigate', (event) -> resolve event.defaultPrevented
+      stopped = new Promise (resolve) -> page.webContents.once 'did-stop-loading', resolve
+      await page.webContents.executeJavaScript "location.href = '/src/renderer/help.coffee'; true"
+      refused = await within 3000, refused
+      await within 3000, stopped
+      Promise.reject new Error 'problems: after a refused navigation'
+      await nextTurn()
+      # Caught, so that a page navigated away -- no console, no Editor -- fails
+      # this check and says why, rather than ending the part.
+      gave  = (error) -> "threw: #{error.message}"
+      shown = await within 8000, pageSays(page, 'after a refused navigation').catch gave
+      still = await within 3000, page.webContents.executeJavaScript('typeof Editor').catch gave
+      check 'a navigation the page starts is refused, and the page stays the app and goes on hearing problems',
+        heard and refused is true and still is 'object' and countIn("#{shown}", 'after a refused navigation') is 1,
+        JSON.stringify {heard, refused, still, shown: "#{shown}"[-200..]}
+    finally
+      page.destroy()
+
+  # A folder in sketches/ that cannot be watched: edits made to it outside
+  # the app will not be seen, which was said only on the terminal. Made
+  # unreadable with its mode, which Windows ignores, and root reads anyway.
+  unless process.platform is 'win32' or process.getuid?() is 0
+    locked = path.join paths.sketches, 'problems-locked'
+    await fsp.mkdir locked, mode: 0
+    try
+      unseen = await waitFor "return document.getElementById('console').textContent.includes('problems-locked will not be seen')"
+      shown  = await consoleText()
+    finally
+      await fsp.chmod locked, 0o755
+      await fsp.rmdir locked
+    check 'a folder in sketches/ that cannot be watched is said in the console',
+      unseen and shown.includes('changes made outside CoffeeBEANS to'), JSON.stringify shown[-200..]

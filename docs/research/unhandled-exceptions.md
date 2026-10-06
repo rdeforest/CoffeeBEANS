@@ -12,6 +12,12 @@ overtake each other) or with a throwaway test part driving the real app;
 neither is committed. Anything not measured is marked **inferred**, and
 **read** means established by reading the code alone.*
 
+*Updated by the A2 fixer (Claude, Opus 5.5), 2026-10-06, after merging
+`main` at `354f57d` (U1, T2, K7 and E1 merged since `9c76fe0`). The entries
+above "Since 9c76fe0" keep their `9c76fe0` line numbers; where main's new
+code changes what an entry says, a **Since the merge** note follows it.
+Entries added at the merge cite names, and lines at the fixer's commit.*
+
 ## What each process does with a failure nobody catches, today
 
 | Where | What happens | Seen by a player? | |
@@ -117,6 +123,12 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
   - `clipboard:write`, `settings:vim`, `settings:warnCase`: cannot throw.
   - `beans:paths` (`:307`): nothing in the renderer calls it any more.
     **Read**. Dead; not removed (not A's, and harmless).
+  - `debug:members` and `debug:getter` (**since the merge**,
+    `debugger.coffee` `members`, ~line 670, and `getter`/`runGetter`, ~line
+    692): reject when `Runtime.getProperties` or `Runtime.callFunctionOn`
+    fails, or `members` gives up after `EVAL_LIMIT`. Their renderer
+    callers -- a row's `open` in `varRow` and `runGetter` -- catch the
+    rejection and say it in the console. **Read**. Nothing to do.
   - `debug:*` (`debugger.coffee:172-180`): `pause`, `step` and `resume`
     reject when a CDP command fails. Callers `linePause`
     (`renderer.coffee:895-899`), `stepLine` (`:913`), `continueAll`
@@ -128,12 +140,23 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
 
 - **M9. `main.coffee:342-425`, the sketch watcher.** A failed read
   (`:381`), a folder that cannot be watched (`:397`), a watch that stops
-  (`:403`) and a failed stat (`:415`) all go to stdout only. The one that
+  (`:403`) and a failed stat (`:415`) all went to stdout only. The one that
   matters is `watch stopped`: from then on an outside edit (vim) to that
-  folder is never picked up, and nothing in the window says so.
+  folder is never picked up, and nothing in the window said so.
   **Inferred** (the code's own comment says deleting a watched folder
-  raised the error). Owner: F (the watcher). With A2's `sayProblem` in
-  place, each is a one-word change.
+  raised the error). Owner: F (the watcher). **Fixed by the A2 fixer**,
+  at the orchestrator's request: each goes through `unseen` in
+  `watchSketches`, which says `changes made outside CoffeeBEANS to <where>
+  will not be seen: <why>` through `sayProblem` -- except an `ENOENT`, and a
+  `watch stopped` whose folder is no longer there, which lose nothing (a
+  sketch or a folder deleted outside the app) and stay on stdout. It was not
+  the one-word change the audit first said: routed blindly, deleting a
+  sketch outside the app would have printed an error. Checked for a folder
+  that cannot be watched (made with mode 0, so not on Windows or as root:
+  measured EACCES on Linux). Not checked: `watch stopped` itself, which
+  needs a watch to fail after it started; whether Windows raises it with
+  the folder still there while its deletion is pending is **inferred**
+  not, and would be said if so.
 
 - **M10. Startup `fs` and `child_process`.** `data.prepare` (async: every
   failure reaches A1's box, measured by A1's checks); `probeFolding`
@@ -174,6 +197,16 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
   threw`, status `error`. It sets status `error` whether or not a sketch
   is still running (**inferred**). Owner: E (`start()`'s error handling;
   E1 is redoing errors outside a run).
+  **Since the merge:** E1 gives `worker-boot.js` its own `error` and
+  `unhandledrejection` listeners, which `preventDefault` and report through
+  the run (`after the run`), so an error from a running worker no longer
+  reaches `worker.onerror` (**read**, not re-measured). The standing
+  `worker.onerror` in `start()` (`renderer.coffee`, ~line 1647) still does
+  not call `event.preventDefault()`, so an error raised before
+  `worker-boot.js` has registered those listeners -- `importScripts` of
+  `coffeescript.js` throwing, a syntax error in the boot itself -- is still
+  said twice: `worker: ...` and then `renderer: ...` from the window
+  listener. **Read**. Owner: E, a one-line follow-up; not fixed here.
 
 - **R5. `renderer.coffee:1274-1287`, `startSound`.** Its setup is caught
   and said (`sound: ...`). But the `AudioWorkletNode` has no
@@ -200,10 +233,12 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
   console showed only the sketch's own `ran`, status `ready`; the terminal
   had `[renderer] Uncaught (in promise) Error: later rejection`. The bare
   probe confirms `Worker.onerror` never fires for a worker's rejection.
-  Owner: E (E1 adds the worker's `unhandledrejection` listener).
+  Owner: E. **Since the merge:** E1 added the worker's
+  `unhandledrejection` listener, which reports it (**read**).
 
 - **W2. A sketch's uncaught error outside a run** (a timer): said, twice --
-  R4. Owner: E.
+  R4. Owner: E. **Since the merge:** said once, by E1's listener, as
+  `after the run` (**read**); see R4 for what is still said twice.
 
 - **W3. `worker-boot.js:31-36`, `loadModule`.** Does not check
   `response.ok`, so a missing runtime module's 404 body is compiled and the
@@ -223,6 +258,63 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
   (`:297`), is the one its own comment says the worker waits on forever:
   if it is refused, the app sits on `booting` and nothing says why.
   **Inferred**. Owner: E.
+
+## Since 9c76fe0
+
+Added by the A2 fixer (Claude, 2026-10-06) after merging `main` at
+`354f57d`. Lines are at the fixer's commit.
+
+- **M11. A navigation the page starts** -- a file dropped on the window
+  anywhere CodeMirror does not take it (the canvas, the console), or a
+  link, if one is ever added. Chromium's default for a dropped file is to
+  navigate to it, which replaced the app with the file's contents, and
+  only View > Reload came back. The drop is **inferred** (Chromium's
+  default; dragging on Robert's desktop is off limits). Measured in a bare
+  Electron 44 probe: a page-initiated `location.href` emits
+  `will-navigate`, `preventDefault` there keeps the page, and the
+  window's own `loadURL`, reload and hash changes do not emit it.
+  **Fixed** (A): `createWindow` refuses every `will-navigate` through
+  `refuseNavigation`. Checked by handing that function to a second window
+  of the app and having it navigate itself -- not the test window, so that
+  a regression costs one check rather than the run; that `createWindow`
+  calls it is one line, read, as with `loadPage`.
+  The same probe found that a refused navigation still emits
+  `did-start-loading` and then `did-stop-loading`, with no `did-navigate`
+  -- and so did a hash change -- which would have taken the window off
+  `sayProblem`'s list for good under A2's first version; see "What A2
+  changed". `window.open` / `target=_blank` would open a new window
+  (`setWindowOpenHandler` unset); nothing in the app can do either today
+  (**read**). Not changed.
+- **M12. U1's `sketch:flush` (`main.coffee:381`) and `will-quit`
+  (`:870`).** The flush's save failing, or still going after
+  `SAVE_LIMIT`, went to stderr only: the page that sent it is going away.
+  **Fixed** (A, fixer): both go through `sayProblem`, so on View > Reload
+  the page that comes up says `could not save <name>: ...`, or that the
+  save is still going and the editor shows the old text until it lands.
+  The failure is checked (the `problems` part, a refused rename); the
+  slow case is not (it costs `SAVE_LIMIT`, and the `lifecycle` part
+  already waits it out once). `will-quit`'s "still saving" line is left on
+  stderr: by then every window has closed and no page can see it, and a
+  save that fails at quit rejects into a `sketch:write` whose page is gone,
+  which Electron logs (`Error occurred in handler for 'sketch:write'`).
+  **Read**.
+- **M13. K7's `edit:native` (`main.coffee:109`).** `NATIVE_HISTORY[verb]`
+  throws for a verb that is not `undo` or `redo`, and `fromMenu`
+  (`editor.coffee:459`) does not catch it. The verb only ever comes from
+  main's own menu items. **Read**. Nothing to do.
+- **M14. `writeSketch` (`main.coffee:285`) leaves its staging file**
+  (`.<name>.coffee.saving`) in the sketch's folder when the rename fails
+  for good, as the `problems` part's refused flush showed: the `editor`
+  part's "atomic save leaves nothing behind" failed on it until the part
+  cleaned up after itself. **Measured**. Harmless to the sketch, but a
+  stray hidden file per failed save. Owner: whoever owns the save queue
+  (S1/U); not changed.
+- **R8. T2's completion list.** No new promise chain without a catch;
+  `completed` and `completePaused` still `JSON.parse` an answer, as R7
+  says. **Read**. Owner: T.
+- **U1's `pagehide` flush (`editor.coffee:502`)** blocks in `sendSync`
+  until main answers, which main bounds by `SAVE_LIMIT`. Nothing thrown
+  there can reach anybody: the page is going. **Read**.
 
 ## What A2 changed
 
@@ -256,18 +348,55 @@ each fix was taken out alone, and its check failed (Claude, 2026-10-06).
   for, handed only to the suite (like `faults`), so R1 can be checked
   without breaking the checkout.
 
-Not checked: that a page which starts reloading stops being sent problems
-until it asks again (`did-start-loading`) -- the only way to exercise it is
-to reload a window mid-run, which on Linux stops a minimised window's
-animation frames (`test/toolkit.coffee`, `freshPage`); and Open Data
-Folder's failure (M5).
+Not checked: Open Data Folder's failure (M5).
+
+The fixer's changes, from the two reviews and the merge (Claude,
+2026-10-06), each with a check that fails without it except where said:
+
+- **Who hears `sayProblem`.** A page leaves the list when it starts
+  loading another, as before, and also when its renderer dies or it is
+  destroyed -- before, a crashed page stayed on the list and problems
+  sent to it were lost rather than held, and a destroyed one was only
+  pruned the next time something was said. These hooks are registered
+  once per page in `app.on 'web-contents-created'`, not per request. A
+  page that started loading and stopped without another arriving (a
+  refused navigation, M11; a hash change) rejoins at `did-stop-loading`
+  and is sent what was held meanwhile -- under the first version it
+  stayed off the list for good. The reload path is now checked in a
+  second, never-shown window that the check reloads (never the test
+  window: AGENTS.md). The crash is checked in a window of its own session
+  (`partition`), on a `data:` page that asks through the preload: a second
+  window of the app shared the test window's renderer process (measured,
+  Electron 44, Linux), and crashing it would have crashed the suite.
+- **At most `HELD` (50) problems are held**, the first kept, the rest
+  counted and said as `main: <n> more problems, on the terminal only`.
+  A page whose loader failed (R1) never asks, and would otherwise have
+  held every problem for the life of the app.
+- **M9, M11, M12**, above.
+
+One hazard the fixer met and did not change: `sayProblem` throws if the
+list holds a destroyed page (`Object has been destroyed` from `send`), and
+called from the `unhandledRejection` listener that throw becomes an
+uncaught exception -- Electron's modal box, which blocks the main process.
+The hooks above keep destroyed pages off the list; the suite's own `aside`
+helper once put one back, and two runs hung on the box until killed
+(Claude, 2026-10-06). The helper is fixed; the hazard stands for any future
+code that adds to `listening` by hand. **Measured**.
+
+The first version's check that a held problem was not shown early could
+not fail: the test window had been taken off the list by hand, so nothing
+was sent to it either way. It is replaced by the reload check, which fails
+if a reloading page is still sent problems.
 
 ## Not fixed, by owner
 
-- **E:** W1, W2/R4 (double report; status `error` with a sketch running),
-  W3, W4, W5, `stop`'s unguarded `await` (M8 `debug:*`).
+- **E:** R4's standing `worker.onerror` without `preventDefault` (an error
+  before `worker-boot.js`'s listeners exist is said twice; W1 and W2
+  otherwise answered by E1), W3, W4, W5, `stop`'s unguarded `await` (M8
+  `debug:*`).
 - **F:** M8's `openSketch`/`pickSketch` saying IPC wrappers (`:e ../x`),
-  `sketch:find`'s ENOTDIR, M9 (the watcher, stdout only).
+  `sketch:find`'s ENOTDIR. (M9 was routed by the A2 fixer; the watcher is
+  still F's.)
 - **V:** `showAbout`/`aboutCopy` rejections (R3) -- harmless today.
 - **T:** R7 (one-off, at worst).
 - **Nobody tonight:** R5 (the audio worklet's `processorerror`).

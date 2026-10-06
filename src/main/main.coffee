@@ -29,21 +29,50 @@ app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOM
 # them once it has asked to (`app:problems`). Until one has, they wait, so
 # one from before the window, or from while it reloads, is said once it is
 # up rather than sent to a page with nobody listening yet.
+#
+# At most HELD wait: a page whose loader failed never asks, and would have
+# every problem held for the life of the app. The first are kept, as the
+# likeliest cause of the rest, and the rest only counted.
+HELD      = 50
 waiting   = []
+unheld    = 0
 listening = new Set
+
+hold = (text) ->
+  return unheld += 1 if waiting.length >= HELD
+  waiting.push text
 
 sayProblem = (text, logged = text) ->
   console.error logged
-  listening.delete page for page from listening when page.isDestroyed()
-  return waiting.push text unless listening.size
   page.send 'app:problem', text for page from listening
+  hold text unless listening.size
   undefined
 
-ipcMain.on 'app:problems', (event) ->
-  page = event.sender
+join = (page) ->
   page.send 'app:problem', text for text in waiting.splice 0
+  page.send 'app:problem', "main: #{unheld} more problems, on the terminal only" if unheld
+  unheld = 0
   listening.add page
-  page.once 'did-start-loading', -> listening.delete page
+
+ipcMain.on 'app:problems', (event) -> join event.sender
+
+# A page stops hearing them once it starts loading another: said while it
+# goes, a problem went to the page on its way out and was lost with it. If no
+# other page arrives -- a navigation refused (refuseNavigation) starts
+# loading and stops again, measured by Claude, Electron 44, 2026-10-06 -- it
+# hears them again, with whatever was held meanwhile. Nor does a page whose
+# renderer has died: sent to it, a problem was lost rather than held for the
+# page that comes up next.
+leaving = new Set
+
+app.on 'web-contents-created', (event, page) ->
+  page.on 'did-start-loading', -> leaving.add page if listening.delete page
+  page.on 'did-navigate',      -> leaving.delete page
+  page.on 'did-stop-loading',  -> join page if leaving.delete page
+  for gone in ['render-process-gone', 'destroyed']
+    page.on gone, ->
+      listening.delete page
+      leaving.delete page
 
 # Visible, never quiet: the terminal still gets the stack, and the window the
 # message. Not uncaughtException, which Electron already shows in a box.
@@ -347,13 +376,16 @@ settlesWithin = (ms, promise) ->
 # closing window waits only about 500ms, then goes anyway, which is why the
 # quit waits as well (will-quit, below). An async message from the page always
 # arrived too, but nothing waited for its write. The page is gone by the time
-# anything could go wrong, so a failure is said here.
+# anything could go wrong, so a failure is said by main: on a reload, to the
+# page that comes up.
 ipcMain.on 'sketch:flush', (event, name, text) ->
   last = Promise.resolve()
     .then -> if text? then queueSave name, text else saving.get caseKey sketchFile name
-    .catch (error) -> console.error "sketch:flush: could not save #{name}: #{error.message}"
+    .catch (error) -> sayProblem "could not save #{name}: #{error.message}", "sketch:flush: could not save #{name}: #{error.message}"
   settlesWithin(SAVE_LIMIT, last).then (settled) ->
-    console.error "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting" unless settled
+    unless settled
+      sayProblem "still saving #{name} after #{SAVE_LIMIT / 1000}s; the editor shows the old text until it lands",
+        "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting"
     event.returnValue = true
 
 ASSETS = path.join DATA, 'assets'
@@ -461,7 +493,7 @@ watchSketches = (win) ->
         name = await spelled heard
         text = await fsp.readFile sketchFile(name), 'utf8'
       catch error
-        return console.log "watch: #{heard}: #{error.message}"
+        return unseen heard, error
       return again() unless begun.get(key) is before
       win.webContents.send 'sketch:changed', {name, text} unless win.isDestroyed()
     ), 60
@@ -470,6 +502,16 @@ watchSketches = (win) ->
     watchers.get(dir)?.close()
     watchers.delete dir
 
+  # A sketch or a folder the watcher could not read or watch: an edit made to
+  # it outside the app -- vim's, say -- is not picked up, and before
+  # 2026-10-06 only the terminal heard (Claude's audit,
+  # docs/research/unhandled-exceptions.md). Not said when it is gone, which
+  # loses nothing: a sketch or a folder deleted outside the app.
+  unseen = (where, error, label = 'watch') ->
+    logged = "#{label}: #{where}: #{error.message}"
+    return console.log logged if error.code is 'ENOENT'
+    sayProblem "changes made outside CoffeeBEANS to #{where} will not be seen: #{error.message}", logged
+
   watchTree = (dir) ->
     return if watchers.has dir
     try
@@ -477,14 +519,15 @@ watchSketches = (win) ->
       children = fs.readdirSync dir, withFileTypes: yes
     catch error
       watcher?.close()
-      console.log "watch: #{dir}: #{error.message}"
-      return
+      return unseen dir, error
     watchers.set dir, watcher
     # Without this, deleting a watched folder while the app runs throws out
-    # of the main process and takes the window with it.
+    # of the main process and takes the window with it. That loses nothing,
+    # and need not come as ENOENT, so only a folder still there is said.
     watcher.on 'error', (error) ->
-      console.log "watch stopped: #{dir}: #{error.message}"
       forget dir
+      return console.log "watch stopped: #{dir}: #{error.message}" unless fs.existsSync dir
+      unseen dir, error, 'watch stopped'
     watcher.on 'change', (event, filename) ->
       return unless filename?
       entry = path.join dir, filename
@@ -494,8 +537,8 @@ watchSketches = (win) ->
       fsp.stat(entry)
         .then (stats) -> watchTree entry if stats.isDirectory()
         .catch (error) ->
-          if error.code is 'ENOENT' then forget entry
-          else console.log "watch: #{entry}: #{error.message}"
+          return forget entry if error.code is 'ENOENT'
+          unseen entry, error
     watchTree path.join dir, child.name for child in children when child.isDirectory()
     undefined
 
@@ -547,6 +590,13 @@ loadPage = (win, query) ->
   win.loadURL("app://beans/src/renderer/index.html#{query}").catch (error) ->
     sayProblem "the window could not load: #{error.message}" unless error.code is 'ERR_ABORTED'
 
+# Nothing in the app navigates by itself, so a navigation the page starts is
+# a file dropped on the window outside the editor, or a link: either replaced
+# the app with that file, with only View > Reload to come back. Main's own
+# loads, reloads and in-page changes do not come here (measured by Claude,
+# Electron 44, 2026-10-06).
+refuseNavigation = (contents) -> contents.on 'will-navigate', (event) -> event.preventDefault()
+
 createWindow = ->
   # A test run has no business taking the screen while you are working in
   # another window. Never shown is also the strongest form of background there
@@ -582,6 +632,7 @@ createWindow = ->
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
   win.webContents.on 'console-message', (event) ->
     console.log "[renderer] #{event.message}"
+  refuseNavigation win.webContents
   # The sketch worker lives in the renderer's process, so a crash in either
   # takes the page with it and leaves a black window that says nothing. Come
   # back up and say what happened. A test run lets it lie: a suite that
@@ -629,7 +680,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, saveLimit: SAVE_LIMIT, unserved, listening, loadPage})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
