@@ -77,6 +77,35 @@ ITEMS       = 200            # members listed when an object is opened
 # Where a getter's owner waits for the expression that runs it; see runGetter.
 STASH       = '__beansGetterOwner'
 
+# For the suite: called, and waited for, while a pause is being set up and
+# before the renderer has heard of it -- 'exception' as an error pause starts,
+# 'report' once a pause is numbered -- and, `stopping`, while a Stop has taken
+# V8's pause but not yet set breakpoints aside. On its own each window is a
+# few milliseconds; a check holds it open to land a Stop, a stale line or a
+# step's landing in it. Null outside those checks.
+hooks = {pausing: null, stopping: null}
+
+# For the suite: the rule EVAL_LIMIT is there for, kept count of. Nothing may
+# reach V8 in a session while an evaluation -- ours or the author's -- is
+# running there. Under BEANS_TEST every command goes through `watched`, which
+# notes each one sent to a session with an evaluation out, and the suite
+# checks after every part that none was. Otherwise commands go straight to
+# the session and nothing is counted.
+EVALUATIONS = ['Debugger.evaluateOnCallFrame', 'Runtime.callFunctionOn']
+crossings   = []
+
+watched = (sendCommand) ->
+  out = new Map                     # session -> evaluations out in it
+  (method, params, id) ->
+    held = out.get(id) ? 0
+    crossings.push "#{method} sent while #{held} evaluation(s) out" if id and held
+    return sendCommand method, params, id unless method in EVALUATIONS
+    out.set id, held + 1
+    try
+      await sendCommand method, params, id
+    finally
+      out.set id, out.get(id) - 1
+
 # --- source maps ------------------------------------------------------------
 
 BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -220,16 +249,45 @@ module.exports = (win) ->
   ready    = null        # resolves once it is
   scripts  = new Map     # scriptId -> {url}, for every named script
   maps     = new Map     # scriptId -> decoded source map, newest last
-  stopped  = null        # the pause we are sitting in: {frames, where, seq}
+  halted   = null        # V8's pause, its Debugger.paused params, until we move it on
+  stopped  = null        # the pause the renderer is shown: {frames, where, seq}
   chase    = null        # a step or pause still looking for a sketch line
-  asking   = null        # the prompt's evaluation, while it runs
+  asking   = null        # JS run in the paused worker -- the prompt's, a getter's, ours -- while it runs
+  skipped  = no          # a Stop told V8 to skip every pause in this session
+  left     = null        # settles once the session we are on has gone; see takeTurn
+  leave    = null        # which settles it
   seq      = 0
   devtools = no
 
   tell = (payload) ->
     contents.send 'debug:event', payload unless contents.isDestroyed()
 
-  send = (method, params = {}) -> cdp.sendCommand method, params, session
+  command = (method, params, id) -> cdp.sendCommand method, params, id
+  command = watched command if process.env.BEANS_TEST
+
+  # For one command, sent straight after a check made in the same tick.
+  send = (method, params = {}) -> command method, params, session
+
+  # Commands for the session current when it is made, refused once that has
+  # gone. Work that takes several round trips -- setting a pause up, the
+  # prompt's line, a getter, a Stop -- talks through one made as it starts:
+  # a Run or a detach can move us to another worker between any two of its
+  # commands, and the next one used to land in that worker regardless, maybe
+  # in the middle of its own evaluation (a reviewer of cbe904b, 2026-10-06:
+  # a replaced worker's line sent REPL.show into the next one's, 3 of 3).
+  speaker = ->
+    mine = session
+    talk = (method, params = {}) ->
+      return Promise.reject new Error 'the worker has gone' unless talk.live()
+      command method, params, mine
+    talk.live = -> mine? and session is mine
+    talk
+
+  # `send` once no turn is out. The check and the send are one step: an
+  # await between them would leave a gap for a turn to start in.
+  whenFree = (work) ->
+    await asking.catch(->) while asking
+    work()
 
   within = (ms, promise) ->
     timer = null
@@ -242,6 +300,37 @@ module.exports = (win) ->
 
   scriptOf = (frame) -> scripts.get frame.location.scriptId
 
+  # A command to a worker that has gone -- shot by Stop's deadline, replaced by
+  # a Run -- is never answered (measured by a reviewer of 1389d44, 2026-10-06:
+  # a setup stuck in a thrown object's getter held the turn for good, and
+  # every later Stop and switch of error stops waited on it). So a turn ends
+  # with the session it was taken in, answered or not, and comes back empty:
+  # our own calls then fail, and the prompt and a getter say it moved on. The
+  # prompt's own evaluation is not stranded that way -- V8 still answers it,
+  # at EVAL_LIMIT at the latest, after a Run (the same reviewer, of cbe904b)
+  # -- but by then its turn is over, so what it does next goes through its
+  # speaker, which refuses.
+  takeTurn = (work) ->
+    turn = asking = Promise.race [work, left]
+    try
+      await turn
+    finally
+      asking = null if asking is turn
+
+  sessionGone = ->
+    asking  = null
+    skipped = no
+    leave?()
+    left = new Promise (resolve) -> leave = resolve
+
+  sessionGone()
+
+  # Whether V8 is still halted in this pause. Setting a pause up takes several
+  # round trips, and a Stop or a Run can end it in any of them; work for a
+  # pause that is over goes no further, and its V8 commands, sent after the
+  # resume, fail -- that failure is the pause being over, not news.
+  current = (halt) -> halted is halt
+
   # Only scripts with a name. The prompt's lines and our own evaluations have
   # none and come several to a line typed; unknown reads as ours everywhere,
   # which is what they are.
@@ -250,19 +339,19 @@ module.exports = (win) ->
 
   # The map is the script's own sourceMappingURL comment, which V8 hands back
   # with the rest of its source.
-  mapOf = (scriptId) ->
+  mapOf = (talk, scriptId) ->
     unless maps.has scriptId
-      {scriptSource} = await send 'Debugger.getScriptSource', {scriptId}
+      {scriptSource} = await talk 'Debugger.getScriptSource', {scriptId}
       maps.set scriptId, mapFromUrl /\/\/# sourceMappingURL=(\S+)\s*$/.exec(scriptSource)?[1]
       maps.delete old for old in [...maps.keys()][...-MAPS_KEPT]
     maps.get scriptId
 
   # Where a frame is in the author's terms, or null if it is not somewhere
   # the author wrote.
-  locate = (frame) ->
+  locate = (talk, frame) ->
     script = scriptOf frame
     return null unless script and SKETCH.test script.url
-    map = await mapOf frame.location.scriptId
+    map = await mapOf talk, frame.location.scriptId
     return null unless map
     line = coffeeAt map, frame.location.lineNumber, frame.location.columnNumber
     return null unless line?
@@ -287,9 +376,11 @@ module.exports = (win) ->
     inHelper(frame) or frame.functionName in ['harvest', 'restore']
 
   resetSession = ->
+    sessionGone()
     session = null
     enabled = no
     ready   = null
+    halted  = null
     scripts.clear()
     maps.clear()
     chase = null
@@ -305,15 +396,15 @@ module.exports = (win) ->
     return null unless session
     return ready if enabled
     enabled = yes
-    id = session
+    mine = session
     ready = do ->
       try
         await within SETUP_LIMIT, do ->
-          await cdp.sendCommand 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, id
-          await cdp.sendCommand 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, id
-          await cdp.sendCommand 'Debugger.setPauseOnExceptions', {state: pauseState()}, id
+          await command 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, mine
+          await command 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, mine
+          await command 'Debugger.setPauseOnExceptions', {state: pauseState()}, mine
       catch error
-        enabled = no if session is id
+        enabled = no if session is mine
         tell type: 'problem', text: "debugger: #{error.message}"
       undefined
 
@@ -321,8 +412,9 @@ module.exports = (win) ->
   exceptions = ->
     return unless enabled and session
     await ready
-    await asking?.catch(->)             # nothing reaches V8 while one is out
-    await send('Debugger.setPauseOnExceptions', state: pauseState()).catch (error) ->
+    # The session current once the turn is free: a setting, not a step in
+    # anyone's work, and a new session takes it as it is enabled anyway.
+    await whenFree(-> send 'Debugger.setPauseOnExceptions', state: pauseState() if session).catch (error) ->
       tell type: 'problem', text: "debugger: #{error.message}"
 
   disable = ->
@@ -332,9 +424,11 @@ module.exports = (win) ->
     send('Debugger.disable').catch ->
 
   setUp = (id, waiting) ->
+    sessionGone()
     session = id
     scripts.clear()
     maps.clear()
+    halted  = null
     stopped = null
     chase   = null
     enabled = no
@@ -345,7 +439,7 @@ module.exports = (win) ->
       # Without this the worker waits for us forever and the app sits on
       # `booting` with nothing said anywhere.
       if waiting
-        cdp.sendCommand('Runtime.runIfWaitingForDebugger', {}, id).catch ->
+        command('Runtime.runIfWaitingForDebugger', {}, id).catch ->
 
   attach = ->
     return true if cdp.isAttached()
@@ -356,7 +450,7 @@ module.exports = (win) ->
       cdp.attach '1.3'
       # Answered only after the existing worker, if any, has been attached,
       # so `session` is set by the time this resolves.
-      await cdp.sendCommand 'Target.setAutoAttach',
+      await command 'Target.setAutoAttach',
         autoAttach: yes, waitForDebuggerOnStart: yes, flatten: yes
       true
     catch error
@@ -378,10 +472,10 @@ module.exports = (win) ->
   # copy V8 took when it paused, so `b = 10` lands in the frame but not in
   # the copy; each local is read again from the frame itself. Enclosing
   # scopes live on the heap and are read directly.
-  scopesOf = (frame, fresh = no) ->
+  scopesOf = (talk, frame, fresh = no) ->
     shown = []
     for scope in frame.scopeChain when scope.type in SHOWN
-      {result} = await send 'Runtime.getProperties',
+      {result} = await talk 'Runtime.getProperties',
         objectId: scope.object.objectId, ownProperties: yes, generatePreview: yes
       # The sketch's own top level carries the wrapper's plumbing, which is
       # also how it is recognised.
@@ -389,7 +483,7 @@ module.exports = (win) ->
       mine = (p for p in result when not p.name.startsWith '__')
       if fresh and scope.type is 'local'
         for p in mine
-          {result: value} = await send 'Debugger.evaluateOnCallFrame',
+          {result: value} = await talk 'Debugger.evaluateOnCallFrame',
             callFrameId: frame.callFrameId, expression: p.name,
             throwOnSideEffect: yes, generatePreview: yes
           p.value = value if value
@@ -411,14 +505,21 @@ module.exports = (win) ->
   # bumps before a new one boots), so the renderer can drop the pause of a
   # worker a Run has already replaced.
   #
-  # The pause is ours from the start, before anything is asked of V8, so a
-  # Stop in the meantime finds it to resume.
-  report = (frames, at = 0, error = null) ->
-    top  = frames[at]
-    here = stopped = {frames, at, where: null, error, seq: ++seq}
-    here.where = await locate top
-    owner = await ownerOf top
-    tell {type: 'paused', seq: here.seq, owner, where: here.where, error, scopes: await scopesOf top}
+  # The renderer learns the pause's number only once every V8 command for it
+  # here has been answered, so a line or a listing naming it never lands in
+  # the middle of them. A Stop does not need the number: it goes by `halted`.
+  report = (talk, halt, at = 0, error = null) ->
+    frames = halt.callFrames
+    top    = frames[at]
+    here   = stopped = {frames, at, where: null, error, seq: ++seq}
+    await hooks.pausing 'report' if hooks.pausing
+    here.where = await locate talk, top
+    return unless current halt
+    owner = await ownerOf talk, top
+    return unless current halt
+    scopes = await scopesOf talk, top
+    return unless current halt
+    tell {type: 'paused', seq: here.seq, owner, where: here.where, error, scopes}
 
   # The frame a pause shows, and the one the prompt and the pane work in.
   pausedFrame = -> stopped.frames[stopped.at]
@@ -429,16 +530,51 @@ module.exports = (win) ->
   inRun = (frames) ->
     frames.some (frame) -> frame.functionName is 'dispatchRun' and scriptOf(frame)?.url?.endsWith BOOT
 
-  ownerOf = (frame) ->
+  # JS of ours run in the paused worker while a pause is set up. It takes the
+  # prompt's turn, so a Stop landing meanwhile waits for it rather than
+  # sending a resume into running JS: a step sent into a running evaluation
+  # segfaults the renderer (AGENTS.md), and a resume has not been shown to be
+  # any safer.
+  callInPause = (work) ->
+    reply = await takeTurn work
+    throw new Error 'the worker has gone' unless reply
+    reply
+
+  # JS run on a value we hold an id for, bounded. Only evaluateOnCallFrame can
+  # be told to give up (Runtime.callFunctionOn has no timeout), and it takes
+  # an expression, not a value. So the value is parked on the worker's global
+  # first, and the expression takes it off again before it runs anything of
+  # the author's -- `body`, which names it `v`. If the evaluation fails for
+  # any reason but being given up on, the value stays parked there, which is
+  # harmless: nothing reads it, and the next worker starts without it.
+  onParked = (talk, frame, value, body, more = {}) ->
     global = frame.scopeChain.find (scope) -> scope.type is 'global'
-    {result} = await send 'Runtime.callFunctionOn',
-      objectId: global.object.objectId, returnByValue: yes
-      functionDeclaration: 'function () { return REPL.owner }'
+    await talk 'Runtime.callFunctionOn',
+      objectId: global.object.objectId, arguments: [value]
+      functionDeclaration: "function (v) { globalThis.#{STASH} = v }"
+    talk 'Debugger.evaluateOnCallFrame', {
+      callFrameId: frame.callFrameId, throwOnSideEffect: no, timeout: EVAL_LIMIT
+      expression: "(function (v) { delete globalThis.#{STASH}; return #{body} })(globalThis.#{STASH})"
+      more...
+    }
+
+  # REPL is on the worker's global, where a sketch can clobber it. Unread,
+  # the owner would be undefined and the renderer would drop a live worker's
+  # pause as a replaced one's, leaving it halted with nothing said. Read in
+  # the frame, bounded, since a sketch could as well make it a getter that
+  # never returns.
+  ownerOf = (talk, frame) ->
+    {result, exceptionDetails} = await callInPause talk 'Debugger.evaluateOnCallFrame',
+      callFrameId: frame.callFrameId, expression: 'globalThis.REPL.owner'
+      returnByValue: yes, throwOnSideEffect: no, timeout: EVAL_LIMIT
+    throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
+    # Replaced rather than nulled, REPL reads without a murmur.
+    throw new Error "REPL.owner reads #{typeof result.value}, not a number" unless typeof result.value is 'number'
     result.value
 
   # The first frame the author wrote, innermost first, or -1.
-  authorsFrame = (frames) ->
-    for frame, depth in frames when not ours(frame) and await locate frame
+  authorsFrame = (talk, frames) ->
+    for frame, depth in frames when not ours(frame) and await locate talk, frame
       return depth
     -1
 
@@ -450,12 +586,12 @@ module.exports = (win) ->
     {value: thrown.value}
 
   # The report the run would have made, asked of the worker, so an error that
-  # stops and one that just ends the run say the same thing.
-  failureOf = (thrown, frame) ->
-    global = frame.scopeChain.find (scope) -> scope.type is 'global'
-    {result, exceptionDetails} = await send 'Runtime.callFunctionOn',
-      objectId: global.object.objectId, returnByValue: yes, arguments: [argumentFor thrown]
-      functionDeclaration: 'function (error) { return REPL.failure(error) }'
+  # stops and one that just ends the run say the same thing. Bounded: making
+  # it reads the thrown value, which can be the author's object with getters
+  # of its own.
+  failureOf = (talk, thrown, frame) ->
+    {result, exceptionDetails} = await callInPause onParked talk, frame, argumentFor(thrown),
+      'globalThis.REPL.failure(v)', returnByValue: yes
     throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
     result.value
 
@@ -465,39 +601,51 @@ module.exports = (win) ->
   # being let go; a rejection, which never ends a run; an error thrown after
   # the run ended, which Robert decided is reported and never stopped on
   # (2026-10-05); and one with nothing of the author's on the stack, ours.
-  onException = (params) ->
-    frames = params.callFrames
-    goOn   = not errorStops or params.reason isnt 'exception' or
-      params.data?.className is 'Interrupted' or not inRun frames
+  #
+  # A Run while the worker is asked replaces the session, and a Stop resumes
+  # V8; either way the pause is over (`current`), and reported it would land
+  # in the new run's console or over the Stop.
+  onException = (talk, halt) ->
+    frames = halt.callFrames
+    goOn   = not errorStops or halt.reason isnt 'exception' or
+      halt.data?.className is 'Interrupted' or not inRun frames
     return onward (chase?.method ? 'Debugger.resume') if goOn
-    # A Run while the worker is asked replaces the session; the old pause is
-    # then nobody's, and reported it would land in the new run's console.
-    id = session
     try
-      at = await authorsFrame frames
+      await hooks.pausing 'exception' if hooks.pausing
+      at = await authorsFrame talk, frames
+      return unless current halt
       return onward (chase?.method ? 'Debugger.resume') if at < 0
       chase = null
-      failure = await failureOf params.data, frames[at]
-      return unless session is id
+      failure = await failureOf talk, halt.data, frames[at]
+      return unless current halt
       # A thrown string or number has no stack to find its line in; the
       # pause knows it.
-      failure.line ?= (await locate frames[at]).line
-      await report frames, at, failure
+      failure.line ?= (await locate talk, frames[at]).line
+      return unless current halt
+      await report talk, halt, at, failure
     catch error
-      return unless session is id
-      chase = null
-      # Left paused, the run would never end and Stop could not reach it: it
-      # ends the ordinary way instead, reported by the worker as it would
-      # have been with error stops off.
-      tell type: 'problem', text: "debugger: could not stop at the error -- #{error.message.split('\n')[0]}"
-      onward 'Debugger.resume'
+      return unless current halt
+      letGo 'stop at the error', error
+
+  # A pause that could not be set up is let go and said. Left halted, the
+  # renderer, never told of it, could neither show it nor continue it, and
+  # only Stop would get the sketch back. An error then ends its run the
+  # ordinary way, reported by the worker as it would have been with error
+  # stops off.
+  letGo = (what, error) ->
+    stopped = null
+    chase   = null
+    tell type: 'problem', text: "debugger: could not #{what} -- #{error.message.split('\n')[0]}"
+    onward 'Debugger.resume'
 
   # Every pause comes through here, wanted or not, and most are not the one to
   # show: the breakpoint's own frame, a helper, our plumbing, or the same line
   # a step started on. Those are stepped past without the renderer hearing.
-  onPaused = (params) ->
-    return onException params if params.reason in THROWN
-    frames = params.callFrames
+  # Whatever it takes to find out, it asks of this pause's own session.
+  onPaused = (halt) ->
+    talk = speaker()
+    return onException talk, halt if halt.reason in THROWN
+    frames = halt.callFrames
     top    = frames[0]
     script = scriptOf top
 
@@ -506,18 +654,24 @@ module.exports = (win) ->
     if script?.url is BREAKPOINT
       return onward 'Debugger.stepOut'
 
-    if chase
-      chase.count += 1
-      if chase.count < CHASE_LIMIT
-        return onward 'Debugger.stepOut' if ours top
-        where = await locate top
-        same  = where and chase.line? and where.line is chase.line and
-          frames.length is chase.depth and top.location.scriptId is chase.scriptId
-        return onward chase.method if not where or same
-    chase = null
-    report frames
+    try
+      if chase
+        chase.count += 1
+        if chase.count < CHASE_LIMIT
+          return onward 'Debugger.stepOut' if ours top
+          where = await locate talk, top
+          return unless current halt
+          same  = where and chase.line? and where.line is chase.line and
+            frames.length is chase.depth and top.location.scriptId is chase.scriptId
+          return onward chase.method if not where or same
+      chase = null
+      await report talk, halt
+    catch error
+      return unless current halt
+      letGo 'pause', error
 
   onward = (method) ->
+    halted = null
     send(method).catch (error) -> tell type: 'problem', text: "debugger: #{error.message}"
 
   cdp.on 'message', (event, method, params, sessionId) ->
@@ -530,8 +684,11 @@ module.exports = (win) ->
         when 'Debugger.scriptParsed'
           remember params if sessionId is session
         when 'Debugger.paused'
-          await onPaused params if sessionId is session
+          if sessionId is session
+            halted = params
+            await onPaused params
         when 'Debugger.resumed'
+          halted = null if sessionId is session
           if sessionId is session and stopped
             stopped = null
             tell type: 'resumed'
@@ -565,8 +722,12 @@ module.exports = (win) ->
     forced = no unless stopped or chase
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
-    # them back.
-    await send('Debugger.setSkipAllPauses', skip: no).catch(->) if enabled
+    # them back. Only then, and never into a turn: every arm used to send
+    # this, and an edit that armed or disarmed the buffer sent it into the
+    # prompt's endless line (a reviewer of cbe904b, 2026-10-06).
+    if enabled and skipped
+      skipped = no
+      await whenFree(-> send 'Debugger.setSkipAllPauses', skip: no if session).catch(->)
     armed
 
   # Suspend now, wherever the sketch is. Arms on demand, since this is the
@@ -575,8 +736,11 @@ module.exports = (win) ->
     return true if stopped
     forced = yes
     return false unless await settle()
-    chase = {method: 'Debugger.stepInto', count: 0}
-    await send 'Debugger.pause'
+    # A pause still being set up can be running JS of ours in the worker.
+    await whenFree ->
+      return if stopped
+      chase = {method: 'Debugger.stepInto', count: 0}
+      send 'Debugger.pause'
     true
 
   # To the next line that runs, wherever it is: into a sketch function, back
@@ -603,36 +767,59 @@ module.exports = (win) ->
       depth:    stopped.frames.length
       scriptId: top.location.scriptId
       count:    0
+    halted = null
     await send 'Debugger.stepInto'
     true
 
   # `skip` is for Stop: the sketch has to run to its next yield point to
   # notice the interrupt, and must not stop at a breakpoint on the way.
+  #
+  # By V8's own state, not by whether the renderer has been shown the pause:
+  # a Stop can land while an error pause is still being set up, and went
+  # nowhere when this asked `stopped` -- V8 stayed halted until Stop's
+  # deadline shot the worker, blaming a missing yield point.
+  #
+  # Each wait for the turn is followed by its command in the same tick, so no
+  # turn can start between the two.
   resume = (skip = no) ->
     return false unless enabled
+    return 'evaluating' if asking and not skip
+    talk = speaker()
     # Stop has to get through, so it waits out the evaluation, which
-    # EVAL_LIMIT bounds; anything else is the author's to retry.
-    if asking
-      return 'evaluating' unless skip
-      await asking.catch(->)
-    chase = null
-    await send('Debugger.setSkipAllPauses', skip: yes).catch(->) if skip
-    return true unless stopped
-    await send 'Debugger.resume'
+    # EVAL_LIMIT bounds; anything else is the author's to retry. Waited out
+    # until none is left: setting a pause up runs one after another.
+    await asking.catch(->) while asking
+    # A worker gone meanwhile took its pause with it, and this Stop is done.
+    return true unless talk.live()
+    # Over from here, before anything else is awaited: a pause still being set
+    # up sees that and starts nothing more in the worker.
+    was    = halted
+    halted = null
+    chase  = null
+    if skip
+      await hooks.stopping() if hooks.stopping
+      skipped = yes
+      await whenFree(-> talk 'Debugger.setSkipAllPauses', skip: yes).catch(->)
+      # A step sent just before the Stop can land while that was out; its
+      # pause, set up or still being set up, is let go as well.
+      await asking.catch(->) while asking
+      return true unless talk.live()
+      was   or= halted
+      halted  = null
+    await talk 'Debugger.resume' if was
     true
 
   # The `>` prompt, against the paused frame rather than the image: the
   # author asked about *this* call's `angle`. Assignments reach the frame.
-  evaluate = (source) ->
-    return null unless stopped
+  # Only in the pause it was typed at, as with a getter: a line sent before
+  # the renderer heard a step had begun, or that pause was over, must not
+  # land in the next one, possibly while it is still being set up.
+  evaluate = (pauseSeq, source) ->
+    return null unless stopped?.seq is pauseSeq and not chase
     return {text: '*** still evaluating the last line ***', kind: 'sys'} if asking
-    asking = answerFor source
-    try
-      return await asking
-    finally
-      asking = null
+    takeTurn answerFor speaker(), source
 
-  answerFor = (source) ->
+  answerFor = (talk, source) ->
     try
       js = CoffeeScript.compile source, bare: yes
     catch error
@@ -641,9 +828,10 @@ module.exports = (win) ->
     # which inside an evaluation would make a new variable and leave the
     # frame's own untouched -- `angle = 0` would change nothing.
     js = js.replace /^\s*var [^;]*;\s*/, ''
-    top = pausedFrame()
+    here = stopped
+    top  = pausedFrame()
     try
-      {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
+      {result, exceptionDetails} = await talk 'Debugger.evaluateOnCallFrame',
         callFrameId: top.callFrameId, expression: js, generatePreview: yes, timeout: EVAL_LIMIT
     catch error
       throw error unless /terminated/.test error.message
@@ -652,17 +840,21 @@ module.exports = (win) ->
       text = exceptionDetails.exception?.description?.split('\n')[0] ? exceptionDetails.text
       return {text, kind: 'err'}
     # Shown the way the worker shows an answer anywhere else, by the same
-    # function, so a paused answer and a running one read alike.
-    text = if result.objectId
-      shown = await send 'Runtime.callFunctionOn',
-        objectId: result.objectId, returnByValue: yes
-        functionDeclaration: 'function () { return REPL.show(this) }'
-      shown.result?.value ? remoteText result
-    else
-      remoteText result
+    # function, so a paused answer and a running one read alike. Showing it
+    # can run the author's code -- a Proxy's traps, a getter -- so it is
+    # bounded too: unbounded, a trap that looped held the turn, and every
+    # Stop with it, for good (a reviewer of cbe904b, 2026-10-06).
+    text = remoteText result
+    if result.objectId
+      try
+        shown = await onParked talk, top, {objectId: result.objectId}, 'globalThis.REPL.show(v)', returnByValue: yes
+        text = shown.result.value ? text unless shown.exceptionDetails
+      catch error
+        throw error unless /terminated/.test error.message
+        text += " -- gave up showing it after #{EVAL_LIMIT / 1000}s"
     # The answer may have changed what the pane shows, so the pane comes back
     # with it: the author sees `b = 10` land before the prompt is free again.
-    {text, kind: 'value', pane: {seq: stopped.seq, where: stopped.where, scopes: await scopesOf top, yes}}
+    {text, kind: 'value', pane: {seq: here.seq, where: here.where, scopes: await scopesOf talk, top, yes}}
 
   # Opening an object in the pane. Only while the pause that produced the id
   # is still the one we are in; after a resume the id means nothing. Not while
@@ -692,35 +884,23 @@ module.exports = (win) ->
   getter = (pauseSeq, owner, name) ->
     return null unless stopped?.seq is pauseSeq and not chase
     return 'evaluating' if asking
-    asking = runGetter owner, name
-    try
-      return await asking
-    finally
-      asking = null
+    takeTurn runGetter speaker(), owner, name
 
-  # Only evaluateOnCallFrame can be told to give up (Runtime.callFunctionOn
-  # has no timeout), and it takes an expression, not an object. So the owner
-  # is parked on the worker's global first, and the expression takes it off
-  # again before it runs anything of the author's. If the evaluation fails for
-  # any reason but being given up on, the owner stays parked there, which is
-  # harmless: nothing reads it, and the next worker starts without it.
-  # Whatever happens, the pane comes back with the answer: a getter can change
-  # what the rest of it shows.
-  runGetter = (owner, name) ->
-    await send 'Runtime.callFunctionOn',
-      objectId: owner, functionDeclaration: "function () { globalThis.#{STASH} = this }"
+  # Bounded by onParked. Whatever happens, the pane comes back with the
+  # answer: a getter can change what the rest of it shows.
+  runGetter = (talk, owner, name) ->
+    here  = stopped
     top   = pausedFrame()
-    reply = await getterValue top, name
-    reply.pane = {seq: stopped.seq, where: stopped.where, scopes: await scopesOf top, yes}
+    reply = await getterValue talk, top, owner, name
+    reply.pane = {seq: here.seq, where: here.where, scopes: await scopesOf talk, top, yes}
     reply
 
   # Thrown and given up read as errors, said in the pane's voice rather than
   # the console's.
-  getterValue = (top, name) ->
+  getterValue = (talk, top, owner, name) ->
     try
-      {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
-        callFrameId: top.callFrameId, generatePreview: yes, throwOnSideEffect: no, timeout: EVAL_LIMIT
-        expression: "(function (o) { delete globalThis.#{STASH}; return o[#{JSON.stringify name}] })(globalThis.#{STASH})"
+      {result, exceptionDetails} = await onParked talk, top, {objectId: owner},
+        "v[#{JSON.stringify name}]", generatePreview: yes
     catch error
       throw error unless /terminated/.test error.message
       return {text: "gave up after #{EVAL_LIMIT / 1000}s", kind: 'err'}
@@ -742,5 +922,11 @@ module.exports.stopOnErrors = (stop) ->
   await Promise.all (controller.exceptions() for controller from controllers.values())
   errorStops
 
+module.exports.hooks = hooks
+
 # For the suite: how many scripts and source maps each live session is keeping.
 module.exports.kept = -> (controller.kept() for controller from controllers.values())
+
+# For the suite: every command sent into a running evaluation so far (see
+# `watched`). Always empty outside BEANS_TEST.
+module.exports.crossings = -> crossings[..]
