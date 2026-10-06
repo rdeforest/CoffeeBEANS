@@ -821,6 +821,13 @@ module.exports = (t) ->
     ['o, two spaces, Esc, j .',          2, ['o', ' ', ' ', 'Escape', 'j', '.'],       TWICE "    "]
     ['qq o Esc q, j @q',                 2, ['q', 'q', 'o', 'Escape', 'q', 'j', '@', 'q'], TWICE ""]
     ['o Esc, j .',                       2, ['o', 'Escape', 'j', '.'],                 TWICE ""]
+    # A `.` inside a macro: codemirror-vim's repeat clears its playing flag as
+    # it ends, though the macro still plays, so the spaces the macro typed
+    # after it read as indent and were taken back. Failed before K5's second
+    # fixer (Claude, 2026-10-06) decided playback once per vim command.
+    ['jx qq . j o ·· Esc q, j x @q',     1, ['j', 'x', 'q', 'q', '.', 'j', 'o', ' ', ' ', 'Escape', 'q', 'j', 'x', '@', 'q'],
+                                                                                           "if x\nfoo\n  bar\n    \n  q\n  zot\n    \nbaz\n",
+                                                                                           "if x\n  foo\n  bar\n  qux\n  zot\nbaz\n"]
   ]
   for [typed, line, keys, wanted, doc] in cases
     got = await vimDid keys, line, doc

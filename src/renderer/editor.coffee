@@ -448,6 +448,7 @@ installVimCommands = ->
 #   cc Esc                           blank  ours: ··
 #   o Ctrl-T Esc (by `.`)            blank  ours: ····
 #   o Enter Enter Esc (by @q)        blank  ours: ··, ··, then blank
+#   o ·· Esc after a `.`, in one @q  ····   typed, so kept
 #
 # So: a newline brings an indent (o, O, Enter) and a linewise change keeps
 # one (cc, S, cj); typing on the line, or moving along it, makes it the
@@ -462,7 +463,9 @@ installVimCommands = ->
 # coarser: what it types or Ctrl-T does on the line makes it the author's,
 # and a cc keeps its indent. The rows marked "ours" are where that leaves an
 # indent Vim takes back; the Enters keep theirs because a played-back Enter
-# is inserted text, not CodeMirror's newline. None takes back too much.
+# is inserted text, not CodeMirror's newline. None takes back too much --
+# the last row did, until playback was decided once per vim command
+# (playedBack, below).
 
 indentOnly = (line) -> line.length > 0 and not /\S/.test line.text
 
@@ -522,18 +525,32 @@ byAuthor = (tr, line) ->
 # A macro (@q) or a repeat (.) plays its typing back inside the one vim
 # command that plays it, so there byCommand would take typed spaces for an
 # indent. codemirror-vim keeps the flag only in its global state, reached
-# through what it calls a testing hook.
-replaying = -> Vim.getVimGlobalState_().macroModeState.isPlaying
+# through what it calls a testing hook, and a `.` lowers it as it ends even
+# inside a macro still playing. So it is read once per vim command, at the
+# command's first transaction, insert mode or not -- @q and `.` have raised
+# it by then, a live o or cc has not -- and kept on codemirror-vim's
+# operation, which spans the whole command, a macro's nested keys included,
+# and is new for each command typed (traced by K5's second fixer, Claude,
+# 2026-10-06). 3o's Esc plays its copies outside any vim operation, so they
+# go through byAuthor without asking.
+#
+# A macro that calls itself (`j@q` recorded into q) overflows the stack, and
+# with no finally around the playback codemirror-vim's flag stays raised
+# until a reload. From then on K5 errs only the safe way, keeping indents Vim
+# would take back, and `.` is dead in the plugin itself.
+playedBack = (cm) ->
+  cm.curOp.beansPlaying ?= Vim.getVimGlobalState_().macroModeState.isPlaying
 
 followIndent = EditorState.transactionFilter.of (tr) ->
-  cm = getCM view
+  cm      = getCM view
+  liveVim = cm.curOp?.isVimOp and not playedBack cm
   return tr unless cm.state.vim.insertMode
   made = newIndent tr
   return [tr, {effects: setIndent.of made}] if made?
   at = tr.startState.field indentField
   return tr unless at?
   line = tr.startState.doc.lineAt at
-  if cm.curOp?.isVimOp and not replaying() then byCommand tr, line else byAuthor tr, line
+  if liveVim then byCommand tr, line else byAuthor tr, line
 
 takeBack = ->
   at = view.state.field indentField
