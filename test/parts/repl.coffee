@@ -430,6 +430,22 @@ module.exports = (t) ->
     keyed[0] is 'print 2' and pasted[0] is 'print 2' and escaped.join('|') is 'circle 1, 2, 3|circle 1, 2, 3',
     JSON.stringify {keyed, pasted, escaped}
 
+  # A recalled line, edited, is the one Down comes back to: node gives back
+  # pr here. So does a search started from an edited line and taken by Down.
+  await fromTheBottom ''
+  await press 'Up', 'Up', 'C-u'
+  await typeText 'pr'
+  edited = await pressing 'Up', 'Down', 'Down'
+  await fromTheBottom ''
+  await press 'Up', 'C-u'
+  await typeText 'zz'
+  await press 'C-r'
+  await typeText '2'
+  searched = await pressing 'Down', 'Down'
+  check 'Down comes back to a recalled line as it was edited, not to the line before the walk',
+    edited.join('|') is 'print 2|print 1|pr' and searched.join('|') is 'print 1|zz',
+    JSON.stringify {edited, searched}
+
   # Node's Ctrl-P and Ctrl-N are its history keys without the prefix: they
   # end the walk and step through every line, repeats passed over.
   await fromTheBottom 'ci'
@@ -1083,11 +1099,13 @@ noisyToo = 1
     took.value is 'noisy.betaTwo' and took.from is 13 and closed? and not closed.open and ran is '' and
       (await js "return Prompt.entered()").length is earlier.length,
     JSON.stringify {took, closed, ran}
-  # From the start of the line, where Up's prefix is empty: at the end of it,
-  # nothing in the history starts with noisy.betaTwo.
-  await press 'C-a', 'Up'
+  # Ctrl-P, the list's key as Up is, and one that moves no caret: a caret
+  # move would close a list left open and hide the fault. Up itself would
+  # prove nothing here, since nothing in the history starts with
+  # noisy.betaTwo, and Ctrl-P walks every line.
+  await press 'C-p'
   recalled = await promptNow()
-  check 'once the list has closed, Up is the history again',
+  check 'once the list has closed, its keys are the history\'s again',
     took.value is 'noisy.betaTwo' and recalled.value is earlier.at(-1),
     JSON.stringify {took: took.value, recalled: recalled.value, last: earlier.at(-1)}
 

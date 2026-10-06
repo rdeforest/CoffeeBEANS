@@ -146,9 +146,13 @@ askBytes  = new Uint8Array sab, LAYOUT.askOffset, LAYOUT.ASK_BYTES
 entered   = []
 enteredAt = 0
 
-# The line being written, and its caret, from when the history was entered,
-# for Down to come back to. And what every line Up and Down recall must
-# start with while a walk is under way; null between walks (see recall).
+# The line being written, and its caret, for Down to come back to: taken
+# whenever a walk leaves a line that is not the history entry it was on, so
+# an edited recall counts as much as a line typed at the bottom. Mid-walk the
+# line on show is always entered[enteredAt] until it is edited, and at the
+# bottom entered[enteredAt] is undefined. And what every line Up and Down
+# recall must start with while a walk is under way; null between walks (see
+# recall).
 draft        = null
 recallPrefix = null
 
@@ -292,7 +296,7 @@ recall = (step, prefix) ->
   index = enteredAt + step
   index += step while 0 <= index < entered.length and (entered[index] is shown or not entered[index].startsWith prefix)
   return unless 0 <= index <= entered.length
-  draft = {line: shown, at: caret()} if enteredAt is entered.length
+  draft = {line: shown, at: caret()} unless shown is entered[enteredAt]
   enteredAt = index
   {line, at} = if index is entered.length then draft else {line: entered[index], at: entered[index].length}
   promptLine.value = line
@@ -724,7 +728,7 @@ requery = (query) ->
 
 endSearch = ->
   if searching.match?
-    draft     = {line: searching.original, at: searching.caret} if searching.from is entered.length
+    draft     = {line: searching.original, at: searching.caret} unless searching.original is entered[searching.from]
     enteredAt = searching.match
   searching = null
   promptMark.textContent = '>'
