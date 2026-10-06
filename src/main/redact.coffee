@@ -55,14 +55,21 @@ folder = (where) ->
 # Anyone's home folder, not only this account's: the same folder reached by
 # another spelling -- Windows's 8.3 `ROBERT~1`, a file URL's `Robert%20Smith`
 # or `jos%C3%A9`, a symlink's other path -- and another account's. A
-# separator is a slash, a backslash, either doubled by JSON, or one
-# percent-encoded; the name runs to the next separator, through single
-# spaces only when a separator or a closing quote follows (`/Users/Mike
-# Smith/Library`, `'C:\Users\Mike Smith'`), so prose after a bare /home/bob
-# is left alone. An apostrophe inside a name is part of it: O'Brien.
-SEPARATOR = '(?:\\\\\\\\|[\\\\/]|%2F|%5C)'
+# separator is a slash, a backslash, either doubled by JSON, a slash JSON
+# escaped (`\/`), or one percent-encoded. An apostrophe inside a name is
+# part of it: O'Brien.
+SEPARATOR = '(?:\\\\\\\\|\\\\/|[\\\\/]|%2F|%5C)'
 NAME_PART = "(?:[^\\\\/\\s'\"<>%:;,()[\\]{}]|%(?!2F|5C)[0-9A-F]{2}|'(?=[A-Za-z]))+"
-NAME      = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}|['\"`]))?"
+# The name runs to the next separator, and through single spaces only where
+# something says it goes on: a separator after it (`/Users/Mike
+# Smith/Library`), or the quote the path opened with, closing it
+# (`'C:\Users\Mike Smith'`). So prose after a bare /home/bob is left alone,
+# and so is the rest of `/home/bob doesn't exist, try 'x'`. Group 2 is the
+# opening quote; the closing one is checked to be a quote too, since a
+# group that never matched matches the empty string.
+QUOTE_OPENS  = "(?:(?<=(['\"`]))|)"
+QUOTE_CLOSES = "\\2(?<=['\"`])(?![A-Za-z])"
+NAME = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}|#{QUOTE_CLOSES}))?"
 # A web address's path is the site's, not the player's: /home/ and /users/42/
 # there are how a load failure says what it was loading. Its query and
 # fragment are not exempt, since a local path is often passed in one. The
@@ -70,18 +77,31 @@ NAME      = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}|['\"`]))?"
 # lookbehind that ran back over the line made every position cost the
 # line's length, and one 100k-character line took seconds in main (V2's
 # third review, 2026-10-06). So the rules below put back group 1 when set.
-IN_URL = "(\\bhttps?://[^\\s'\"<>`?#]*)|"
-# A path's root, not a folder inside one: `sketches/media/boom.wav` and
-# `<data>/sketches/home/menu.coffee` are the player's own folders. Straight
-# after a percent-encoded separator is a root too.
-AT_ROOT = "(?<![\\w.~>-](?<!%2F|%5C))"
+# JSON's escaped `https:\/\/` is an address too.
+IN_URL = "(\\bhttps?:\\\\?/\\\\?/[^\\s'\"<>`?#]*)|"
+# A home or media folder anywhere but inside the player's own folders,
+# which are already `<data>`, `<app>` or `~` by now: `~/game/media/sounds`
+# and `<data>/sketches/home/menu.coffee` keep their names. Anywhere else
+# counts, since a path can start under any root -- Git Bash's
+# `/c/Users/Robert Smith`, WSL's `/mnt/c/Users`, `/Volumes/Backup/Users`,
+# `/net/nas/home/lena`, a compiler's `-I/home/bob/include`, a shell's
+# `>/home/bob/log`. 34ce7fc looked only at the one character before, and
+# let all of those through. The cost, a known over-redaction chosen on the
+# orchestrator's instruction (V2's fourth fixer, 2026-10-06): a relative
+# `sketches/media/boom.wav` or `y = x/media/2` is taken too, as at bc1ee71.
+# The lookbehind runs only where a home or media folder starts, and is
+# bounded, so a long line still costs its length, not its length squared.
+OWN_ROOT = "(?<!(?:<data>|<app>|~)(?:[\\\\/]{1,2}[^\\\\/\\s'\"<>:,;]{1,255}){1,16})"
 
-# Silverblue's /var/home/<user> is reached through its /var.
-HOME_SHAPED = new RegExp "#{IN_URL}#{AT_ROOT}(?:[A-Z](?::|%3A))?(?:#{SEPARATOR}var)?#{SEPARATOR}(?:Users|home)#{SEPARATOR}#{NAME}", 'gi'
+# Silverblue's /var/home/<user> is reached through its /var. A drive letter
+# only where a word does not run into it: `path:/home/bob` keeps its `h:`.
+HOME_HEAD   = "(?:(?<!\\w)[A-Z](?::|%3A))?(?:#{SEPARATOR}var)?#{SEPARATOR}(?:Users|home)#{SEPARATOR}"
+HOME_SHAPED = new RegExp "#{IN_URL}(?=#{HOME_HEAD})#{OWN_ROOT}#{QUOTE_OPENS}#{HOME_HEAD}#{NAME}", 'gi'
 # A drive udisks mounted for its owner: /media/<user> on Debian and Ubuntu,
-# /run/media/<user> on Fedora and Arch. The mount point stays, since where a
-# sketch was loaded from can be the bug.
-MOUNTED = new RegExp "#{IN_URL}#{AT_ROOT}((?:#{SEPARATOR}run)?#{SEPARATOR}media#{SEPARATOR})#{NAME}", 'gi'
+# /run/media/<user> (or /var/run/media/<user>) on Fedora and Arch. The
+# mount point stays, since where a sketch was loaded from can be the bug.
+MOUNT_HEAD = "(?:#{SEPARATOR}(?:var#{SEPARATOR})?run)?#{SEPARATOR}media#{SEPARATOR}"
+MOUNTED    = new RegExp "#{IN_URL}(?=#{MOUNT_HEAD})#{OWN_ROOT}#{QUOTE_OPENS}(#{MOUNT_HEAD})#{NAME}", 'gi'
 # The shell's way to another account's home, `~bob/games`. Only before a
 # path, so `~str.indexOf` and `~x/2` are left to be code.
 TILDE_HOME = new RegExp "#{IN_URL}(?<![\\w~])~[A-Za-z_][\\w.-]*(?=[\\\\/](?![\\d\\s(]))", 'g'
@@ -143,8 +163,18 @@ pathLike = (run) ->
 base64ish = (run) -> mixed(run) and not pathLike run
 
 # Where a value is the last thing on its line, `PASSWORD = hunter2`, it is
-# being stated, not computed.
-endsLine = (text, at) -> /^[\s;,]*$/.test text[at..].split('\n')[0]
+# being stated, not computed. Looked for from `at` and no further than the
+# line's end: splitting off the rest of the text cost every `x = 1` in a
+# long sketch the sketch's length, and 400KB of them 36s (V2's fourth
+# review, 2026-10-06).
+LINE_END = /(?:[^\S\n]|[;,])*(?:\n|$)/y
+endsLine = (text, at) ->
+  LINE_END.lastIndex = at
+  LINE_END.test text
+
+# Space within a line: a non-breaking or ideographic space as well as a
+# space or a tab, or `password:\u00a0hunter2` would keep its value.
+INLINE = '[^\\S\\r\\n\\u2028\\u2029]'
 
 SECRET = '<secret>'
 
@@ -157,7 +187,9 @@ patterns = ({home, user, host, data, app}) ->
   hosts = [...new Set [host, host?.split('.')[0]]].filter Boolean
 
   [
-    {name: 'private key', find: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, put: SECRET}
+    # Not across another BEGIN: one with no END would otherwise search to the
+    # end of the text from every BEGIN after it.
+    {name: 'private key', find: /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S])*?-----END [A-Z ]*PRIVATE KEY-----/g, put: SECRET}
     (for [where, put] in folders
       {name: "folder #{put}", find: folder(where), put: put})...
     # \\server\share names a machine and, often, whose folder it is:
@@ -169,7 +201,7 @@ patterns = ({home, user, host, data, app}) ->
       put:  '$1$1<share>'
     }
     {name: 'home-shaped folder', find: HOME_SHAPED, put: (match, url) -> url ? '~'}
-    {name: 'mounted drive', find: MOUNTED, put: (match, url, mount) -> url ? "#{mount}<user>"}
+    {name: 'mounted drive', find: MOUNTED, put: (match, url, quote, mount) -> url ? "#{mount}<user>"}
     {name: 'home by account name', find: TILDE_HOME, put: (match, url) -> url ? '~'}
     {name: 'password in a URL', find: /(?<=\/\/)[^\s\/@:]+:[^\s\/@]+(?=@)/g, put: SECRET}
     {name: 'JSON web token', find: /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*/g, put: SECRET}
@@ -213,13 +245,16 @@ patterns = ({home, user, host, data, app}) ->
     # name -- `PASSWORD=hunter2`, a query string's `token=`, a header's
     # `X-Api-Key: abc` -- or ends its line, `PASSWORD = hunter2`; but not
     # from code that computes it, `secret = random 100` in a guessing game,
-    # nor a call like `token = nextToken()`. All on one line: across a line
-    # end, `config.yml:` took the next line's `password:` for its value and
-    # hid it. The name is bounded so that a long run of letters costs its
-    # length, not its length squared.
+    # nor a call like `token = nextToken()`. Across a line end only to a
+    # quoted value, `{"password":\n"hunter2"}`, and never to one that is
+    # itself a name: `config.yml:` once took the next line's `password:` for
+    # its value and hid it, and `db:` would take `"password":` the same way.
+    # The name is bounded so that a long run of letters costs its length,
+    # not its length squared.
     {
       name: 'secret assignment'
-      find: /([A-Za-z_][\w-]{0,63})(["']?[ \t]*(?::|=(?![=>]))[ \t]*)("[^"\n]*"|'[^'\n]*'|[^\s"'`,;&#()[\]{}]+(?:\([^\s()]*\))?)/g
+      find: new RegExp "([A-Za-z_][\\w-]{0,63})([\"']?#{INLINE}*(?::|=(?![=>]))(?:\\s*(?=[\"'])|#{INLINE}*))" +
+        "(\"[^\"\\n]*\"(?!#{INLINE}*:)|'[^'\\n]*'(?!#{INLINE}*:)|[^\\s\"'`,;&#()[\\]{}]+(?:\\([^\\s()]*\\))?)", 'g'
       put:  (match, name, between, value, offset, text) ->
         quoted = value[0] in ['"', "'"]
         head   = value.split('(')[0]
@@ -233,7 +268,7 @@ patterns = ({home, user, host, data, app}) ->
     # value that ends the line or looks random.
     {
       name: 'secret after its name'
-      find: new RegExp "(?<![\\w-])(#{SECRET_WORDS.join '|'})([ \t]+)([^\\s\"'`,;&]+)", 'gi'
+      find: new RegExp "(?<![\\w-])(#{SECRET_WORDS.join '|'})(#{INLINE}+)([^\\s\"'`,;&]+)", 'gi'
       put:  (match, name, between, value, offset, text) ->
         if randomish(value) or endsLine(text, offset + match.length) then "#{name}#{between}#{SECRET}" else match
     }

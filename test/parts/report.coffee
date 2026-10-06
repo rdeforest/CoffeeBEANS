@@ -101,6 +101,21 @@ CASES = [
     ['alice', 'smith'], ['EACCES: ~/x.png'], "a longer name that starts with this account's"]
   ['home-shaped folder', LINKED, "open '/var/home/carol/x.coffee' from <data>/sketches/home/menu.coffee",
     ['carol', '/var'], ["open '~/x.coffee'", '<data>/sketches/home/menu.coffee'], "Silverblue's /var/home, and a folder called home"]
+  # V2's fourth review: a home under a root other than `/` or a drive leaked
+  # at 34ce7fc, which looked only at the one character before it.
+  ['home-shaped folder', SMITH, '$ coffee /c/Users/Robert Smith/Documents/x.coffee; /mnt/c/Users/Dave/AppData; /cygdrive/c/Users/erin/x',
+    ['Robert', 'Smith', 'Dave', 'erin'], ['coffee /c~/Documents/x.coffee;', '/mnt/c~/AppData;', '/cygdrive/c~/x'], 'from Git Bash, WSL and Cygwin']
+  ['home-shaped folder', ALICE, 'fsevents: /Volumes/Macintosh HD/Users/mike/x, /System/Volumes/Data/Users/bob/y; nfs: /net/nas/home/lena/z',
+    ['mike', 'bob', 'lena'], ['/Volumes/Macintosh HD~/x', '/System/Volumes/Data~/y', '/net/nas~/z'], 'on another volume or machine']
+  ['home-shaped folder', ALICE, 'cc -I/home/bob/include >/home/carol/log; file://localhost/home/dave/x; smb://fs/Users/erin/y; PATH=/usr/bin:/home/frank/bin',
+    ['bob', 'carol', 'dave', 'erin', 'frank'], ['-I~/include >~/log;', 'file://localhost~/x;', 'smb://fs~/y;', 'PATH=/usr/bin:~/bin'],
+    'after a flag, a redirect, a host or a colon']
+  ['home-shaped folder', ALICE, '{"path":"\\/home\\/bob\\/x.png"}',
+    ['bob'], ['{"path":"~\\/x.png"}'], 'with its slashes escaped by JSON']
+  # Spaces only through to the quote the path opened with: a contraction's
+  # apostrophe is not one.
+  ['home-shaped folder', ALICE, "ENOENT: /home/bob doesn't exist, try 'x'; and '/home/carol isn't here'",
+    ['bob', 'carol'], ["ENOENT: ~ doesn't exist, try 'x';", "and '~'"], 'before a contraction']
   ['home-shaped folder', ALICE, 'GET https://example.com/open?file=/home/bob/x.png and ?u=file%3A%2F%2F%2Fhome%2Fcarol%2Fy',
     ['bob', 'carol'], ['https://example.com/open?file=~/x.png', 'file%3A%2F%2F~%2Fy'], "a web address's query"]
   ['network share', ALICE, 'EACCES: \\\\fileserver\\Users\\erin\\Documents and \\\\fs\\home$\\frank\\docs',
@@ -109,6 +124,8 @@ CASES = [
     ['fileserver', 'erin'], ['{"path":"\\\\\\\\<share>\\\\x.png"}'], 'doubled by JSON']
   ['mounted drive', PI, 'loaded /run/media/pi/BEANS/x.coffee from the stick at /media/pi',
     ['/pi'], ['/run/media/<user>/BEANS/x.coffee', 'the stick at /media/<user>']]
+  ['mounted drive', ALICE, 'loaded /var/run/media/carol/USB/x.coffee',
+    ['carol'], ['/var/run/media/<user>/USB/x.coffee'], 'through /var/run']
   ['mounted drive', ALICE, 'file:///media/bob/USB/x.coffee, not /home/alice/game/media/sounds/boom.wav nor /home/alice/.local/share/coffeebeans/sketches/media/hit.wav',
     ['bob'], ['file:///media/<user>/USB', '~/game/media/sounds/boom.wav', '<data>/sketches/media/hit.wav'], 'and a folder called media']
   ['home by account name', ALICE, 'open ~bob/.ssh/id_rsa failed; ~carol/games/x.coffee loaded',
@@ -137,6 +154,12 @@ CASES = [
     ['hunter2', '=abc'], ['PGPASSWORD=<secret> SESSIONTOKEN=<secret> psql'], 'glued in capitals']
   ['secret assignment', ALICE, 'config.yml:\npassword: hunter2',
     ['hunter2'], ['config.yml:\npassword: <secret>'], 'under a line that ends in a colon']
+  ['secret assignment', ALICE, 'db:\n  "password": "hunter2"',
+    ['hunter2'], ['db:\n  "password": <secret>'], 'quoted, under a line that ends in a colon']
+  ['secret assignment', ALICE, '{"password":\n"hunter2"} and\npassword =\n  \'hunter3\'',
+    ['hunter2', 'hunter3'], ['{"password":\n<secret>}', '\n  <secret>'], 'quoted, on the next line']
+  ['secret assignment', ALICE, 'password:\u00a0hunter2',
+    ['hunter2'], ['password:\u00a0<secret>'], 'after a non-breaking space']
   ['secret block', ALICE, "config.yml:\nsecret: |\n  hunter2-the-real-one\n\n  and-a-second-line\nnext: 1",
     ['hunter2', 'second-line'], ['secret: ', '\n  <secret>\nnext: 1']]
   ['cookie', ALICE, 'sent Cookie: session=abcdefg12345; theme=dark, got Set-Cookie: sid=s%3Aabc123xyz; Path=/',
@@ -145,6 +168,8 @@ CASES = [
     ['s3cr3t'], ['login bob password <secret>'], 'from .netrc']
   ['secret after its name', ALICE, 'it said wrong password, but I typed password hunter2',
     ['hunter2'], ['wrong password, but I typed password <secret>'], 'ending its line']
+  ['secret after its name', ALICE, 'my password\u3000hunter2',
+    ['hunter2'], ['password\u3000<secret>'], 'after an ideographic space']
   ['e-mail address', ALICE, 'sign-in failed for alice.smith+beans@example.co.uk',
     ['smith', 'example.co.uk'], ['failed for <email>']]
   ['e-mail address', ALICE, 'sign-in failed for jose\u0301.garci\u0301a@example.com',
@@ -220,15 +245,22 @@ KEPT = [
 # Redaction runs in main, in `report:draft`, so a slow line freezes the app.
 # At bc1ee71 three patterns cost the line's length at every position in it
 # (the web-address lookbehind, an unbounded name in `secret assignment`, a
-# lookbehind for `Bearer`), and these took 4.4s, 7.7s, 12.4s, 5.9s and 5.3s;
-# linear, under 30ms each (measured by V2's third fixer, Claude, 2026-10-06,
-# in Electron 44). The bound leaves a loaded runner thirty times that.
+# lookbehind for `Bearer`), and the first five took 4.4s, 7.7s, 12.4s, 5.9s
+# and 5.3s; linear, under 30ms each (measured by V2's third fixer, Claude,
+# 2026-10-06, in Electron 44). At 34ce7fc each `x = 1` and `password a`
+# looked to the end of the text for its line's end, and each BEGIN with no
+# END searched to the end of the text: the last three took 2.2s to 3.6s,
+# now under 50ms (measured by V2's fourth fixer, Claude, 2026-10-06, in
+# Electron 44). The bound leaves a loaded runner twenty times that.
 LONG = [
-  ['a 200,000-character base64 line', crypto.randomBytes(150000).toString 'base64']
-  ['100,000 slashes',                 '/'.repeat 100000]
-  ['100,000 backslashes',             '\\'.repeat 100000]
-  ['100,000 letters',                 'a'.repeat 100000]
-  ['100,000 blank lines',             '\n'.repeat 100000]
+  ['a 200,000-character base64 line',    crypto.randomBytes(150000).toString 'base64']
+  ['100,000 slashes',                    '/'.repeat 100000]
+  ['100,000 backslashes',                '\\'.repeat 100000]
+  ['100,000 letters',                    'a'.repeat 100000]
+  ['100,000 blank lines',                '\n'.repeat 100000]
+  ['20,000 lines of `x = 1`',            'x = 1\n'.repeat 20000]
+  ['20,000 lines of `password a`',       'password a\n'.repeat 20000]
+  ['25,000 BEGINs with no END',          "-----BEGIN #{'RSA PRIVATE'} KEY-----".repeat 25000]
 ]
 LONG_BOUND = 1000
 
@@ -261,12 +293,11 @@ module.exports = (t) ->
     out = Redact.redactor(ALICE) line
     check "comes through whole: #{what}", out is line, JSON.stringify out
 
-  took = for [what, line] in LONG
+  for [what, line] in LONG
     started = performance.now()
     Redact.redactor(ALICE) line
-    [what, Math.round performance.now() - started]
-  check "redaction takes under #{LONG_BOUND}ms on each of five long lines",
-    took.every(([what, ms]) -> ms < LONG_BOUND), JSON.stringify took
+    took = Math.round performance.now() - started
+    check "redaction takes under #{LONG_BOUND}ms on #{what}", took < LONG_BOUND, "#{took}ms"
 
   # The real machine's own: About says nothing a billboard would mind, so it
   # must come through whole -- redacted as a report redacts it, with the

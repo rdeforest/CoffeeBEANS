@@ -421,7 +421,12 @@ it was saved, and the folder opens. Nothing is sent anywhere: open an issue
 at https://github.com/thatsnice/CoffeeBEANS/issues and attach the file.
 
 The patterns are in `src/main/redact.coffee`; they are pattern matching,
-not understanding, so read the report before you attach it.
+not understanding, so read the report before you attach it. They lean
+towards taking too much, on purpose. One such case is known and chosen: a
+`home`, `Users` or `media` folder anywhere outside your own folders is
+taken for someone's home or mounted drive, so a relative
+`sketches/media/boom.wav` comes out `sketches/media/<user>`. Inside your
+own folders it is left alone: `~/game/media/sounds` keeps `sounds`.
 
 ## Layout
 
