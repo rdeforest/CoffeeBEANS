@@ -1,8 +1,11 @@
 # Running, stopping, restarting and failing: the states the app can get
 # into around a sketch, including the ones that used to wedge it.
 
-fsp  = require 'fs/promises'
-path = require 'path'
+fs                    = require 'fs'
+fsp                   = require 'fs/promises'
+path                  = require 'path'
+{spawn}               = require 'child_process'
+{BrowserWindow, Menu} = require 'electron'
 
 module.exports = (t) ->
   {js, wait, check, setDoc, evalAll, consoleText, clearConsole, click, status,
@@ -328,3 +331,179 @@ module.exports = (t) ->
     Object.assign faults, slow: 0, refuse: 0, windows: no
     await js "await Editor.load('scratch'); return true"
     await fsp.rm raceFile, force: yes
+
+  # --- an edit made just before the page goes away ---------------------------
+
+  # Each way a page leaves, with an edit the autosave has not taken. Not in
+  # the test window: on Linux a page reloaded inside it (shown, then
+  # minimised) gets no animation frames ever again (AGENTS.md, Platform
+  # facts). A second window, opened on its own sketch, instead.
+  openPage = (name) ->
+    page = new BrowserWindow
+      show: no
+      webPreferences:
+        contextIsolation: yes
+        nodeIntegration:  no
+        preload:          path.join t.paths.root, 'src', 'main', 'preload.js'
+    page.webContents.setAudioMuted yes
+    await page.loadURL "app://beans/src/renderer/index.html?sketch=#{name}"
+    await onSketch page, name
+    page
+
+  onSketch = (page, name) ->
+    until_ -> page.webContents.executeJavaScript "typeof Editor !== 'undefined' && Editor.name() === '#{name}'"
+
+  # Hands back whether the edit is still waiting for its autosave, which is
+  # the whole premise of each check below.
+  edit = (page, text) -> page.webContents.executeJavaScript """
+    (() => { const v = Editor.view()
+             v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: #{JSON.stringify text} } })
+             return Editor.dirty() })()
+  """
+
+  menuItem = (role) ->
+    items = Menu.getApplicationMenu().items.flatMap (top) -> top.submenu?.items ? []
+    items.find (item) -> item.role is role
+
+  # The menu hands a role the focused window; the hidden page is never
+  # focused, so it is handed over the way the menu would.
+  reload = (page) ->
+    reloaded = new Promise (resolve) -> page.webContents.once 'did-finish-load', resolve
+    menuItem('reload').click null, page, page.webContents
+    await reloaded
+
+  close = (page) ->
+    closed = new Promise (resolve) -> page.once 'closed', resolve
+    page.close()
+    await closed
+
+  leaving  = 'unload-edit'
+  leaveAt  = path.join t.paths.sketches, "#{leaving}.coffee"
+  {faults} = t.paths
+  try
+    # View > Reload, the item Ctrl-r from the canvas or the pane reaches. The
+    # save is held for 1.5s, as Windows' rename retry can hold one: the reload
+    # has to wait for it, or the page it brings up reads the old text.
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    page    = await openPage leaving
+    pending = await edit page, "print 'RELOADED'\n"
+    faults.slow = 1500
+    await reload page
+    faults.slow = 0
+    await onSketch page, leaving
+    doc  = await page.webContents.executeJavaScript 'Editor.all()'
+    disk = await fsp.readFile leaveAt, 'utf8'
+    page.destroy()
+    check 'an edit made just before View > Reload is saved, and is what the reloaded page shows',
+      pending and doc is "print 'RELOADED'\n" and disk is "print 'RELOADED'\n",
+      "pending #{pending} doc #{JSON.stringify doc} disk #{JSON.stringify disk}"
+
+    # And an autosave already on its way when the reload comes: nothing is
+    # pending in the page, and the reload must still wait for it.
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    page = await openPage leaving
+    faults.slow = 1500
+    await edit page, "print 'IN FLIGHT'\n"
+    sent = await page.webContents.executeJavaScript 'Editor.save(), !Editor.dirty()'
+    await reload page
+    faults.slow = 0
+    await onSketch page, leaving
+    doc = await page.webContents.executeJavaScript 'Editor.all()'
+    page.destroy()
+    check 'an autosave still in flight at View > Reload is what the reloaded page shows',
+      sent and doc is "print 'IN FLIGHT'\n", "sent #{sent} doc #{JSON.stringify doc}"
+
+    # The same, and that autosave fails. The page that asked for it is going
+    # and cannot try again, so it sends its text with the flush and main
+    # writes it once more behind the failure. The failure is a refused
+    # rename; on Windows the rename is retried and the first save lands, so
+    # there this checks only the wait.
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    page = await openPage leaving
+    Object.assign faults, slow: 1500, refuse: 1
+    await edit page, "print 'REFUSED'\n"
+    sent = await page.webContents.executeJavaScript 'Editor.save(), !Editor.dirty()'
+    await reload page
+    Object.assign faults, slow: 0, refuse: 0
+    await onSketch page, leaving
+    doc  = await page.webContents.executeJavaScript 'Editor.all()'
+    disk = await fsp.readFile leaveAt, 'utf8'
+    page.destroy()
+    check 'an autosave that fails while View > Reload waits for it is saved again',
+      sent and doc is "print 'REFUSED'\n" and disk is "print 'REFUSED'\n",
+      "sent #{sent} doc #{JSON.stringify doc} disk #{JSON.stringify disk}"
+
+    # A save that hangs, as one on an NFS or FUSE data folder can: the reload
+    # waits SAVE_LIMIT for it and then goes, rather than freezing the page.
+    # The page it brings up shows the old text; the save still lands later.
+    {saveLimit} = t.paths
+    hold        = saveLimit + 2500
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    page    = await openPage leaving
+    pending = await edit page, "print 'HUNG'\n"
+    faults.slow = hold
+    began = Date.now()
+    await reload page
+    took = Date.now() - began
+    faults.slow = 0
+    page.destroy()
+    disk = await until_ (-> fsp.readFile(leaveAt, 'utf8').then (text) -> text if text is "print 'HUNG'\n"), hold + 5000
+    check 'View > Reload stops waiting for a save that hangs, and the save still lands',
+      pending and saveLimit <= took < hold and disk?,
+      "pending #{pending} took #{took}ms (limit #{saveLimit}, save held #{hold}) landed #{disk?}"
+
+    # Closing the window. Chromium waits only about 500ms for a closing page
+    # and then closes it anyway, and a rename Windows refuses can be retried
+    # for longer, so the disk is read until the save lands rather than at
+    # `closed`. Main saving it after the window has gone is enough: a quit
+    # waits for it (will-quit, and the check below).
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    page    = await openPage leaving
+    pending = await edit page, "print 'CLOSED'\n"
+    await close page
+    disk = await until_ (-> fsp.readFile(leaveAt, 'utf8').then (text) -> text if text is "print 'CLOSED'\n"), 5000
+    disk ?= await fsp.readFile leaveAt, 'utf8'
+    check 'an edit made just before the window closes is saved',
+      pending and disk is "print 'CLOSED'\n", "pending #{pending} disk #{JSON.stringify disk}"
+  finally
+    Object.assign faults, slow: 0, refuse: 0
+    page?.destroy() unless page?.isDestroyed()
+    await fsp.rm leaveAt, force: yes
+
+  # Quitting, for real: File > Quit, the item Cmd-Q reaches. It cannot happen
+  # in the app the suite runs in, so a second Electron runs the `quit` part
+  # (test/parts/quit.coffee) on a data folder of its own, with its save held
+  # for `hold`, and the disk is read once it has exited. Bounded: a child
+  # still running after 30s is killed, and fails the check.
+  quitChild = (hold) ->
+    home  = path.join t.paths.data, 'quit-child'
+    saved = path.join home, 'sketches', 'quit-edit.coffee'
+    await fsp.rm home, recursive: yes, force: yes
+    env = {process.env..., BEANS_DATA_HOME: home, BEANS_TESTS: 'quit', BEANS_QUIT_HOLD: String hold}
+    delete env[name] for name in ['ELECTRON_RUN_AS_NODE', 'BEANS_SHOW', 'BEANS_DEVTOOLS', 'BEANS_CAPTURE', 'BEANS_QUERY']
+    began  = Date.now()
+    child  = spawn process.execPath, [t.paths.root], {cwd: t.paths.root, env}
+    output = ''
+    child.stdout.on 'data', (chunk) -> output += chunk
+    child.stderr.on 'data', (chunk) -> output += chunk
+    killer = setTimeout (-> child.kill()), 30000
+    [code, signal] = await new Promise (resolve) -> child.on 'exit', (code, signal) -> resolve [code, signal]
+    took = Date.now() - began
+    clearTimeout killer
+    disk = try fs.readFileSync(saved, 'utf8') catch error then error.code
+    said = output.split('\n').filter (line) -> /PASS|FAIL|quit|crash|flush/.test line
+    {code, disk, said, took, report: "exit #{code} #{signal ? ''} after #{took}ms disk #{JSON.stringify disk} child said #{JSON.stringify said}"}
+
+  {code, disk, report} = await quitChild 1500
+  check 'an edit made just before the app quits is on disk after it has exited',
+    code is 0 and disk is "print 'QUIT'\n", report
+
+  # A save held for a minute stands for one that hangs: the quit gives up on
+  # it after SAVE_LIMIT and exits, saying which sketch it left unsaved. The
+  # time is checked as well, because the 30s kill does not bound this one: run
+  # against the unbounded quit (Claude, 2026-10-06), the child outlived the
+  # kill and exited 0 once the save landed, so SIGTERM apparently goes through
+  # the same quit and waits with it.
+  {code, said, took, report} = await quitChild 60000
+  check 'the app quits with a save that hangs, after SAVE_LIMIT, and says so',
+    code is 0 and took < 30000 and said.some((line) -> /will-quit: still saving .*quit-edit\.coffee/.test line), report
