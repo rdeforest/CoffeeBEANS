@@ -164,7 +164,7 @@ The directory is a directory rather than a bare pile of sketches so it has
 somewhere to grow. Beside `sketches/` sit `assets/`, where `load` caches
 what it downloads, and `settings.json`, what the app remembers about how you
 like to work -- for now, whether Vim Keys and Warn About Name Case are
-ticked.
+ticked. Problem reports from the 📣🐞 button are saved in `reports/`.
 
 A sketch's name is its path under `sketches/` without the `.coffee`. Where
 the disk ignores case, as macOS's and Windows's do unless set up otherwise,
@@ -406,6 +406,33 @@ is ignored, so one left behind by a packaging run cannot go stale, and
 `.gitignore` keeps it out of commits. With neither, the version is the bare
 release number. `src/main/version.coffee` has the details.
 
+## Reporting a problem
+
+The 📣🐞 button in the header writes a report you can attach to an issue.
+Say what happened, and tick the box if the sketch that is open should go
+with it (it is left out unless you do). The app adds the About text and the
+last 100 console lines, then takes out what would identify you or your
+machine: home folders, yours or anyone's (paths start `~`), the data folder
+(`<data>`) and the app's own folder (`<app>`), a network share's server and
+name (`\\<share>`), your user name and the machine's host name wherever
+they appear, IP and MAC addresses, e-mail addresses, and anything shaped
+like a password, token, key or session cookie. Versions, line numbers, the
+paths in web addresses and the app's own messages stay, since they are what
+makes a report useful.
+
+You then see exactly what will be saved, and can change or remove anything
+before saving. It goes to `reports/` in the data folder, named for the time
+it was saved, and the folder opens. Nothing is sent anywhere: open an issue
+at https://github.com/thatsnice/CoffeeBEANS/issues and attach the file.
+
+The patterns are in `src/main/redact.coffee`; they are pattern matching,
+not understanding, so read the report before you attach it. They lean
+towards taking too much, on purpose. One such case is known and chosen: a
+`home`, `Users` or `media` folder anywhere outside your own folders is
+taken for someone's home or mounted drive, so a relative
+`sketches/media/boom.wav` comes out `sketches/media/<user>`. Inside your
+own folders it is left alone: `~/game/media/sounds` keeps `sounds`.
+
 ## Layout
 
     src/main/       Electron main process; serves app:// with COOP/COEP
@@ -423,7 +450,7 @@ release number. `src/main/version.coffee` has the details.
     BEANS_TESTS=buffers,lifecycle npm test  a few
 
 The parts are `editor image repl buffers stepping debugging focus lifecycle
-drawing color loading shell about input random sound perf`. Each starts from a reset app --
+drawing color loading shell about report input random sound perf`. Each starts from a reset app --
 scratch loaded, buffer blank, worker restarted -- so running one alone means
 the same thing as running it in the middle of everything else, and a part
 that fails does not take the ones after it with it. The whole suite takes a

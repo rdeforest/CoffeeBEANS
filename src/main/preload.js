@@ -27,6 +27,12 @@ contextBridge.exposeInMainWorld('beans', {
   copy:    (text)    => ipcRenderer.invoke('clipboard:write', text),
   // Edit > Warn About Name Case: asked whenever it matters.
   warnCase: ()     => ipcRenderer.invoke('settings:warnCase'),
+  // The feedback button. Main redacts the draft and writes the file.
+  report: {
+    draft:  (ask)  => ipcRenderer.invoke('report:draft', ask),
+    save:   (text) => ipcRenderer.invoke('report:save', text),
+    issues: ()     => ipcRenderer.invoke('report:issues'),
+  },
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
     arm:     (want)         => ipcRenderer.invoke('debug:arm', want),
@@ -41,4 +47,11 @@ contextBridge.exposeInMainWorld('beans', {
   },
   onChanged: (handler) =>
     ipcRenderer.on('sketch:changed', (_event, payload) => handler(payload)),
+  // Main's own failures, said in the console. Listening first, then asking:
+  // main holds back what it had to say until a page asks, so nothing from
+  // before this page was listening is lost, and nothing is said twice.
+  onProblem: (handler) => {
+    ipcRenderer.on('app:problem', (_event, text) => handler(text))
+    ipcRenderer.send('app:problems')
+  },
 })
