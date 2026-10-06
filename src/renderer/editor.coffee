@@ -430,6 +430,40 @@ setVim = (wanted) ->
   view.dispatch effects: vimSlot.reconfigure if wanted then VIM else []
   view.dispatch selection: view.state.selection if wanted
 
+# --- Edit > Undo and Redo ----------------------------------------------------
+
+# The menu's, and on a Mac the only way Cmd-Z reaches the prompt: a text field
+# there takes undo from the menu, not from the key. Not the native undo the
+# menu roles send. Chromium keeps one undo stack for the whole page, and
+# undoes its last step wherever that was taken; CodeMirror answers it from
+# its own history only when that step was typed into the editor. Measured by
+# Claude on Linux, 2026-10-06, with the editor focused: after an edit made
+# only through CodeMirror (a paste; vim's are the same kind) native Undo did
+# nothing; after a prompt edit it undid the prompt; and after one Undo that
+# CodeMirror did answer, Redo did nothing. So the editor gets CodeMirror's
+# own commands, a field that takes typing -- the prompt, a dialog's -- the
+# page's native step, and anything else nothing: from the canvas, native undo
+# undid the prompt's last edit. The native step is taken by main's
+# webContents.undo, not document.execCommand: when that step was typed into
+# the editor, execCommand edits CodeMirror's DOM behind its back, which
+# CodeMirror then reads as half an edit of its own and saves (found by a
+# Claude reviewer, 2026-10-06; the editor part checks it). activeElement, not
+# view.hasFocus: that also asks whether the window has focus, which a hidden
+# test run's never does. The commands come from the keymap the bundle already
+# exports, rather than a rebuilt bundle for two names.
+HISTORY =
+  undo: (historyKeymap.find (binding) -> binding.key is 'Mod-z').run
+  redo: (historyKeymap.find (binding) -> binding.key is 'Mod-y').run
+
+fromMenu = (verb) ->
+  focused = document.activeElement
+  return HISTORY[verb] view if focused is view.contentDOM
+  beans.nativeHistory verb if focused.matches 'input, textarea'
+
+# Edit > Redo shows Shift+CmdOrCtrl+Z everywhere, but CodeMirror binds
+# Ctrl-Shift-Z only on Linux; Windows gets Ctrl-Y alone.
+shiftRedo = {key: 'Mod-Shift-z', run: HISTORY.redo, preventDefault: yes}
+
 # --- public -----------------------------------------------------------------
 
 Editor =
@@ -458,7 +492,7 @@ Editor =
           indentUnit.of '  '
           theme
           Prec.highest keymap.of beansKeymap
-          keymap.of [...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]
+          keymap.of [...defaultKeymap, ...historyKeymap, shiftRedo, ...searchKeymap, indentWithTab]
           EditorView.updateListener.of (update) ->
             return unless update.docChanged
             scheduleSave()
@@ -470,6 +504,7 @@ Editor =
     window.addEventListener 'pagehide', flush
     beans.onVim setVim
     beans.vim().then setVim
+    beans.onHistory fromMenu
     reportLines()
     view
 

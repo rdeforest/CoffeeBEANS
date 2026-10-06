@@ -89,7 +89,8 @@ module.exports = (win, paths) ->
   # check can read what it did before anything else gets a turn.
   t.chord = (key, mods = {}) -> t.js """
     const down = new KeyboardEvent('keydown', { key: #{JSON.stringify key},
-      ctrlKey: #{!!mods.ctrl}, shiftKey: #{!!mods.shift}, bubbles: true, cancelable: true })
+      ctrlKey: #{!!mods.ctrl}, metaKey: #{!!mods.meta}, shiftKey: #{!!mods.shift},
+      bubbles: true, cancelable: true })
     Editor.view().contentDOM.dispatchEvent(down)
     return down.defaultPrevented
   """
@@ -165,6 +166,13 @@ module.exports = (win, paths) ->
     await t.quiet()
     (await t.consoleText())[before..]
 
+  # Whether a run's uncaught error stops where it was thrown, through the
+  # switch the Stop on Errors preference uses. Off for every part but
+  # pauseonerror (t.reset), so a check that fails a sketch on purpose gets
+  # the plain report it was written against.
+  t.stopOnErrors = (stop) -> require('../src/main/debugger').stopOnErrors stop
+  t.debugKept    = -> require('../src/main/debugger').kept()
+
   t.pause  = -> t.js "Stepping.pause(); return true"
   t.step   = -> t.js "Stepping.step(); return true"
   t.go     = -> t.js "Stepping.go(); return true"
@@ -229,6 +237,7 @@ module.exports = (win, paths) ->
   # first, for the check that a fresh install has no vim.
   t.reset = ->
     t.launched ?= await t.vimState()
+    await t.stopOnErrors no
     await t.vimKeys off
     await t.js "await Editor.load('scratch'); return true"
     await t.setDoc ''

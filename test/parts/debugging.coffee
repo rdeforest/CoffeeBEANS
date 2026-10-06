@@ -192,14 +192,23 @@ print 'after'
   await click 'stop'
   await until_ -> (await status()) is 'ready'
 
-  # 14. the buffer arms and disarms the debugger by itself
+  # 14. The buffer no longer disarms the debugger. It is still followed --
+  # Stepping.armed() is the buffer's verdict -- but since pausing on errors
+  # the debugger is armed for every run whatever the buffer says (Robert,
+  # 2026-10-05), so a `breakpoint` the buffer cannot see still stops. Until
+  # then this checked that the buffer armed and disarmed it by itself.
   await setDoc "print 'plain'\n"
-  await until_ (-> (await js "return Stepping.armed()") is false), 3000
-  disarmed = (await js "return Stepping.armed()") is false
-  await setDoc "breakpoint\n"
-  armed = await until_ (-> js "return Stepping.armed()"), 3000
-  check 'the buffer arms the debugger when it says breakpoint, and not otherwise',
-    disarmed and armed, "disarmed=#{disarmed} armed=#{armed}"
+  disarmed = await until_ (-> (await js "return Stepping.armed()") is false), 3000
+  await setDoc "w = 'break' + 'point'\nglobalThis[w]\nprint 'after'\n"
+  await wait 500
+  seen = (await pauseNumber()) ? 0
+  await evalAll()
+  hidden = await nextPause seen
+  check 'with no breakpoint in the buffer the debugger is still armed: one spelled in pieces stops',
+    disarmed and hidden and (await status()) is 'line paused' and (await pausedText())?.trim() is "print 'after'",
+    "disarmed=#{disarmed} seq #{seen} -> #{hidden} status=#{await status()}"
+  await click 'stop'
+  await until_ -> (await status()) is 'ready'
 
   # 15. a region's line numbers are the buffer's: errors say where in the file
   await setDoc "a = 1\n\nboom = ->\n  throw new Error 'kaboom'\n\nboom()\n"
