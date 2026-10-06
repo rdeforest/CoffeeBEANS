@@ -1233,10 +1233,13 @@ paused   = no
 stepOnce = no
 resumeTo = 'ready'
 
+# A hold pressed while a run is being armed holds what the worker is doing;
+# remembering 'arming' would put the status back to a wait long over.
 pauseFrames = ->
   return if paused
   paused   = yes
-  resumeTo = if status is 'line paused' then 'running' else status
+  beneath  = underneath()
+  resumeTo = if beneath is 'line paused' then 'running' else beneath
   setStatus 'frame paused' unless linePaused
 
 goFrames = ->
@@ -1715,6 +1718,8 @@ pending = null
 armedOver = 'ready'
 stops     = 0
 
+underneath = -> if status is 'arming' then armedOver else status
+
 # Once the worker says it is idle there is nothing left for a Stop to unwind.
 # Left raised, the flag makes every yield point reached from the prompt --
 # buffer.swap, sound -- throw 'stopped' until the next run.
@@ -1748,9 +1753,15 @@ messages =
 LATE = 'after the run'
 
 # The worker only speaks once it is running again, so a pause still showing
-# is over, whether or not the debugger has said so yet.
+# is over, whether or not the debugger has said so yet. So is a hold: the run
+# it held has ended without reaching a swap, and a hold outliving it would
+# hold the next run at its first frame under a status saying 'running'.
+# Only the end of a run lets a hold go -- the 'ready' that ends a boot keeps
+# a hold pressed during it for the run it was booting for.
 finished = ->
   standDown()
+  paused    = no
+  stepOnce  = no
   errorSaid = no
   endLinePause() if linePaused
 
@@ -1805,8 +1816,10 @@ answerLoad = (url) ->
 # The worker runs one thing at a time and its inbox is not a queue we want:
 # a run posted while a sketch is busy would sit there and fire the moment the
 # sketch ended, which looks exactly like the sketch running itself twice.
+# A run being armed hides the status it was asked over, and a second run sent
+# in the meantime -- two evals in one tick -- must still find the worker busy.
 send = ({source, name, cut}) ->
-  if status in BUSY
+  if underneath() in BUSY
     say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
     return
   # The last failure's marks are stale the moment something else runs.
@@ -1864,12 +1877,11 @@ stop = ->
   # buttons, a test, the next run -- can tell the pause is over.
   #
   # Before the idle test only for a hold taken at an idle worker, so it reads
-  # as idle once let go. Never otherwise: the worker's messages set the status
-  # under a hold and leave the hold in place, so `resumeTo` can be older than
-  # the status. A sketch held as it ended reads 'ready' with `resumeTo` still
-  # 'running', and letting that go first would take the busy branch and shoot
-  # an idle worker for having no yield point. Whether those messages should
-  # end a hold is Robert's call (E3 review, 2026-10-06).
+  # as idle once let go. A hold over a busy worker is let go in the busy
+  # branch, as 'running'. The end of a run ends its hold (finished), but the
+  # 'ready' that ends a boot does not, so a hold can still sit under a status
+  # it did not set: pressed while the worker booted for a run, it remembers
+  # 'booting' under a run that reads 'running'.
   goFrames() if status is 'frame paused' and resumeTo in IDLE
   # Nothing running is nothing to unwind, but a note with no length can
   # outlive the sketch that started it, and Stop is where anyone reaches to
@@ -1883,7 +1895,12 @@ stop = ->
     withdrawAsk()
     Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
-  # A busy worker parked on the swap is released below, by clearing it.
+  # A busy worker parked on the swap is released below, by clearing it. The
+  # hold is let go as 'running' whatever it remembers -- 'booting', for one
+  # pressed during the boot -- or the deadline below, which waits on
+  # 'running', would never start, and a sketch that catches its stop would
+  # spin on under a gray Stop.
+  resumeTo = 'running'
   goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
@@ -1932,8 +1949,12 @@ armFirst = (source, run) ->
   asked     = stops
   setStatus 'arming'
   await syncDebug source
+  # Cancelled, it leaves the status alone: the Stop put it back already, and
+  # by now it may be a newer arming's 'arming', whose own `before` is the one
+  # that counts.
+  return unless stops is asked
   setStatus before if status is 'arming'
-  run() if stops is asked
+  run()
 
 runSource = (source, name, cut) -> armFirst source, ->
   return start {source, name, cut} unless worker

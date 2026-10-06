@@ -236,12 +236,10 @@ module.exports = (t) ->
     ready and booted.length > 0 and booted.every((state) -> state[1]),
     JSON.stringify seen
 
-  # 14. A sketch that ends under a hold. The worker's 'done' sets the status
-  # and leaves the hold in place, so it reads ready with the hold's
-  # `resumeTo` still 'running'. Ctrl-. from there (the button is gray) has an
-  # idle worker to deal with: letting the hold go first would read 'running',
-  # and 250ms later shoot the worker for having no yield point, its image
-  # with it.
+  # 14. A sketch that ends under a hold, which ends the hold too. Ctrl-. from
+  # there (the button is gray) has an idle worker to deal with: a hold left
+  # in place, let go first, would read 'running', and 250ms later shoot the
+  # worker for having no yield point, its image with it.
   await t.clearConsole()
   await load "screen 320, 200\nkept = 42\nends = Date.now() + 1000\nnull while Date.now() < ends\nprint 'over'\n"
   await t.evalAll()
@@ -264,7 +262,8 @@ module.exports = (t) ->
   # 15. A hold pressed while the worker boots. 'ready', and the run it sends,
   # set the status under the hold, so the sketch reads 'running' held at its
   # first frame with `resumeTo` still 'booting'. Stop from there ends it. The
-  # first Run is only there so the second neither arms nor finds a hold.
+  # first Run is only there so the second neither arms nor finds a hold. 19
+  # is the same with a sketch that catches its stop.
   await t.clearConsole()
   await load "screen 320, 200\nprint 'warm'\nloop\n  buffer.swap\n"
   await click 'runFresh'
@@ -320,3 +319,150 @@ module.exports = (t) ->
   check 'Stop at booting takes back a prompt line not yet claimed, which never runs',
     booting is 'booting' and ready and answered(after) and /\*\*\* stopped \*\*\*/.test(text) and not /took-it/.test(text),
     JSON.stringify {booting, ready, after, text}
+
+  # What `n` reads at the prompt once it has passed `from`, or where it was
+  # when the time ran out. The sketch below counts its frames in it.
+  COUNTS  = "screen 320, 200\nn = 0\nloop\n  n += 1\n  buffer.swap\n"
+  reads   = -> Number (await t.ask 'n').match(/(\d+)\s*$/)?[1]
+  counted = (from) ->
+    deadline = Date.now() + 3000
+    loop
+      seen = await reads()
+      return seen if seen > from or Date.now() > deadline
+  typed = (text) -> """
+    const v = Editor.view()
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: #{JSON.stringify text} } })
+  """
+  saw = (pattern, limit) -> t.waitFor "return #{pattern}.test(document.getElementById('console').textContent)", limit
+
+  # 18. A sketch that ends under a hold, without reaching a swap, ends the
+  # hold with it. Left in place, the hold froze the next run at its first
+  # frame under a status that said 'running'.
+  await load "screen 320, 200\nends = Date.now() + 1000\nnull while Date.now() < ends\n"
+  await t.evalAll()
+  await becomes 'running'
+  await click 'pauseFrame'
+  held    = await status()
+  ended   = await becomes 'ready', 10000
+  holding = await js "return Stepping.paused()"
+  await load COUNTS
+  await t.evalAll()
+  running = await becomes 'running'
+  n       = await counted 1
+  await click 'stop'
+  await settle()
+  check 'a hold ends with the sketch it held, and the next run is not held',
+    held is 'frame paused' and ended and not holding and running and n > 1,
+    JSON.stringify {held, ended, holding, running, n}
+
+  # 19. 15 again, with a sketch that catches its stop, so only the 250ms
+  # deadline ends it. The deadline waits on 'running'; Stop let the hold go
+  # as the 'booting' it remembered, the deadline gave up at once, and the
+  # worker spun on with the status reading booting and Stop gray.
+  await t.clearConsole()
+  await load "screen 320, 200\nprint 'warm'\nspins = 0\nloop\n  try\n    buffer.swap\n  catch e\n    spins += 1\n"
+  await click 'runFresh'
+  await becomes 'running'
+  boot = await js """
+    document.getElementById('runFresh').click()
+    const before = document.getElementById('status').textContent
+    document.getElementById('pauseFrame').click()
+    return [before, document.getElementById('status').textContent]
+  """
+  running = await becomes 'running', 10000
+  await click 'stop'
+  ended = await becomes 'ready', 10000
+  shot  = await saw '/no yield point/'
+  check 'Stop ends a sketch held from its boot that catches its stop',
+    boot[0] is 'booting' and boot[1] is 'frame paused' and running and ended and shot,
+    JSON.stringify {boot, running, ended, shot, status: await status()}
+
+  # 20. Two evals in one tick over a running sketch, `breakpoint` new in the
+  # buffer, so the first arms. The second meets the arming and must still
+  # find the worker busy: sent, it sat in the worker's inbox and ran the
+  # moment the Stop below ended the first sketch, under a status of 'ready'.
+  await t.clearConsole()
+  await load LOOPS
+  await t.evalAll()
+  await becomes 'running'
+  first = await js """
+    #{typed "screen 320, 200\nprint 'second ran'\nloop\n  buffer.swap\n# breakpoint\n"}
+    Editor.command('/eval')
+    const status = document.getElementById('status').textContent
+    Editor.command('/eval')
+    return status
+  """
+  refused = await saw '/already running/'
+  await click 'stop'
+  await settle()
+  ran = await saw '/second ran/', 1500
+  check 'a run asked while another is armed over a busy worker is refused, not queued',
+    first is 'arming' and refused and not ran and (await status()) is 'ready',
+    JSON.stringify {first, refused, ran, status: await status()}
+
+  # 21. A run being armed, cancelled by a Stop, and another asked for while
+  # the first is still arming. The first leaves the status to the second:
+  # putting back its own 'running' over the idle worker, it made the
+  # second's run refused as already running. A real arming takes about 4ms,
+  # so main stretches each one for this check, and the second eval must
+  # come while the first is still arming.
+  STRETCH = 1000
+  await t.clearConsole()
+  await load LOOPS
+  await t.evalAll()
+  await becomes 'running'
+  await t.delayArming STRETCH
+  try
+    cancelled = await js """
+      #{typed "screen 320, 200\nprint 'third ran'\nloop\n  buffer.swap\n# breakpoint\n"}
+      const at = performance.now()
+      document.getElementById('runFresh').click()
+      const status = document.getElementById('status').textContent
+      document.getElementById('stop').click()
+      return { at, status }
+    """
+    stopped = await becomes 'ready'
+    again   = await js """
+      const at = performance.now()
+      Editor.command('/eval')
+      return { at, status: document.getElementById('status').textContent }
+    """
+    ran = await saw '/third ran/', 3 * STRETCH
+  finally
+    await t.delayArming 0
+  inside = again.at - cancelled.at < STRETCH
+  text   = await t.consoleText()
+  check 'a cancelled arming leaves the status to the arming after it, whose run goes ahead',
+    cancelled.status is 'arming' and stopped and again.status is 'arming' and inside and ran and
+      (await status()) is 'running' and not /already running/.test(text),
+    JSON.stringify {cancelled, stopped, again, inside, ran, status: await status(), text}
+  await click 'stop'
+  await settle()
+
+  # 22. A hold pressed while a run is armed over a running sketch holds the
+  # sketch, and letting it go puts it back to running. Remembering 'arming',
+  # letting go left the status there for good. The run is refused once
+  # armed, as it would be at any hold. Pressed in the same turn as the eval,
+  # so no stretch is needed.
+  await t.clearConsole()
+  await load COUNTS
+  await t.evalAll()
+  await becomes 'running'
+  pressed = await js """
+    #{typed COUNTS + "# breakpoint\n"}
+    Editor.command('/eval')
+    const before = document.getElementById('status').textContent
+    document.getElementById('pauseFrame').click()
+    return [before, document.getElementById('status').textContent]
+  """
+  refused = await saw '/already running/'
+  held    = await status()
+  from    = await reads()
+  await click 'pauseFrame'
+  going   = await becomes 'running'
+  n       = await counted from
+  await click 'stop'
+  ended   = await becomes 'ready'
+  check 'a hold pressed while a run is armed is let go to running',
+    pressed[0] is 'arming' and pressed[1] is 'frame paused' and refused and held is 'frame paused' and going and n > from and ended,
+    JSON.stringify {pressed, refused, held, going, from, n, ended}

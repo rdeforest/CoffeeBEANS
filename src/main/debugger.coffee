@@ -29,6 +29,12 @@ ALWAYS = yes
 errorStops = yes
 pauseState = -> if errorStops then 'uncaught' else 'none'
 
+# How long each arm takes over and above its real work, in ms. The suite's
+# alone (delayArming, at the bottom), to hold the renderer's `arming` open
+# long enough to Stop and run again inside it: a real arming takes about 4ms
+# (measured by a Claude reviewer, 2026-10-06). Zero outside a test run.
+armDelay = 0
+
 # The two reasons V8 gives for stopping on something thrown.
 THROWN = ['exception', 'promiseRejection']
 
@@ -563,6 +569,7 @@ module.exports = (win) ->
   arm = (want) ->
     wanted = want
     forced = no unless stopped or chase
+    await new Promise((resolve) -> setTimeout resolve, armDelay) if armDelay
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
     # them back.
@@ -741,6 +748,9 @@ module.exports.stopOnErrors = (stop) ->
   errorStops = Boolean stop
   await Promise.all (controller.exceptions() for controller from controllers.values())
   errorStops
+
+# For the suite, and not a channel either: see armDelay.
+module.exports.delayArming = (ms) -> armDelay = ms
 
 # For the suite: how many scripts and source maps each live session is keeping.
 module.exports.kept = -> (controller.kept() for controller from controllers.values())
