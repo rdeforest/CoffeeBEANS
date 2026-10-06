@@ -181,8 +181,8 @@ module.exports = (win, paths) ->
   # before and 0 after every reload, its sketch stuck `running` (measured by a
   # Claude reviewer, 2026-10-05). A hidden Linux test run shows its window and
   # then minimises it, so reloading it would stall the present loop for every
-  # part after.
-  t.freshPage = (probe, limit = 15000) ->
+  # part after. `query` is the URL's, for a part that drives the boot.
+  t.freshPage = (probe, limit = 15000, query = '') ->
     page = new BrowserWindow
       show: no
       webPreferences:
@@ -191,7 +191,7 @@ module.exports = (win, paths) ->
         preload:          path.join paths.root, 'src', 'main', 'preload.js'
     page.webContents.setAudioMuted yes
     try
-      await page.loadURL 'app://beans/src/renderer/index.html'
+      await page.loadURL "app://beans/src/renderer/index.html#{query}"
       deadline = Date.now() + limit
       loop
         seen = await page.webContents.executeJavaScript "(async () => { #{probe} })()", yes

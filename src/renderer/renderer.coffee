@@ -783,6 +783,27 @@ showHelp = (topic) ->
   output.scrollTop = top          # land on the first section, not the last
   undefined
 
+# --- about ------------------------------------------------------------------
+
+# In the page rather than Electron's native about panel, which cannot carry a
+# Copy button on every platform (Robert, 2026-10-05). Copy takes the text as
+# shown, so what lands in a bug report is what the player saw.
+aboutBox  = document.getElementById 'about'
+aboutText = document.getElementById 'aboutText'
+aboutCopy = document.getElementById 'aboutCopy'
+
+showAbout = ->
+  {text} = await beans.about()
+  aboutText.textContent = text
+  aboutCopy.textContent = 'Copy'
+  aboutBox.showModal()
+
+aboutCopy.onclick = ->
+  await beans.copy aboutText.textContent
+  aboutCopy.textContent = 'Copied'
+
+beans.onAbout showAbout
+
 # --- presentation -----------------------------------------------------------
 
 resize = ->
@@ -1502,19 +1523,25 @@ Editor.mount document.getElementById('editor'),
 # The open sketch's name lives in the window title, which costs the header
 # nothing, and is remembered so the next launch reopens it instead of
 # whichever sketch sorts first.
-selectSketch = (name) ->
+#
+# `name` is spelled as the disk spells it. Where the disk folds case, `asked`
+# may differ from it, and Edit > Warn About Name Case (on unless unticked)
+# says so once (Robert, 2026-10-05).
+selectSketch = (name, asked = name) ->
   await Editor.load name
   document.title = "#{name} \u2014 CoffeeBEANS"
   localStorage.setItem 'lastSketch', name
+  say "opened #{name} -- you asked for #{asked}", 'sys' if asked isnt name and await beans.warnCase()
   Editor.focus()
 
 # :e newfile -- create it if it does not exist yet (an empty sketch, the way a
-# touch would leave it), then open it.
-openSketch = (name) ->
-  unless name in await beans.list()
-    await beans.write name, ''
-    say "created #{name}.coffee", 'sys'
-  await selectSketch name
+# touch would leave it), then open it. Created only if still absent: one that
+# appeared since the look is opened instead (sketch:create).
+openSketch = (asked) ->
+  found = await beans.find asked
+  {name, created} = if found.exists then found else await beans.create found.name
+  say "created #{name}.coffee", 'sys' if created
+  await selectSketch name, found.asked
 
 pickSketch = ->
   choice = await beans.pick()
@@ -1596,22 +1623,31 @@ do ->
   start()
   frame()
   startSound()
-  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, /help for the rest', 'sys'
+  # Not awaited: git is asked at startup with a 5s limit, and a git that
+  # hangs must not hold the sketch back for it.
+  beans.about().then ({version}) ->
+    say "CoffeeBEANS #{version}  --  Ctrl-Enter evals the block under the cursor, > for a line, /help for the rest", 'sys'
   if params.has 'crashed'
     say "*** the app crashed (#{params.get 'crashed'}) and has restarted -- your sketch is as it was last saved ***", 'err'
 
   try
-    names  = await beans.list()
-    wanted = params.get 'sketch'
-    if wanted and wanted not in names
-      say "no sketch named \"#{wanted}\" -- opening #{names[0]}", 'err'
-      wanted = null
-    last = localStorage.getItem 'lastSketch'
+    names   = await beans.list()
+    wanted  = params.get 'sketch'
     # The URL is how the suite drives the app, so it must not inherit
     # whatever the last hand-run session had open.
-    wanted ?= if last in names and not params.has 'sketch' then last else names[0]
-    if names.length
-      await selectSketch wanted
+    # A name main refuses (one outside sketches/) falls through to the first
+    # sketch like an unknown one, saying why, rather than leaving none open.
+    asked   = if params.has 'sketch' then wanted else localStorage.getItem 'lastSketch'
+    found   = if asked then await beans.find(asked).catch((error) -> {exists: no, error}) else {exists: no}
+    instead = if names.length then "opening #{names[0]}" else 'nothing to open'
+    if found.error
+      say "#{found.error.message} -- #{instead}", 'err'
+    else if wanted and not found.exists
+      say "no sketch named \"#{wanted}\" -- #{instead}", 'err'
+    if found.exists
+      await selectSketch found.name, (if wanted then found.asked else found.name)     # only a name typed into the URL was asked for
+    else if names.length
+      await selectSketch names[0]
     else
       say "no sketches in your data folder (File -> Open Data Folder)", 'err'
   catch error
