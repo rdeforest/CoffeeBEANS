@@ -3,7 +3,7 @@
 
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, evalAll, consoleText, clearConsole,
-   click, settled, evalRegion} = t
+   click, settled, evalRegion, ask} = t
   # 6. the worker is a live image: define in one region, call from another
   await setDoc "greet = (who) -> print \"hi \#{who}\"\n\ngreet 'robert'\n"
   await wait 500
@@ -89,3 +89,37 @@ module.exports = (t) ->
   await evalAll()
   text = await settled()
   check 'definitions survive a sketch that throws', text.includes('kept=7'), JSON.stringify text.trim()
+
+  # A sketch that opens with comments keeps its names. CoffeeScript 2 puts a
+  # sketch's leading `#` lines ahead of the `var` that declares its names, and
+  # declaredNames in worker-boot.js once read past block comments only, so a
+  # first-line comment left the prompt answering `hashName is not defined`
+  # (found by a reviewer of E1, 2026-10-06). Asked at the prompt, which sees
+  # the image and nothing else.
+  keeps = (doc, line, run = evalAll) ->
+    await setDoc doc
+    await wait 500
+    await run()
+    await settled()
+    await ask line
+
+  answer = await keeps "# a comment\nhashName = 101\n", 'hashName'
+  check 'a sketch whose first line is a comment keeps its names',
+    answer.includes('101'), JSON.stringify answer.trim()
+
+  answer = await keeps "# one\n# two\n\n# three\nmanyA = 102\nmanyB = 103\n", '[manyA, manyB]'
+  check 'a sketch opening with several comment lines keeps every name',
+    answer.includes('[102, 103]'), JSON.stringify answer.trim()
+
+  # The order matters to CoffeeScript, not to us: this one compiles to a `//`
+  # line and then two `/* */` blocks, all ahead of the `var`.
+  answer = await keeps "# a line\n###\na block\n###\n### another ###\nmixed = 104\n", 'mixed'
+  check 'line and block comments mixed ahead of the names are both skipped',
+    answer.includes('104'), JSON.stringify answer.trim()
+
+  # A region usually opens with the comment that says what it defines.
+  answer = await keeps "regionTop = 0\n\n# what the region is for\nregionName = 105\n", 'regionName', ->
+    await cursorOnLine 4
+    await evalRegion()
+  check 'a region whose first line is a comment keeps its names',
+    answer.includes('105'), JSON.stringify answer.trim()
