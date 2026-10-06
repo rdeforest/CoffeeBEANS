@@ -260,7 +260,11 @@ Ctrl-Shift-Z, not Ctrl-Y; Ctrl-W and Alt-D delete a word. Ctrl-C copies a select
 and Ctrl-L clears the console. While the prompt has the keyboard these beat
 the app's own shortcuts: Ctrl-E there is end of line, not hide the editor.
 On a Mac, Option types characters, so the Alt keys are not bound there. Tab
-completes a name, as far as every candidate agrees; a second Tab lists them.
+completes a name, as far as every candidate agrees; a second Tab opens a list
+of them above the prompt, or the first Tab does when they are too many for one
+line. The list narrows as you type. While it is open, Up and Down move through
+it instead of the history, Tab or Enter takes the name (Enter does not run the
+line), a click takes one too, and Esc closes it.
 
 A sketch runs in its own scope, so its names cannot collide with the drawing
 commands or with anything the app owns. You can still shadow a command --
