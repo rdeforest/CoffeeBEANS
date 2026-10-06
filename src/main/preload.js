@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('beans', {
   read:  (name)       => ipcRenderer.invoke('sketch:read', name),
   write: (name, text) => ipcRenderer.invoke('sketch:write', name, text),
+  // Blocks until main has the sketch on disk; only for a page going away.
+  flush: (name, text) => ipcRenderer.sendSync('sketch:flush', name, text),
   list:  ()           => ipcRenderer.invoke('sketch:list'),
   find:  (name)       => ipcRenderer.invoke('sketch:find', name),
   create: (name)      => ipcRenderer.invoke('sketch:create', name),
