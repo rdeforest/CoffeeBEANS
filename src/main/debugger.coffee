@@ -77,6 +77,13 @@ ITEMS       = 200            # members listed when an object is opened
 # Where a getter's owner waits for the expression that runs it; see runGetter.
 STASH       = '__beansGetterOwner'
 
+# For the suite: called, and waited for, while a pause is being set up and
+# before the renderer has heard of it -- 'exception' as an error pause starts,
+# 'report' once a pause is numbered. On its own that window is a few
+# milliseconds; a check holds it open to land a Stop or a stale line in it.
+# Null outside those checks.
+hooks = {pausing: null}
+
 # --- source maps ------------------------------------------------------------
 
 BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
@@ -220,9 +227,10 @@ module.exports = (win) ->
   ready    = null        # resolves once it is
   scripts  = new Map     # scriptId -> {url}, for every named script
   maps     = new Map     # scriptId -> decoded source map, newest last
-  stopped  = null        # the pause we are sitting in: {frames, where, seq}
+  halted   = null        # V8's pause, its Debugger.paused params, until we move it on
+  stopped  = null        # the pause the renderer is shown: {frames, where, seq}
   chase    = null        # a step or pause still looking for a sketch line
-  asking   = null        # the prompt's evaluation, while it runs
+  asking   = null        # JS run in the paused worker -- the prompt's, a getter's, ours -- while it runs
   seq      = 0
   devtools = no
 
@@ -241,6 +249,12 @@ module.exports = (win) ->
       clearTimeout timer
 
   scriptOf = (frame) -> scripts.get frame.location.scriptId
+
+  # Whether V8 is still halted in this pause. Setting a pause up takes several
+  # round trips, and a Stop or a Run can end it in any of them; work for a
+  # pause that is over goes no further, and its V8 commands, sent after the
+  # resume, fail -- that failure is the pause being over, not news.
+  current = (halt) -> halted is halt
 
   # Only scripts with a name. The prompt's lines and our own evaluations have
   # none and come several to a line typed; unknown reads as ours everywhere,
@@ -290,6 +304,7 @@ module.exports = (win) ->
     session = null
     enabled = no
     ready   = null
+    halted  = null
     scripts.clear()
     maps.clear()
     chase = null
@@ -335,6 +350,7 @@ module.exports = (win) ->
     session = id
     scripts.clear()
     maps.clear()
+    halted  = null
     stopped = null
     chase   = null
     enabled = no
@@ -411,14 +427,21 @@ module.exports = (win) ->
   # bumps before a new one boots), so the renderer can drop the pause of a
   # worker a Run has already replaced.
   #
-  # The pause is ours from the start, before anything is asked of V8, so a
-  # Stop in the meantime finds it to resume.
-  report = (frames, at = 0, error = null) ->
-    top  = frames[at]
-    here = stopped = {frames, at, where: null, error, seq: ++seq}
+  # The renderer learns the pause's number only once every V8 command for it
+  # here has been answered, so a line or a listing naming it never lands in
+  # the middle of them. A Stop does not need the number: it goes by `halted`.
+  report = (halt, at = 0, error = null) ->
+    frames = halt.callFrames
+    top    = frames[at]
+    here   = stopped = {frames, at, where: null, error, seq: ++seq}
+    await hooks.pausing 'report' if hooks.pausing
     here.where = await locate top
+    return unless current halt
     owner = await ownerOf top
-    tell {type: 'paused', seq: here.seq, owner, where: here.where, error, scopes: await scopesOf top}
+    return unless current halt
+    scopes = await scopesOf top
+    return unless current halt
+    tell {type: 'paused', seq: here.seq, owner, where: here.where, error, scopes}
 
   # The frame a pause shows, and the one the prompt and the pane work in.
   pausedFrame = -> stopped.frames[stopped.at]
@@ -429,11 +452,27 @@ module.exports = (win) ->
   inRun = (frames) ->
     frames.some (frame) -> frame.functionName is 'dispatchRun' and scriptOf(frame)?.url?.endsWith BOOT
 
+  # JS of ours run in the paused worker while a pause is set up. It takes the
+  # prompt's turn, so a Stop landing meanwhile waits for it rather than
+  # sending a resume into running JS: a step sent into a running evaluation
+  # segfaults the renderer (AGENTS.md), and a resume has not been shown to be
+  # any safer.
+  callInPause = (params) ->
+    call = asking = send 'Runtime.callFunctionOn', params
+    try
+      await call
+    finally
+      asking = null if asking is call
+
+  # REPL is on the worker's global, where a sketch can clobber it. Unread,
+  # the owner would be undefined and the renderer would drop a live worker's
+  # pause as a replaced one's, leaving it halted with nothing said.
   ownerOf = (frame) ->
     global = frame.scopeChain.find (scope) -> scope.type is 'global'
-    {result} = await send 'Runtime.callFunctionOn',
+    {result, exceptionDetails} = await callInPause
       objectId: global.object.objectId, returnByValue: yes
       functionDeclaration: 'function () { return REPL.owner }'
+    throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
     result.value
 
   # The first frame the author wrote, innermost first, or -1.
@@ -453,7 +492,7 @@ module.exports = (win) ->
   # stops and one that just ends the run say the same thing.
   failureOf = (thrown, frame) ->
     global = frame.scopeChain.find (scope) -> scope.type is 'global'
-    {result, exceptionDetails} = await send 'Runtime.callFunctionOn',
+    {result, exceptionDetails} = await callInPause
       objectId: global.object.objectId, returnByValue: yes, arguments: [argumentFor thrown]
       functionDeclaration: 'function (error) { return REPL.failure(error) }'
     throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
@@ -465,39 +504,49 @@ module.exports = (win) ->
   # being let go; a rejection, which never ends a run; an error thrown after
   # the run ended, which Robert decided is reported and never stopped on
   # (2026-10-05); and one with nothing of the author's on the stack, ours.
-  onException = (params) ->
-    frames = params.callFrames
-    goOn   = not errorStops or params.reason isnt 'exception' or
-      params.data?.className is 'Interrupted' or not inRun frames
+  #
+  # A Run while the worker is asked replaces the session, and a Stop resumes
+  # V8; either way the pause is over (`current`), and reported it would land
+  # in the new run's console or over the Stop.
+  onException = (halt) ->
+    frames = halt.callFrames
+    goOn   = not errorStops or halt.reason isnt 'exception' or
+      halt.data?.className is 'Interrupted' or not inRun frames
     return onward (chase?.method ? 'Debugger.resume') if goOn
-    # A Run while the worker is asked replaces the session; the old pause is
-    # then nobody's, and reported it would land in the new run's console.
-    id = session
     try
+      await hooks.pausing 'exception' if hooks.pausing
       at = await authorsFrame frames
+      return unless current halt
       return onward (chase?.method ? 'Debugger.resume') if at < 0
       chase = null
-      failure = await failureOf params.data, frames[at]
-      return unless session is id
+      failure = await failureOf halt.data, frames[at]
+      return unless current halt
       # A thrown string or number has no stack to find its line in; the
       # pause knows it.
       failure.line ?= (await locate frames[at]).line
-      await report frames, at, failure
+      return unless current halt
+      await report halt, at, failure
     catch error
-      return unless session is id
-      chase = null
-      # Left paused, the run would never end and Stop could not reach it: it
-      # ends the ordinary way instead, reported by the worker as it would
-      # have been with error stops off.
-      tell type: 'problem', text: "debugger: could not stop at the error -- #{error.message.split('\n')[0]}"
-      onward 'Debugger.resume'
+      return unless current halt
+      letGo 'stop at the error', error
+
+  # A pause that could not be set up is let go and said. Left halted, the
+  # renderer, never told of it, could neither show it nor continue it, and
+  # only Stop would get the sketch back. An error then ends its run the
+  # ordinary way, reported by the worker as it would have been with error
+  # stops off.
+  letGo = (what, error) ->
+    stopped = null
+    chase   = null
+    tell type: 'problem', text: "debugger: could not #{what} -- #{error.message.split('\n')[0]}"
+    onward 'Debugger.resume'
 
   # Every pause comes through here, wanted or not, and most are not the one to
   # show: the breakpoint's own frame, a helper, our plumbing, or the same line
   # a step started on. Those are stepped past without the renderer hearing.
-  onPaused = (params) ->
-    return onException params if params.reason in THROWN
-    frames = params.callFrames
+  onPaused = (halt) ->
+    return onException halt if halt.reason in THROWN
+    frames = halt.callFrames
     top    = frames[0]
     script = scriptOf top
 
@@ -511,13 +560,19 @@ module.exports = (win) ->
       if chase.count < CHASE_LIMIT
         return onward 'Debugger.stepOut' if ours top
         where = await locate top
+        return unless current halt
         same  = where and chase.line? and where.line is chase.line and
           frames.length is chase.depth and top.location.scriptId is chase.scriptId
         return onward chase.method if not where or same
     chase = null
-    report frames
+    try
+      await report halt
+    catch error
+      return unless current halt
+      letGo 'pause', error
 
   onward = (method) ->
+    halted = null
     send(method).catch (error) -> tell type: 'problem', text: "debugger: #{error.message}"
 
   cdp.on 'message', (event, method, params, sessionId) ->
@@ -530,8 +585,11 @@ module.exports = (win) ->
         when 'Debugger.scriptParsed'
           remember params if sessionId is session
         when 'Debugger.paused'
-          await onPaused params if sessionId is session
+          if sessionId is session
+            halted = params
+            await onPaused params
         when 'Debugger.resumed'
+          halted = null if sessionId is session
           if sessionId is session and stopped
             stopped = null
             tell type: 'resumed'
@@ -603,28 +661,41 @@ module.exports = (win) ->
       depth:    stopped.frames.length
       scriptId: top.location.scriptId
       count:    0
+    halted = null
     await send 'Debugger.stepInto'
     true
 
   # `skip` is for Stop: the sketch has to run to its next yield point to
   # notice the interrupt, and must not stop at a breakpoint on the way.
+  #
+  # By V8's own state, not by whether the renderer has been shown the pause:
+  # a Stop can land while an error pause is still being set up, and went
+  # nowhere when this asked `stopped` -- V8 stayed halted until Stop's
+  # deadline shot the worker, blaming a missing yield point.
   resume = (skip = no) ->
     return false unless enabled
     # Stop has to get through, so it waits out the evaluation, which
-    # EVAL_LIMIT bounds; anything else is the author's to retry.
+    # EVAL_LIMIT bounds; anything else is the author's to retry. Waited out
+    # until none is left: setting a pause up runs one after another.
     if asking
       return 'evaluating' unless skip
-      await asking.catch(->)
-    chase = null
+      await asking.catch(->) while asking
+    # Over from here, before anything else is awaited: a pause still being set
+    # up sees that and starts nothing more in the worker.
+    was    = halted
+    halted = null
+    chase  = null
     await send('Debugger.setSkipAllPauses', skip: yes).catch(->) if skip
-    return true unless stopped
-    await send 'Debugger.resume'
+    await send 'Debugger.resume' if was
     true
 
   # The `>` prompt, against the paused frame rather than the image: the
   # author asked about *this* call's `angle`. Assignments reach the frame.
-  evaluate = (source) ->
-    return null unless stopped
+  # Only in the pause it was typed at, as with a getter: a line sent before
+  # the renderer heard a step had begun, or that pause was over, must not
+  # land in the next one, possibly while it is still being set up.
+  evaluate = (pauseSeq, source) ->
+    return null unless stopped?.seq is pauseSeq and not chase
     return {text: '*** still evaluating the last line ***', kind: 'sys'} if asking
     asking = answerFor source
     try
@@ -741,6 +812,8 @@ module.exports.stopOnErrors = (stop) ->
   errorStops = Boolean stop
   await Promise.all (controller.exceptions() for controller from controllers.values())
   errorStops
+
+module.exports.hooks = hooks
 
 # For the suite: how many scripts and source maps each live session is keeping.
 module.exports.kept = -> (controller.kept() for controller from controllers.values())

@@ -486,7 +486,86 @@ loop
   await js "Stepping.resume(); return true"
   await statusBecomes 'error'
 
-  # 15. The switch the preference and the suite share: off, an error ends
+  # 15. A Stop while an error pause is still being set up: V8 halted at the
+  # throw, main working out the report, the renderer not yet told. Main used
+  # to resume only a pause it had finished setting up, so V8 stayed halted,
+  # Stop's deadline passed, and the worker was shot for want of a yield
+  # point, image and all (found by a reviewer of E1's fix, 2026-10-06). At
+  # real latency the pause more likely landed after the Stop and stood, the
+  # Stop lost. The hook holds main in that window while Stop is pressed and
+  # its 250ms deadline goes by. Let go, the error goes on to end the run, and
+  # the worker reports it -- once, since no pause ever did.
+  hooks = t.debugHooks
+  await setDoc "kept = 'yes'\nball = null\nball.x\n"
+  await wait 500
+  await clearConsole()
+  before = (await pauseNumber()) ? 0
+  held = no
+  hooks.pausing = (stage) ->
+    return unless stage is 'exception'
+    hooks.pausing = null
+    held = yes
+    await click 'stop'
+    await wait 400
+  await evalAll()
+  ended = await statusBecomes 'error', 5000
+  hooks.pausing = null
+  await t.quiet()
+  said = await consoleText()
+  kept = await ask 'kept'
+  check 'a Stop while an error pause is being set up lets the run end as the error, said once, image kept',
+    held and ended and times(said, NULL_X) is 1 and not said.includes('no yield point') and
+      not said.includes('debugger:') and ((await pauseNumber()) ? 0) is before and kept.includes('"yes"'),
+    "held=#{held} status=#{await status()} console=#{JSON.stringify said.trim()} kept=#{JSON.stringify kept.trim()}"
+
+  # 16. A line from the prompt names the pause it was typed at. One naming
+  # an earlier pause -- typed before the renderer heard that pause was over
+  # -- that lands while main is still setting up the next one is refused:
+  # it would have been evaluated in the new frame with main's own V8
+  # commands for that pause still going, and nothing may reach V8 then.
+  await setDoc "z = 1\nbreakpoint\nz = 2\nnull.x\n"
+  await wait 500
+  await clearConsole()
+  before = (await pauseNumber()) ? 0
+  await evalAll()
+  stale = await nextPause before
+  answered = 'never asked'
+  hooks.pausing = (stage) ->
+    return unless stage is 'report'
+    hooks.pausing = null
+    answered = await js "return await beans.debug.evaluate(#{stale}, 'z')"
+  await js "Stepping.resume(); return true"
+  got = await nextPause stale
+  hooks.pausing = null
+  answer = await ask 'z'
+  check 'a line naming an earlier pause, landing while the next is set up, is refused; the new pause answers',
+    stale and got and answered is null and (await status()) is 'error paused' and answer.includes('2'),
+    "stale=#{stale} got=#{got} answered=#{JSON.stringify answered} status=#{await status()} z=#{JSON.stringify answer}"
+  await js "Stepping.resume(); return true"
+  await statusBecomes 'error'
+
+  # 17. Which worker a pause belongs to is read from REPL.owner, and REPL is
+  # the sketch's to clobber. Unread, the owner came back undefined and the
+  # renderer dropped a live worker's pause as a replaced one's: the sketch
+  # sat halted at `running` with nothing said until Stop. Now the pause is
+  # let go and the trouble said.
+  await setDoc "globalThis.REPL = null\nbreakpoint\nprint 'after'\n"
+  await wait 500
+  await clearConsole()
+  before = (await pauseNumber()) ? 0
+  await evalAll()
+  ended = await statusBecomes 'ready', 5000
+  await t.quiet()
+  said = await consoleText()
+  check 'a pause whose owner cannot be read is let go and said, not left halted',
+    ended and said.includes('could not pause') and said.includes('after') and ((await pauseNumber()) ? 0) is before,
+    "status=#{await status()} console=#{JSON.stringify said.trim()}"
+  await setDoc "print 'fresh'\n"                # a worker whose REPL is whole
+  await wait 500
+  await click 'runFresh'
+  await statusBecomes 'ready'
+
+  # 18. The switch the preference and the suite share: off, an error ends
   # the run the way it always did.
   await t.stopOnErrors no
   await runText "ball = null\nball.x\nprint 'after'\n"

@@ -166,6 +166,7 @@ module.exports = (win, paths) ->
   # the plain report it was written against.
   t.stopOnErrors = (stop) -> require('../src/main/debugger').stopOnErrors stop
   t.debugKept    = -> require('../src/main/debugger').kept()
+  t.debugHooks   = require('../src/main/debugger').hooks
 
   t.pause  = -> t.js "Stepping.pause(); return true"
   t.step   = -> t.js "Stepping.step(); return true"
