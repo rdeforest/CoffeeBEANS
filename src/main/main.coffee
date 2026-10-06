@@ -200,17 +200,49 @@ ipcMain.handle 'sketch:create', (event, asked) ->
     {name: await spelled(asked), created: no}
 
 ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(await spelled name), 'utf8'
+
+# Line endings follow the platform (Robert, 2026-10-05): players bring their
+# own editors, and nobody knows what every Windows editor does with LF. Read
+# by Claude, 2026-10-06, for Robert to overrule: a sketch keeps the endings it
+# already has, and one with none yet -- new, emptied, a single line -- takes
+# the platform's. Nothing remembers a sketch's endings: each save asks the
+# file, inside the save queue, so whatever wrote it last decides -- our last
+# save, or the player's editor in between, whose rewrite the editor ignores
+# when only the endings changed. The editor holds and sends `\n` throughout.
+# `forced` is the suite's, which cannot make this machine Windows; only the
+# suite is handed this object, as with `folding` above.
+newline   = {forced: null}
+NATIVE    = {true: '\r\n', false: '\n'}
+newEnding = -> newline.forced ? NATIVE[process.platform is 'win32']
+ENDINGS   = /\r\n|\r|\n/g
+CALLED    = {'\r\n': 'CRLF', '\n': 'LF', '\r': 'CR'}
+
+# The ending most of the file's lines have, ties going to the platform's,
+# and what to tell the author when its lines did not agree.
+endingOf = (file) ->
+  old = await fsp.readFile(file, 'utf8').catch (error) ->
+    throw error unless error.code is 'ENOENT'
+    ''
+  counts = {}
+  counts[ending] = (counts[ending] ? 0) + 1 for ending in old.match(ENDINGS) ? []
+  ending = Object.keys(counts).reduce ((best, each) -> if counts[each] > (counts[best] ? 0) then each else best), newEnding()
+  return {ending} if Object.keys(counts).length < 2
+  tally = ("#{count} #{CALLED[each]}" for each, count of counts).join ', '
+  {ending, note: "#{sketchName file}.coffee had mixed line endings (#{tally}); saved with #{CALLED[ending]} throughout"}
+
 # Written beside the target and renamed into place. writeFile truncates
 # first, so a watcher firing mid-write could read an empty file, hand it to
 # the editor, and have the editor autosave the emptiness back. A rename is
 # atomic: a reader sees the old file or the new one. The temp name must not
 # end in .coffee or the watcher would pick it up as a sketch of its own.
+# Answers with the note about mixed endings, or null.
 writeSketch = (file, text) ->
   await fsp.mkdir path.dirname(file), recursive: yes     # :e sub/new makes sub/
+  {ending, note} = await endingOf file
   staging = path.join path.dirname(file), ".#{path.basename file}.saving"
-  await fsp.writeFile staging, text, 'utf8'
+  await fsp.writeFile staging, text.replace(ENDINGS, ending), 'utf8'
   await renameOnto staging, file
-  true
+  note ? null
 
 # Windows refuses a rename while something else has either file open: Defender
 # or the indexer reading the staging file just written, or the target. EPERM
@@ -303,6 +335,7 @@ settlesWithin = (ms, promise) ->
 ipcMain.on 'sketch:flush', (event, name, text) ->
   last = Promise.resolve()
     .then -> if text? then queueSave name, text else saving.get caseKey sketchFile name
+    .then (note) -> console.log "sketch:flush: #{note}" if note
     .catch (error) -> console.error "sketch:flush: could not save #{name}: #{error.message}"
   settlesWithin(SAVE_LIMIT, last).then (settled) ->
     console.error "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting" unless settled
@@ -570,7 +603,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, saveLimit: SAVE_LIMIT})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
