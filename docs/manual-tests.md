@@ -51,3 +51,17 @@ Each entry: what to do, what should happen, where it came from.
      Ctrl-R in normal mode.
   4. Edit > Undo from the menu with the editor focused: one step.
   5. Click the canvas, Cmd-Z: neither the prompt nor the sketch changes.
+
+## Any platform
+
+- **A real DevTools, opened and closed.** The suite only simulates it
+  (emitting `devtools-opened`/`devtools-closed`, which runs the real detach),
+  because a real one would open a window on the desktop. By hand: run a
+  looping sketch, open DevTools, close it. Then (1) Run a sketch that throws:
+  it stops as `error paused`, at once, with no "timed out" line; (2) Run one
+  with `breakpoint`: it line-pauses; (3) Ctrl-\ on a sketch started while
+  DevTools was open: it pauses; (4) Eval into the sketch that was running
+  when DevTools opened: by design it no longer stops on errors until the
+  next Run (I1, overnight 2026-10-06; whether that should change is in that
+  night's brief). Untested is whether enabling a worker that a real DevTools
+  had attached hangs the way a busy re-attached worker did (2s).

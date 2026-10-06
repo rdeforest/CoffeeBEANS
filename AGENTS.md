@@ -93,7 +93,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 305 checks
+    npm test                                 all 663 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -125,6 +125,13 @@ minimised, see Platform facts),
 bounce&run=1'` drives the app from the URL, `BEANS_DATA_HOME=test_tmp` keeps a
 run away from the real data folder, `BEANS_STARTUP_ANSWERS` answers the
 startup problem box in a child run (`startup` part).
+
+**Nothing a test runs may open anything on the desktop.** Every call that
+would -- the startup box, Open Folder, the report's Show in Folder and
+issues page, the sketch picker -- goes through `onDesktop` in
+`main.coffee`, which under `BEANS_TEST` prints what it would have done and
+records it in `opened` for the suite instead (I1, 2026-10-06). Add any new
+one there.
 
 Under `BEANS_TEST` an uncaught exception in main prints its stack and exits
 1 (since 2026-10-06, A2). Without that, Electron puts a modal "JavaScript
