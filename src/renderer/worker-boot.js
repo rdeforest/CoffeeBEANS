@@ -209,14 +209,31 @@
 
   // --- Tab at the prompt ----------------------------------------------------
 
-  // The CoffeeBEANS vocabulary, and nothing else of the worker's: what attach
-  // installs, and the two names a module publishes for sketches. Atomics,
-  // postMessage and WebAssembly are left out on purpose (AGENTS.md, Tab
-  // completion). Set at boot, by difference, so a new command is in it
-  // without anyone remembering to list it.
+  // The CoffeeBEANS vocabulary: what attach installs, and the two names a
+  // module publishes for sketches. Set at boot, by difference, so a new
+  // command is in it without anyone remembering to list it. What the modules
+  // hang on globalThis before that (LAYOUT, toColor, ColorBuilder...), and
+  // REPL after it, fall outside the difference and are never offered.
   let vocabulary = []
   const PUBLISHED = ['breakpoint', 'COLORS']
   const PLUMBING  = ['Interrupted']
+
+  // The JavaScript a player is likely to reach for, and only that: Robert
+  // decided on 2026-10-05 that Tab offers these alongside CoffeeBEANS's own.
+  // A list, not globalThis minus a blocklist, so that a browser or Electron
+  // upgrade cannot put a new global in front of a player unasked, and the
+  // worker's machinery (postMessage, self, fetch, on*, Atomics, WebAssembly,
+  // requestAnimationFrame) stays out. To offer another, add its name here; one
+  // this worker lacks is dropped. Members are not listed: `Math.hyp` finds
+  // `Math.hypot` by the same descriptor walk as any other object's.
+  const JAVASCRIPT = [
+    'Infinity', 'NaN', 'undefined',
+    'isFinite', 'isNaN', 'parseFloat', 'parseInt',
+    'JSON', 'Math',
+    'Array', 'Boolean', 'Date', 'Error', 'Map', 'Number', 'Object', 'RegExp', 'Set', 'String',
+    'Float64Array', 'Int32Array', 'Uint8Array',
+  ]
+  const javascript = JAVASCRIPT.filter((name) => name in globalThis)
 
   const descriptorOf = (value, name) => {
     for (let o = Object(value); o !== null; o = Object.getPrototypeOf(o)) {
@@ -257,22 +274,35 @@
 
   // `local` says the first name is a variable of the frame the debugger is
   // paused in, and `root` is its value, read there; anything else starts from
-  // the image or the vocabulary. `frameNames` are that frame's variables.
+  // the image, the vocabulary or JavaScript's list. `frameNames` are that
+  // frame's variables.
+  //
+  // Nearest first, alphabetical within each: the paused frame's names, the
+  // image's, CoffeeBEANS's, then JavaScript's (Robert, 2026-10-05). A name in
+  // two of them keeps the nearer place, since the nearer one is what it means.
+  //
+  // Line paused, the first two run together: the run's wrapper puts every
+  // top-level sketch name in one function, so V8 reports the image's names
+  // the paused function refers to as part of the frame's closure scope, and
+  // they arrive here in `frameNames`. Only frame-or-image before CoffeeBEANS
+  // before JavaScript holds there. Keeping them apart would need the
+  // renderer's pausedNames to keep V8's scope types apart (a Claude fixer
+  // agent, 2026-10-06 overnight, track T1).
   const complete = ({ path, word, local }, frameNames = [], root) => {
-    let names
+    let ranks
     if (path.length === 0) {
-      names = [...frameNames, ...Object.keys(image), ...vocabulary]
+      ranks = [frameNames, Object.keys(image), vocabulary, javascript]
     } else {
       const [first, ...rest] = path
       const start = local ? root
         : first in image ? image[first]
-        : vocabulary.includes(first) ? walk(globalThis, [first])
+        : vocabulary.includes(first) || javascript.includes(first) ? walk(globalThis, [first])
         : undefined
       const value = walk(start, rest)
-      names = value === null || value === undefined ? [] : membersOf(value)
+      ranks = [value === null || value === undefined ? [] : membersOf(value)]
     }
     const fits = (name) => name.startsWith(word) && IDENTIFIER.test(name) && !name.startsWith('__')
-    return [...new Set(names.filter(fits))].sort()
+    return [...new Set(ranks.flatMap((names) => names.filter(fits).sort()))]
   }
 
   // Set once the layout module is loaded; until then there is nowhere to read

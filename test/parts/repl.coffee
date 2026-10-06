@@ -443,6 +443,7 @@ Object.defineProperty counter, 'probe', get: ->
 ball  = velocity: 1, x: 2
 world = ball: ball
 myWidget = 1
+pan = pup = 1
 """
   await wait 500
   await evalAll()
@@ -451,7 +452,8 @@ myWidget = 1
 
   # 14. a unique prefix finishes, from each place a name can come from
   unique = [['myWid', 'myWidget'], ['randomi', 'randomize'], ['world.ball.vel', 'world.ball.velocity'],
-            ['x = rectF', 'x = rectFill'], ['/ru', '/run'], [':ru', ':run'], [' /ru', ' /run']]
+            ['x = rectF', 'x = rectFill'], ['/ru', '/run'], [':ru', ':run'], [' /ru', ' /run'],
+            ['parseFl', 'parseFloat'], ['Math.hyp', 'Math.hypot'], ['x = JSON.stri', 'x = JSON.stringify']]
   for [typed, wanted] in unique
     got = await tab typed
     check "Tab finishes #{JSON.stringify typed}", got.value is wanted and got.from is wanted.length and
@@ -486,10 +488,41 @@ myWidget = 1
   check 'a key between two Tabs means the second asks again instead of listing',
     relisted is '' and (await beeps()) - beepsAt is 1, JSON.stringify relisted
 
-  # 16. the worker's own globals are not CoffeeBEANS's vocabulary
-  stray = await tab 'Atom'
-  check 'Tab does not offer the worker\'s globals', stray.value is 'Atom' and stray.beeped is 1 and stray.focused,
-    JSON.stringify stray
+  # Nearest first: the image's names, then CoffeeBEANS's, then JavaScript's,
+  # alphabetical only within each. `pup` sorts after `print`, so a list sorted
+  # as a whole would put it there.
+  await tab 'p'
+  before = (await consoleText()).length
+  await press 'Tab'
+  await t.quiet()
+  listed = (await consoleText())[before..].trim().split /\s+/
+  ranked = ['pan', 'pup', 'pget', 'print', 'parseFloat', 'parseInt'].map (name) -> listed.indexOf name
+  check 'Tab lists the sketch\'s names, then CoffeeBEANS\'s, then JavaScript\'s',
+    -1 not in ranked and ranked.every((at, i) -> i is 0 or at > ranked[i - 1]), JSON.stringify listed
+
+  # 16. the worker's machinery and CoffeeBEANS's plumbing are never offered:
+  # JavaScript's names come from a list, not from whatever globalThis holds.
+  # structuredClone was on it, and made `st` an ambiguous `stamp`.
+  hidden = ['Atom', 'postMess', 'sel', 'onmess', 'requestAnim', 'WebAss', 'REP', 'REPL.se', 'toCol', 'LAYO',
+            'hsvI', 'ColorB', 'Interr', 'stru']
+  strays = []
+  for typed in hidden
+    stray = await tab typed
+    strays.push stray unless stray.value is typed and stray.beeped is 1 and stray.focused
+  check 'Tab does not offer the worker\'s globals or the runtime\'s plumbing', strays.length is 0,
+    JSON.stringify strays
+
+  # A getter on a JavaScript root is named and never run: Map.prototype.size
+  # throws when read off the prototype, so running it would print an error.
+  await clearConsole()
+  size    = await tab 'Map.prototype.si'
+  through = await tab 'Map.prototype.size.toF'
+  await t.quiet()
+  said = await consoleText()
+  check 'Tab names a getter on a JavaScript root and never runs it',
+    size.value is 'Map.prototype.size' and size.beeped is 0 and
+      through.value is 'Map.prototype.size.toF' and through.beeped is 1 and said.trim() is '',
+    "size=#{JSON.stringify size} through=#{JSON.stringify through} said=#{JSON.stringify said}"
 
   # 17. a getter is named but never run, and never walked through
   named   = await tab 'counter.pr'
@@ -608,7 +641,7 @@ loop
   await click 'stop'
   await settle()
 
-  # 18b. a line gives way to nothing but an answer in progress. This sketch
+  # 19. a line gives way to nothing but an answer in progress. This sketch
   # has no yield point until space is held, so a Tab's question sits there
   # unclaimed; the line after it takes its place instead of being refused.
   await setDoc """
@@ -688,11 +721,12 @@ done = 1
     claimed and busy.includes('*** still answering Tab ***') and not busy.includes('last line'),
     JSON.stringify busy
 
-  # 19. line paused, Tab asks the paused frame: these names live nowhere else
+  # 20. line paused, Tab asks the paused frame: these names live nowhere else
   await setDoc """
 screen 320, 200
 turn = (angleDelta) ->
   vec = magnitude: angleDelta
+  parsed = angleDelta
   breakpoint
   vec
 turn 5
@@ -707,12 +741,23 @@ turn 5
     paused and param.value is 'angleDelta' and member.value is 'vec.magnitude',
     "paused=#{paused} param=#{JSON.stringify param} member=#{JSON.stringify member}"
 
+  # The paused frame's names come before JavaScript's, though `parsed` sorts
+  # after `parseFloat`.
+  common = await tab 'pars'
+  before = (await consoleText()).length
+  await press 'Tab'
+  await until_ -> not await js "return Prompt.pending()"
+  await t.quiet()
+  listed = (await consoleText())[before..].trim().split /\s+/
+  check 'line paused, Tab lists the frame\'s names before JavaScript\'s',
+    common.value is 'parse' and listed.join(' ') is 'parsed parseFloat parseInt', JSON.stringify {common, listed}
+
   # A line that does not compile, typed in the paused frame, says why.
   unparsed = await ask 'this is not coffee ('
   check 'line paused, a line that does not compile shows the error',
     unparsed.includes('missing )') and (await status()) is 'line paused', JSON.stringify unparsed
 
-  # 20. and nothing reaches V8 while the prompt is evaluating in that frame:
+  # 21. and nothing reaches V8 while the prompt is evaluating in that frame:
   # Tab beeps, nothing is sent after, and Tab works again once it is back
   await js "Prompt.ask('n = 0; loop then n += 1'); return true"
   await until_ -> js "return Prompt.pending()"
@@ -730,7 +775,7 @@ turn 5
   await js "Stepping.resume(); return true"
   await until_ (-> (await status()) is 'ready'), 10000
 
-  # 21. Tab in a paused frame, then Stop while its evaluation is still out.
+  # 22. Tab in a paused frame, then Stop while its evaluation is still out.
   # The trap's print says the evaluation is inside it, and it stays there
   # until the check presses x; Stop waits it out, so its answer arrives after
   # Stop. The sketch waits for y before its breakpoint, so a line sent before
@@ -832,7 +877,7 @@ done = 1
     "paused=#{waited} inTrap=#{inTrap} prompt=#{JSON.stringify later}"
   await setDoc ''
 
-  # 22. A line typed while the worker is booting. The poke reaches a worker
+  # 23. A line typed while the worker is booting. The poke reaches a worker
   # still loading its modules, with nowhere yet to read the line from, and a
   # sketch with no yield point never looks again: the line sat unanswered,
   # and every later one said it was still waiting, until the next restart.
