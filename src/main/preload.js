@@ -47,4 +47,11 @@ contextBridge.exposeInMainWorld('beans', {
   },
   onChanged: (handler) =>
     ipcRenderer.on('sketch:changed', (_event, payload) => handler(payload)),
+  // Main's own failures, said in the console. Listening first, then asking:
+  // main holds back what it had to say until a page asks, so nothing from
+  // before this page was listening is lost, and nothing is said twice.
+  onProblem: (handler) => {
+    ipcRenderer.on('app:problem', (_event, text) => handler(text))
+    ipcRenderer.send('app:problems')
+  },
 })

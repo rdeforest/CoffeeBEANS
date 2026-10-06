@@ -20,8 +20,8 @@ exists = (place) -> fsp.stat(place).then (-> yes), (-> no)
 # suite, and BEANS_TESTS naming a part that is not there has the suite print
 # "no such part" and exit 1 at once rather than start a second full run --
 # the same exit as Quit, so the checks count boxes as well.
-launch = (paths, home, answers, limit = 20000) -> new Promise (resolve) ->
-  env = {process.env..., BEANS_TEST: '1', BEANS_DATA_HOME: home, BEANS_STARTUP_ANSWERS: answers, BEANS_TESTS: 'startup-child'}
+launch = (paths, home, answers, more = {}, limit = 20000) -> new Promise (resolve) ->
+  env = {process.env..., BEANS_TEST: '1', BEANS_DATA_HOME: home, BEANS_STARTUP_ANSWERS: answers, BEANS_TESTS: 'startup-child', more...}
   child  = spawn process.execPath, [paths.root], {cwd: paths.root, env}
   output = ''
   child.stdout.on 'data', (chunk) -> output += chunk
@@ -129,3 +129,16 @@ module.exports = (t) ->
   check 'any other data folder failure stops the launch with a box saying why',
     other.code is 1 and shown.length is 1 and shown[0].folder is blocked and shown[0].detail.includes(path.join blocked, 'sketches'),
     "exit #{other.code ? other.signal}, #{shown.length} boxes: #{JSON.stringify shown[0]?.detail ? other.output[-400..]}"
+
+  # An exception nobody catches in main. Electron answers it with a modal box
+  # that blocks main until somebody clicks it, and a hidden test run has
+  # nobody to click: twice on 2026-10-06 one sat on the box until killed. A
+  # test run says it and exits 1. Thrown by a fixture NODE_OPTIONS preloads,
+  # as soon as the app is ready, ahead of its window. Forward slashes,
+  # because NODE_OPTIONS reads a backslash inside quotes as an escape.
+  thrower = path.join(paths.root, 'test', 'fixtures', 'throw-in-main.js').split(path.sep).join '/'
+  began   = Date.now()
+  threw   = await launch paths, path.join(sandbox, 'threw'), '', {NODE_OPTIONS: "--require \"#{thrower}\""}, 15000
+  check 'an uncaught exception in main ends a test run, saying so, instead of waiting on a box',
+    threw.code is 1 and threw.output.includes('uncaught exception: Error: startup: thrown in main'),
+    "exit #{threw.code ? threw.signal} after #{Date.now() - began}ms: #{JSON.stringify threw.output[-400..]}"

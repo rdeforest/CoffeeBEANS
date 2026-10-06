@@ -214,14 +214,30 @@
 <script src="/src/renderer/vendor/coffeescript.js"></script>
 <script src="/src/renderer/vendor/editor.js"></script>
 <script>
+  // A file that will not fetch, compile or run stops the app before
+  // renderer.coffee's error listeners exist, and before 2026-10-06 that was
+  // a dark window with an empty console (Claude's audit,
+  // docs/research/unhandled-exceptions.md). So it is said here, in the
+  // console, and nothing after it is loaded. The 404 is checked because its
+  // body would otherwise be compiled, and fail as CoffeeScript.
   (async () => {
     for (const path of ['/src/runtime/layout.coffee',
                         '/src/runtime/keys.coffee',
                         '/src/renderer/help.coffee',
                         '/src/renderer/editor.coffee',
                         '/src/renderer/renderer.coffee']) {
-      const source = await (await fetch(path)).text()
-      ;(0, eval)(CoffeeScript.compile(source, { bare: false, filename: path }))
+      try {
+        const response = await fetch(path)
+        if (!response.ok) throw new Error(await response.text())
+        ;(0, eval)(CoffeeScript.compile(await response.text(), { bare: false, filename: path }))
+      } catch (error) {
+        const line = document.createElement('div')
+        line.className = 'err'
+        line.textContent = `CoffeeBEANS could not start -- ${path}: ${error}`
+        document.getElementById('console').append(line)
+        console.error(error)
+        return
+      }
     }
   })()
 </script>
