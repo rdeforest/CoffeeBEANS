@@ -39,6 +39,15 @@ ipcMain.handle 'app:about', ->
   {version: version.text, note: version.note, text: Version.about version}
 ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
 
+# Edit > Undo and Redo in a text field: the page's native step, run from here
+# because document.execCommand, run in the page, edits CodeMirror's DOM
+# behind its back when that step was typed into the editor (`fromMenu` in
+# editor.coffee).
+NATIVE_HISTORY =
+  undo: (contents) -> contents.undo()
+  redo: (contents) -> contents.redo()
+ipcMain.handle 'edit:native', (event, verb) -> NATIVE_HISTORY[verb] event.sender
+
 prepareDataHome = ->
   {added} = await data.prepare DATA, EXAMPLES
   console.log "added to #{SKETCHES}: #{added.join ', '}" if added.length
@@ -605,10 +614,28 @@ installMenu = ->
     ]
   ,
     label: 'Edit'
-    # Deliberately no undo/redo: those roles drive the native edit stack,
-    # and CodeMirror keeps its own history, behind its own undo keys (or
-    # vim's u and Ctrl-r).
+    # Not the undo and redo roles: those drive the page's native edit stack,
+    # and CodeMirror keeps its own history -- the page picks which one a
+    # click means (`fromMenu` in editor.coffee). The keys are registered only
+    # on a Mac, where Cmd-Z reaches the prompt through this menu or not at
+    # all; elsewhere CodeMirror and the input take Ctrl-Z themselves, and the
+    # menu only shows it.
     submenu: [
+      {
+        id:                  'undo'
+        label:               'Undo'
+        accelerator:         'CmdOrCtrl+Z'
+        registerAccelerator: process.platform is 'darwin'
+        click: (item, win) -> win?.webContents.send 'edit:history', 'undo'
+      }
+      {
+        id:                  'redo'
+        label:               'Redo'
+        accelerator:         'Shift+CmdOrCtrl+Z'
+        registerAccelerator: process.platform is 'darwin'
+        click: (item, win) -> win?.webContents.send 'edit:history', 'redo'
+      }
+      {type: 'separator'}
       {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}
       {type: 'separator'}
       {
