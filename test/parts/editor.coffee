@@ -54,14 +54,10 @@ module.exports = (t) ->
   await cursorOnLine 2
   await js "const v = Editor.view(); v.dispatch({changes: {from: 4, insert: 'X'}, selection: {anchor: 6}}); Editor.focus(); return true"
   before = await editorState()
-  # codemirror-vim draws its block cursor on the first animation frame after
-  # the switch, and this check can come before the test window has had any:
-  # on GitHub's Linux runner it lost that race in 5 of 9 runs, the cursor
-  # still undrawn after 3s because the window was not yet shown (Claude,
-  # 2026-10-06). So the window is drawing first, and the 3s below is the
-  # switch's alone. The cursor is still waited for rather than read once.
-  drawn   = await t.drawing()
   await vimKeys yes
+  # codemirror-vim draws its block cursor on the next animation frame, so it
+  # is waited for rather than read once. The suite has seen the window draw
+  # before any part runs (suite.coffee), so the 3s is the switch's alone.
   fat     = await waitFor "return !!document.querySelector('.cm-fat-cursor')"
   ticked  = await editorState()
   await type ':'
@@ -69,7 +65,7 @@ module.exports = (t) ->
   untyped = await js "return Editor.all()"
   check 'ticking Vim Keys switches to vim live, keeping the buffer and the cursor',
     fat and vimItem().checked and JSON.stringify(ticked) is JSON.stringify(before),
-    JSON.stringify {drawn, fat, before, ticked}
+    JSON.stringify {fat, before, ticked}
   check 'and then : opens vim\'s command line instead of typing',
     panel and untyped is before.doc, JSON.stringify {panel, untyped}
 

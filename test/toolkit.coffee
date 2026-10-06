@@ -57,14 +57,11 @@ module.exports = (win, paths) ->
       return seen if seen or Date.now() > deadline
       await wait 25
 
-  # Until the page has been given an animation frame. CodeMirror measures --
-  # and so places anything it positions, vim's block cursor among them --
-  # only on a frame, and a test window gets none before it is first shown.
-  # The suite can begin before that: on GitHub's Linux runner the window was
-  # shown 2.7s into the editor part, and not one frame came before it
-  # (Claude, 2026-10-06, run 37410488931). The limit is the 15s the suite
-  # already gives the window to come up; timers are not held back with the
-  # frames, so it still fires.
+  # Until the page has been given an animation frame: true, or false after
+  # `limit`. CodeMirror measures -- and so places anything it positions,
+  # vim's block cursor among them -- only on a frame, and on GitHub's Xvfb
+  # Linux runner a window gets none until it is shown (suite.coffee). Timers
+  # are not held back with the frames, so the limit still fires.
   t.drawing = (limit = 15000) -> t.js """
     return await new Promise((resolve) => {
       const late = setTimeout(() => resolve(false), #{limit})
