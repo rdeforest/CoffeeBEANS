@@ -21,7 +21,7 @@ onMac = process.platform is 'darwin'
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
-   settled, evalRegion, untilDoc} = t
+   settled, evalRegion, untilDoc, asHeld} = t
   {waitFor, type, chord, vimKeys, vimItem} = t
 
   # 1. the editor is mounted, with ordinary keys unless Edit > Vim Keys says
@@ -97,7 +97,7 @@ module.exports = (t) ->
   untilDisk = (wanted, limit = 3000) ->
     deadline = Date.now() + limit
     loop
-      text = await fsp.readFile scratch, 'utf8'
+      text = asHeld await fsp.readFile scratch, 'utf8'
       return text if text is wanted or Date.now() > deadline
       await wait 25
 
@@ -167,7 +167,7 @@ module.exports = (t) ->
   # 2. edits reach disk without an explicit save
   await setDoc "print 'autosave check'\n"
   await wait 600
-  onDisk = await fsp.readFile scratch, 'utf8'
+  onDisk = asHeld await fsp.readFile scratch, 'utf8'
   check 'autosave writes to disk', onDisk is "print 'autosave check'\n", JSON.stringify onDisk
 
   # 3. eval-region runs only the paragraph under the cursor
@@ -740,3 +740,158 @@ module.exports = (t) ->
     JSON.stringify({focused, undid, redid}) is JSON.stringify(want),
     JSON.stringify {focused, undid, redid}
   await setDoc ''
+
+  # --- vim's autoindent -------------------------------------------------------
+
+  # On an indented line `o` then Esc left the indent's spaces behind; in Vim
+  # the line is blank (Robert, 2026-10-05). Each case below is what Vim 9.1
+  # made of the same buffer, cursor line and keys -- `vim -u NONE -N -i NONE
+  # -c 'set ai bs=indent,eol,start'`, driven by feedkeys, measured by Claude
+  # on 2026-10-06; editor.coffee has the table and the rule it gives.
+  #
+  # All keys of a case go in one turn of the page, so the buffer is read after
+  # the last of them and never between two. Vim's keys arrive as keydowns, the
+  # way codemirror-vim takes them; a character typed in insert mode is the
+  # transaction CodeMirror makes of typing, since a keydown made by hand
+  # inserts nothing.
+  await vimKeys yes
+  await js "await Editor.load('scratch'); return true"
+  START = "if x\n  foo\n  bar\nbaz\n"
+  BLANK = "if x\n  foo\n\n  bar\nbaz\n"
+  KEPT  = "if x\n  foo\n  \n  bar\nbaz\n"
+  vimDid = (keys, line, doc = START) -> js """
+    const v = Editor.view(), cm = CM.getCM(v)
+    CM.Vim.handleKey(cm, '<Esc>')
+    v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: #{JSON.stringify doc}}})
+    v.dispatch({selection: {anchor: v.state.doc.line(#{line}).from}})
+    for (const key of #{JSON.stringify keys}) {
+      const [, ctrl, name] = key.match(/^(Ctrl-)?(.+)$/)
+      if (name.length === 1 && !ctrl && cm.state.vim.insertMode)
+        v.dispatch(v.state.replaceSelection(name), {userEvent: 'input.type'})
+      else
+        v.contentDOM.dispatchEvent(new KeyboardEvent('keydown',
+          {key: name, ctrlKey: !!ctrl, bubbles: true, cancelable: true}))
+    }
+    CM.Vim.handleKey(cm, '<Esc>')
+    return Editor.all()
+  """
+
+  # Vc is not here: codemirror-vim's Vc on an indented line deletes the line
+  # and its newline, where real Vim (and cc, S) leave a blank line -- the
+  # plugin's own bug, found by a Claude reviewer of K5 on 2026-10-06.
+  SPACES = "if x\n    \n  foo\nbaz\n"
+  TWICE  = (made) -> "if x\n  foo\n#{made}\n  bar\n#{made}\nbaz\n"
+  cases = [
+    # what is typed                      on line  keys                                 what Vim left, from
+    ['o Esc',                            2, ['o', 'Escape'],                           BLANK]
+    ['O Esc',                            3, ['O', 'Escape'],                           BLANK]
+    ['o Enter Enter Esc',                2, ['o', 'Enter', 'Enter', 'Escape'],         "if x\n  foo\n\n\n\n  bar\nbaz\n"]
+    ['3o Esc',                           2, ['3', 'o', 'Escape'],                      "if x\n  foo\n\n\n\n  bar\nbaz\n"]
+    ['o Down Esc',                       2, ['o', 'ArrowDown', 'Escape'],              BLANK]
+    ['o Up Esc',                         2, ['o', 'ArrowUp', 'Escape'],                BLANK]
+    ['o Ctrl-T Esc',                     2, ['o', 'Ctrl-t', 'Escape'],                 BLANK]
+    ['cc Esc',                           2, ['c', 'c', 'Escape'],                      "if x\n\n  bar\nbaz\n"]
+    ['S Esc',                            2, ['S', 'Escape'],                           "if x\n\n  bar\nbaz\n"]
+    ['cj Esc',                           2, ['c', 'j', 'Escape'],                      "if x\n\nbaz\n"]
+    ['o, two spaces typed, Esc',         2, ['o', ' ', ' ', 'Escape'],                 "if x\n  foo\n    \n  bar\nbaz\n"]
+    ['o x Backspace Esc',                2, ['o', 'x', 'Backspace', 'Escape'],         KEPT]
+    ['o Left Esc',                       2, ['o', 'ArrowLeft', 'Escape'],              KEPT]
+    ['^C Esc (a change, not linewise)',  2, ['^', 'C', 'Escape'],                      "if x\n  \n  bar\nbaz\n"]
+    ['o Esc u',                          2, ['o', 'Escape', 'u'],                      START]
+    ['o Down Esc u',                     2, ['o', 'ArrowDown', 'Escape', 'u'],         START]
+    ['cc Esc u',                         2, ['c', 'c', 'Escape', 'u'],                 START]
+    ['o Esc u Ctrl-R',                   2, ['o', 'Escape', 'u', 'Ctrl-r'],            BLANK]
+    ['o Ctrl-O 0 x Esc',                 2, ['o', 'Ctrl-o', '0', 'x', 'Escape'],       "if x\n  foo\nx\n  bar\nbaz\n"]
+    ['A Esc on a line of spaces',        2, ['A', 'Escape'],                           "if x\n    \nbaz\n", "if x\n    \nbaz\n"]
+    # Played back by a macro or by `.`. Before the fix (K5's fixer,
+    # 2026-10-06) the first five each lost spaces: codemirror-vim records no
+    # new last edit during a playback, so the cc before it still read as the
+    # command that entered insert mode, and typing played back arrives inside
+    # one vim command, where it read as indent. The take-back also shared an
+    # undo step with the typing after the cc, which Ctrl-R showed. A lone `u`
+    # there is not checked: codemirror-vim's undo splits cc from the typing
+    # after it, with or without K5, where Vim undoes both.
+    ['qqA Esc q, ccx Esc below, k @q',   2, ['q', 'q', 'A', 'Escape', 'q', 'j', 'c', 'c', 'x', 'Escape', 'k', '@', 'q'],
+                                                                                           "if x\n    \n  x\nbaz\n", SPACES]
+    ['the same, then u Ctrl-R',          2, ['q', 'q', 'A', 'Escape', 'q', 'j', 'c', 'c', 'x', 'Escape', 'k', '@', 'q', 'u', 'Ctrl-r'],
+                                                                                           "if x\n    \n  x\nbaz\n", SPACES]
+    ['qei Esc q, Sy Esc below, k @e',    2, ['q', 'e', 'i', 'Escape', 'q', 'j', 'S', 'y', 'Escape', 'k', '@', 'e'],
+                                                                                           "if x\n    \n  y\nbaz\n", SPACES]
+    ['qq o, two spaces, Esc q, j @q',    2, ['q', 'q', 'o', ' ', ' ', 'Escape', 'q', 'j', '@', 'q'], TWICE "    "]
+    ['o, two spaces, Esc, j .',          2, ['o', ' ', ' ', 'Escape', 'j', '.'],       TWICE "    "]
+    ['qq o Esc q, j @q',                 2, ['q', 'q', 'o', 'Escape', 'q', 'j', '@', 'q'], TWICE ""]
+    ['o Esc, j .',                       2, ['o', 'Escape', 'j', '.'],                 TWICE ""]
+    # A `.` inside a macro: codemirror-vim's repeat clears its playing flag as
+    # it ends, though the macro still plays, so the spaces the macro typed
+    # after it read as indent and were taken back. Failed before K5's second
+    # fixer (Claude, 2026-10-06) decided playback once per vim command.
+    ['jx qq . j o ·· Esc q, j x @q',     1, ['j', 'x', 'q', 'q', '.', 'j', 'o', ' ', ' ', 'Escape', 'q', 'j', 'x', '@', 'q'],
+                                                                                           "if x\nfoo\n  bar\n    \n  q\n  zot\n    \nbaz\n",
+                                                                                           "if x\n  foo\n  bar\n  qux\n  zot\nbaz\n"]
+  ]
+  for [typed, line, keys, wanted, doc] in cases
+    got = await vimDid keys, line, doc
+    check "with vim keys, #{typed} leaves the indent as Vim does",
+      got is wanted, JSON.stringify {got, wanted}
+
+  # Down on the last line goes nowhere, so the cursor never leaves it and the
+  # Esc after takes the indent back. Vim wrote one more \n, its 'fixeol' at
+  # :w, which is not an indent.
+  got = await vimDid ['o', 'ArrowDown', 'Escape'], 2, "if x\n  foo"
+  check 'with vim keys, o then Down on the last line, then Esc, leaves the line blank',
+    got is "if x\n  foo\n", JSON.stringify got
+
+  # The spaces typed through the OS this time, not dispatched: real typing is
+  # what makes an indent the author's.
+  await js """
+    const v = Editor.view(), cm = CM.getCM(v)
+    v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: #{JSON.stringify START}}})
+    v.dispatch({selection: {anchor: v.state.doc.line(2).from}})
+    Editor.focus()
+    CM.Vim.handleKey(cm, 'o')
+    return true
+  """
+  await type '  '
+  typed = await untilDoc "if x\n  foo\n    \n  bar\nbaz\n"
+  await chord 'Escape'
+  kept = await js "return Editor.all()"
+  check 'with vim keys, spaces typed after o are kept at Esc, indent and all',
+    kept is "if x\n  foo\n    \n  bar\nbaz\n", JSON.stringify {typed, kept}
+
+  # A click on another line takes the indent back too, and a drag begun by
+  # that click still selects: CodeMirror's mouse selection gives up on a drag
+  # when it sees typing, which is what the take-back's undo label reads as.
+  # DOM events into the page, never the real pointer.
+  clicked = await js """
+    const v = Editor.view(), cm = CM.getCM(v)
+    CM.Vim.handleKey(cm, '<Esc>')
+    v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: #{JSON.stringify START}}})
+    v.dispatch({selection: {anchor: v.state.doc.line(2).from}})
+    Editor.focus()
+    CM.Vim.handleKey(cm, 'o')
+    const baz = v.state.doc.line(5), a = v.coordsAtPos(baz.from), b = v.coordsAtPos(baz.to)
+    const at = (c, kind, target) => target.dispatchEvent(new MouseEvent(kind,
+      {clientX: c.left + 1, clientY: (c.top + c.bottom) / 2, button: 0, buttons: 1, detail: 1,
+       bubbles: true, cancelable: true}))
+    at(a, 'mousedown', v.contentDOM)
+    at(b, 'mousemove', document)
+    at(b, 'mouseup', document)
+    const {from, to} = v.state.selection.main
+    CM.Vim.handleKey(cm, '<Esc>')
+    return {doc: Editor.all(), selected: v.state.sliceDoc(from, to)}
+  """
+  check 'with vim keys, a click on another line after o takes the indent back, and its drag selects',
+    clicked.doc is BLANK and clicked.selected is 'baz', JSON.stringify clicked
+
+  # Ordinary keys are not vim: an indent nobody typed on stays.
+  await vimKeys no
+  plain = await js """
+    const v = Editor.view()
+    v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: #{JSON.stringify START}}})
+    v.dispatch({selection: {anchor: v.state.doc.line(2).to}})
+    for (const key of ['Enter', 'Escape', 'ArrowDown'])
+      v.contentDOM.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true}))
+    return Editor.all()
+  """
+  check 'with ordinary keys, Enter then Esc and Down leave the new line its indent',
+    plain is KEPT, JSON.stringify plain

@@ -257,8 +257,11 @@ question and takes back whatever the answer changed.
 A sketch that never reaches a yield point never answers, the same way it never
 stops.
 
-The prompt has the node REPL's keys. Up and Down walk earlier lines, and
-Ctrl-R and Ctrl-S search back and forward through them. Ctrl-A and Ctrl-E go
+The prompt has the node REPL's keys. Up and Down walk earlier lines -- with
+something typed, only those that start with what is left of the cursor, so
+`ci` and Up finds the last `circle` -- and Down comes back to the line as it
+was typed. Ctrl-P and Ctrl-N walk every line, and Ctrl-R and Ctrl-S search
+back and forward through them. Ctrl-A and Ctrl-E go
 to the start and end of the line, Alt-B and Alt-F a word at a time. Ctrl-K
 and Ctrl-U cut, and Ctrl-Y puts the cut back -- so redo there is
 Ctrl-Shift-Z, not Ctrl-Y; Ctrl-W and Alt-D delete a word. Ctrl-C copies a selection or else clears the line,

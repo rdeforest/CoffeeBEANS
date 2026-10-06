@@ -237,7 +237,7 @@ module.exports = (t) ->
     for (let i = 0; i < 12; i++) writes.push(beans.write('#{overlap}', 'print ' + i + ' ' + 'x'.repeat(4000 - 300 * i) + '\\n'));
     return (await Promise.allSettled(writes)).map(r => r.status === 'fulfilled' ? 'ok' : r.reason.message);
   """
-  onDisk = await fsp.readFile path.join(t.paths.sketches, "#{overlap}.coffee"), 'utf8'
+  onDisk = t.asHeld await fsp.readFile path.join(t.paths.sketches, "#{overlap}.coffee"), 'utf8'
   last   = "print 11 #{'x'.repeat 4000 - 300 * 11}\n"
   failed = (r for r in results when r isnt 'ok')
   check 'overlapping saves of one sketch all land, the last one asked for on disk',
@@ -536,3 +536,173 @@ module.exports = (t) ->
   {code, said, took, killed, report} = await quitChild 60000
   check 'the app quits with a save that hangs, after SAVE_LIMIT, and says so',
     code is 0 and not killed and took < 30000 and said.some((line) -> /will-quit: still saving .*quit-edit\.coffee/.test line), report
+
+  # --- line endings ------------------------------------------------------------
+
+  # Robert, 2026-10-05: line endings follow the platform. A sketch keeps the
+  # endings it has, whoever wrote them, and one with none yet takes the
+  # platform's (main's writeSketch). Each check below pretends to be the
+  # platform whose endings the sketch does not have (`newline.forced`), so
+  # keeping them is told apart from following the platform.
+  {newline}  = t.paths
+  NATIVE_EOL = if process.platform is 'win32' then '\r\n' else '\n'
+  crlf       = (text) -> text.replace /\n/g, '\r\n'
+  endsName   = 'line-endings'
+  endsAt     = path.join t.paths.sketches, "#{endsName}.coffee"
+  freshName  = 'line-endings-new'
+  freshAt    = path.join t.paths.sketches, "#{freshName}.coffee"
+
+  # Every sketch:changed the test page is sent, raw: the echo of a save is
+  # otherwise invisible, being ignored, and an outside write has to have
+  # come and gone before an edit, or its late read could revert the edit
+  # (the stale-echo window AGENTS.md records as still open).
+  await js "window.heardChanges = []; beans.onChanged((change) => window.heardChanges?.push(change)); return true"
+  listen = -> js "window.heardChanges = []; return true"
+  heard  = (name, bytes) -> until_ -> js """
+    return heardChanges.some((change) => change.name === #{JSON.stringify name} && change.text === #{JSON.stringify bytes})
+  """
+  outside = (bytes) ->
+    await listen()
+    await fsp.writeFile endsAt, bytes, 'utf8'
+    heard endsName, bytes
+  openEnds = (bytes) ->
+    await js "await Editor.load('scratch'); return true"
+    await outside bytes
+    await js "await Editor.load('#{endsName}'); return true"
+  saveAs = (text) ->
+    await setDoc text
+    await js "await Editor.save(); return true"
+    fsp.readFile endsAt, 'utf8'
+
+  try
+    # A CRLF sketch edited here stays CRLF, pretending to be Linux. Its echo
+    # comes back CRLF and must not read as an outside edit: the editor holds
+    # \n, so it compares the echo in that form.
+    newline.forced = '\n'
+    await openEnds crlf "print 'ONE'\nprint 'TWO'\n"
+    await clearConsole()
+    await listen()
+    disk  = await saveAs "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n"
+    check 'an edited CRLF sketch is saved CRLF, on a platform whose own are LF',
+      disk is crlf("print 'ONE'\nprint 'TWO'\nprint 'THREE'\n"), JSON.stringify disk
+    echo  = await heard endsName, crlf "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n"
+    await quiet()
+    after = await js "return {doc: Editor.all(), dirty: Editor.dirty(), said: document.getElementById('console').textContent}"
+    check 'the echo of our own CRLF save is not taken for an outside edit',
+      echo and after.doc is "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n" and not after.dirty and not after.said.includes('reloaded'),
+      JSON.stringify {echo, after}
+
+    # And an LF sketch stays LF, pretending to be Windows. K4's always-LF
+    # saves pass this too; the check above is the one they fail. This one
+    # fails a save that keeps CRLF where it finds it and otherwise follows
+    # the platform, which every other check here lets through.
+    newline.forced = '\r\n'
+    await openEnds "print 'ONE'\nprint 'TWO'\n"
+    disk = await saveAs "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n"
+    check 'an edited LF sketch is saved LF, on a platform whose own are CRLF',
+      disk is "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n", JSON.stringify disk
+
+    # The player's own editor rewrote it with other endings and nothing else.
+    # The editor ignores that change -- its text is the same -- but the next
+    # save keeps what the player's editor wrote.
+    newline.forced = '\n'
+    await openEnds "print 'ONE'\n"
+    await outside crlf "print 'ONE'\n"
+    disk = await saveAs "print 'ONE'\nprint 'TWO'\n"
+    check 'a sketch whose endings were changed outside is saved with the new ones',
+      disk is crlf("print 'ONE'\nprint 'TWO'\n"), JSON.stringify disk
+
+    # Mixed: most lines win, over the platform's, and the console says so
+    # once -- the save after is of a file that agrees with itself.
+    newline.forced = '\n'
+    await openEnds "print 'ONE'\r\nprint 'TWO'\r\nprint 'THREE'\n"
+    await clearConsole()
+    first  = await saveAs "print 'ONE'\nprint 'TWO'\nprint 'THREE'\nprint 'FOUR'\n"
+    second = await saveAs "print 'ONE'\nprint 'TWO'\nprint 'THREE'\nprint 'FOUR'\nprint 'FIVE'\n"
+    await quiet()
+    said   = await consoleText()
+    notes  = said.split('mixed line endings').length - 1
+    check 'a sketch with mixed endings is saved with most lines\' ending, and the console says so once',
+      first is crlf("print 'ONE'\nprint 'TWO'\nprint 'THREE'\nprint 'FOUR'\n") and
+      second is crlf("print 'ONE'\nprint 'TWO'\nprint 'THREE'\nprint 'FOUR'\nprint 'FIVE'\n") and
+      notes is 1 and said.includes("#{endsName}.coffee had mixed line endings (2 CRLF, 1 LF); saved with CRLF throughout"),
+      JSON.stringify {first, second, said}
+
+    # A sketch the app makes is empty, and has no endings until its first
+    # save: that one takes the platform's. Pretending to be Windows, and then
+    # as this machine is -- which on the Windows CI job is the real thing.
+    makeFresh = (forced) ->
+      newline.forced = forced
+      await js "await Editor.load('scratch'); return true"
+      await fsp.rm freshAt, force: yes
+      await listen()
+      created = await js "return (await beans.create('#{freshName}')).created"
+      await heard freshName, ''
+      await js "await Editor.load('#{freshName}'); return true"
+      await setDoc "print 'A'\nprint 'B'\n"
+      await js "await Editor.save(); return true"
+      {created, disk: await fsp.readFile freshAt, 'utf8'}
+    pretended = await makeFresh '\r\n'
+    asIs      = await makeFresh null
+    check 'a new sketch is saved CRLF where the platform is Windows, and with this platform\'s own endings here',
+      pretended.created and pretended.disk is crlf("print 'A'\nprint 'B'\n") and
+      asIs.created and asIs.disk is "print 'A'\nprint 'B'\n".replace(/\n/g, NATIVE_EOL),
+      JSON.stringify {pretended, asIs, platform: process.platform}
+
+    # U1's flush, as the page goes away, writes the same endings a save does:
+    # main converts every write, not only sketch:write's.
+    newline.forced = '\n'
+    await js "await Editor.load('scratch'); return true"
+    await fsp.writeFile endsAt, crlf("print 'OLD'\n"), 'utf8'
+    page    = await openPage endsName
+    pending = await edit page, "print 'FLUSHED'\nprint 'CRLF'\n"
+    await reload page
+    await onSketch page, endsName
+    page.destroy()
+    disk = await fsp.readFile endsAt, 'utf8'
+    check 'an edit flushed at View > Reload keeps the sketch\'s CRLF endings',
+      pending and disk is crlf("print 'FLUSHED'\nprint 'CRLF'\n"), "pending #{pending} disk #{JSON.stringify disk}"
+
+    # A save asks the file for its endings, and a file that will not be read
+    # must not fail the save: the rename needs only the folder. A holder on
+    # Windows refuses the read for a moment, and that is waited out as the
+    # rename's refusals are (main's `faults` stands in for the holder).
+    newline.forced = '\n'
+    await openEnds crlf "print 'ONE'\n"
+    faults.windows    = yes
+    faults.unreadable = 3
+    disk  = await saveAs "print 'ONE'\nprint 'HELD'\n"
+    left  = faults.unreadable
+    faults.windows    = no
+    faults.unreadable = 0
+    dirty = await js "return Editor.dirty()"
+    check 'a save whose read of the sketch is refused a few times waits it out, and keeps the CRLF',
+      disk is crlf("print 'ONE'\nprint 'HELD'\n") and left is 0 and not dirty,
+      "disk #{JSON.stringify disk} refusals left #{left} dirty #{dirty}"
+
+    # A refusal that lasts leaves the endings unknown, and the save takes the
+    # platform's. Mode 000 is one Linux and macOS make for real; Windows has
+    # no unreadable mode that a rename would still replace, and root reads
+    # through it.
+    unless process.platform is 'win32' or process.getuid() is 0
+      newline.forced = '\n'
+      await openEnds crlf "print 'ONE'\n"
+      await fsp.chmod endsAt, 0o000
+      await clearConsole()
+      await setDoc "print 'ONE'\nprint 'LOCKED'\n"
+      await js "await Editor.save(); return true"
+      await quiet()
+      said  = await consoleText()
+      dirty = await js "return Editor.dirty()"
+      disk  = await fsp.readFile(endsAt, 'utf8').catch (error) -> error.code
+      check 'a sketch that cannot be read is still saved, with the platform\'s endings',
+        disk is "print 'ONE'\nprint 'LOCKED'\n" and not dirty and not said.includes('could not save'),
+        JSON.stringify {disk, dirty, said}
+  finally
+    newline.forced    = null
+    faults.windows    = no
+    faults.unreadable = 0
+    page?.destroy() unless page?.isDestroyed()
+    await js "window.heardChanges = null; await Editor.load('scratch'); return true"
+    await fsp.rm endsAt,  force: yes
+    await fsp.rm freshAt, force: yes
