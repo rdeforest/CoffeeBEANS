@@ -21,11 +21,42 @@ SKETCHES = path.join DATA, 'sketches'
 # the real app reopening a test fixture.
 app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOME
 
+# A failure in this process that no request is waiting to hear about -- a
+# rejection nobody caught, a settings file that would not read or save, a
+# folder that would not open -- is said in the window's console, the one
+# place a player looks; before 2026-10-06 it went to the terminal and nowhere
+# else (Claude's audit, docs/research/unhandled-exceptions.md). A page hears
+# them once it has asked to (`app:problems`). Until one has, they wait, so
+# one from before the window, or from while it reloads, is said once it is
+# up rather than sent to a page with nobody listening yet.
+waiting   = []
+listening = new Set
+
+sayProblem = (text, logged = text) ->
+  console.error logged
+  listening.delete page for page from listening when page.isDestroyed()
+  return waiting.push text unless listening.size
+  page.send 'app:problem', text for page from listening
+  undefined
+
+ipcMain.on 'app:problems', (event) ->
+  page = event.sender
+  page.send 'app:problem', text for text in waiting.splice 0
+  listening.add page
+  page.once 'did-start-loading', -> listening.delete page
+
+# Visible, never quiet: the terminal still gets the stack, and the window the
+# message. Not uncaughtException, which Electron already shows in a box.
+# Listening replaces Node's own warning, so the terminal line says
+# "unhandled" itself: the startup part looks for that word in a launch.
+process.on 'unhandledRejection', (reason) ->
+  sayProblem "main: #{reason?.message ? reason}", "unhandled rejection: #{reason?.stack ? reason}"
+
 # Read in reachWindow, once the data folder is known to be there.
 SETTINGS     = path.join DATA, 'settings.json'
 Settings     = require './settings'
 settings     = {}
-saveSettings = -> Settings.save SETTINGS, settings
+saveSettings = -> Settings.save SETTINGS, settings, sayProblem
 
 ipcMain.handle 'settings:vim',      -> settings.vim is true
 ipcMain.handle 'settings:warnCase', -> settings.warnCase isnt false
@@ -62,18 +93,26 @@ protocol.registerSchemesAsPrivileged [
     corsEnabled:     yes
 ]
 
+# The suite's way to have one of the app's own files go missing, as from a
+# broken install, which it cannot arrange without breaking the checkout it
+# runs from. Handed only to the suite (createWindow), like `faults` below.
+unserved = new Set
+
+# Rejecting gives the renderer an opaque network error. A 404 says which path
+# it was, which is the whole question when a module fails to load and the
+# worker never comes up.
+notFound = (pathname) -> new Response "not found: #{pathname}", status: 404
+
 serve = (request) ->
   {pathname} = new URL request.url
   file       = path.join ROOT, decodeURIComponent pathname
   return new Response 'forbidden', status: 403 unless file is ROOT or file.startsWith ROOT + path.sep
+  return notFound pathname if unserved.has pathname
 
   try
     source = await net.fetch url.pathToFileURL(file).toString()
   catch error
-    # Rejecting here gives the renderer an opaque network error. A 404 says
-    # which path it was, which is the whole question when a module fails to
-    # load and the worker never comes up.
-    return new Response "not found: #{pathname}", status: 404
+    return notFound pathname
   headers = new Headers
   headers.set 'Content-Type', MIME[path.extname file] ? 'application/octet-stream'
   headers.set 'Cross-Origin-Opener-Policy',   'same-origin'
@@ -453,6 +492,17 @@ capture = (win) ->
         app.quit() if i is delays.length - 1
       ), delay
 
+# A load overtaken by another -- View > Reload pressed while the window is
+# still coming up, or a second crash during the crash reload -- rejects with
+# ERR_ABORTED, which is not a failure: the other load is the page now
+# (measured by Claude, 2026-10-06). Left uncaught it reached sayProblem as a
+# `main: ERR_ABORTED` line in the page that replaced it. Anything else is
+# said. An index.html that is missing is not one of them: serve answers 404,
+# the load succeeds, and the window shows the 404's text.
+loadPage = (win, query) ->
+  win.loadURL("app://beans/src/renderer/index.html#{query}").catch (error) ->
+    sayProblem "the window could not load: #{error.message}" unless error.code is 'ERR_ABORTED'
+
 createWindow = ->
   # A test run has no business taking the screen while you are working in
   # another window. Never shown is also the strongest form of background there
@@ -484,7 +534,7 @@ createWindow = ->
   # comes out unless you asked to watch the run, when hearing it helps.
   win.webContents.setAudioMuted yes if process.env.BEANS_TEST and not process.env.BEANS_SHOW
   query = process.env.BEANS_QUERY ? ''
-  win.loadURL "app://beans/src/renderer/index.html#{query}"
+  loadPage win, query
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
   win.webContents.on 'console-message', (event) ->
     console.log "[renderer] #{event.message}"
@@ -495,7 +545,7 @@ createWindow = ->
   win.webContents.on 'render-process-gone', (event, {reason}) ->
     console.error "renderer gone: #{reason}"
     return if reason is 'clean-exit' or process.env.BEANS_TEST or win.isDestroyed()
-    win.loadURL "app://beans/src/renderer/index.html?crashed=#{encodeURIComponent reason}"
+    loadPage win, "?crashed=#{encodeURIComponent reason}"
   # BEANS_MINIMIZE is the way to exercise backgroundThrottling from a test run
   # on macOS: there a hidden window is not throttled and a minimised one is,
   # and with throttling on every buffer.swap in the suite hangs until its
@@ -535,7 +585,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, unserved, listening, loadPage})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
@@ -561,9 +611,7 @@ installMenu = ->
       {
         label:       'Open Data Folder'
         accelerator: 'CmdOrCtrl+Shift+D'
-        click: ->
-          problem = await shell.openPath DATA
-          console.log "openPath: #{problem}" if problem
+        click: -> openFolder DATA
       }
       {type: 'separator'}
       {role: 'quit'}
@@ -660,10 +708,12 @@ ask = (box) ->
 # Linux under Caja. And not awaited: like showMessageBox's, openPath's
 # promise never settled with no window up, and the box never came back
 # (Claude, 2026-10-05). A test run says which folder instead of opening a
-# file manager on the desktop of whoever is running it.
+# file manager on the desktop of whoever is running it. File > Open Data
+# Folder comes here too, so a file manager that will not start is said in
+# the console rather than being nothing happening.
 openFolder = (folder) ->
   return console.log "openPath: #{folder}" if process.env.BEANS_TEST
-  shell.openPath(folder).then (problem) -> console.log "openPath: #{problem}" if problem
+  shell.openPath(folder).then (why) -> sayProblem "could not open #{folder}: #{why}" if why
 
 tryAgain = (box) ->
   loop
@@ -684,7 +734,7 @@ tryAgain = (box) ->
 reachWindow = ->
   await prepareDataHome()
   folding.probed = probeFolding SKETCHES
-  settings = Settings.read SETTINGS
+  settings = Settings.read SETTINGS, sayProblem
   protocol.handle 'app', serve unless protocol.isProtocolHandled 'app'
   installMenu()
   createWindow()

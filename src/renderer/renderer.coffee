@@ -1612,6 +1612,8 @@ window.addEventListener 'error', (event) ->
   say "renderer: #{event.message}", 'err'
 window.addEventListener 'unhandledrejection', (event) ->
   say "renderer: #{event.reason?.message ? event.reason}", 'err'
+# And main's, which has no console of its own a player would see.
+beans.onProblem (text) -> say text, 'err'
 
 # --- boot -------------------------------------------------------------------
 
