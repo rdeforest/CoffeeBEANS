@@ -25,8 +25,21 @@ Each entry: what to do, what should happen, where it came from.
 ## macOS (Robert's MacBook)
 
 - Everything on `docs/overnight/done/2026-10-05.md`'s play-test list, and in
-  particular: undo/redo at the prompt (Cmd-Z, Cmd-Shift-Z) -- confirmed dead
-  by Robert on 2026-10-05, fix queued as K7 for the night of 2026-10-06, to
-  be re-tested on the Mac once it lands;
-  Ctrl-Enter, Ctrl-S and Ctrl-. are literal Ctrl, not Cmd; the CI by-hand run
-  missed the first save in a folder created outside the app.
+  particular: Ctrl-Enter, Ctrl-S and Ctrl-. are literal Ctrl, not Cmd; the
+  CI by-hand run missed the first save in a folder created outside the app.
+- **Undo and redo, Cmd-Z and Cmd-Shift-Z.** Found dead at the prompt by
+  Robert on 2026-10-05; Edit > Undo and Redo added for it in K7, overnight
+  2026-10-06, and proved on Linux only by clicking the menu items from the
+  suite. On the Mac, by hand:
+  1. Type `abc` at the prompt, Cmd-Z: the line empties. Cmd-Shift-Z: `abc`
+     is back. The same from the Edit menu with the mouse.
+  2. In the editor, type a line, pause, type another; Cmd-Z takes away
+     exactly the second (not both), and Cmd-Shift-Z puts it back. If one
+     Cmd-Z takes two steps, the menu's key fired as well as CodeMirror's.
+     Claude expected (reasoned, not measured) that Chromium gives the page
+     the key first and the menu only a key the page left alone, as a real
+     key behaved on Linux (P1, 2026-10-05); nobody has seen it on a Mac.
+  3. The same with Edit > Vim Keys ticked, in insert mode and with `u` and
+     Ctrl-R in normal mode.
+  4. Edit > Undo from the menu with the editor focused: one step.
+  5. Click the canvas, Cmd-Z: neither the prompt nor the sketch changes.

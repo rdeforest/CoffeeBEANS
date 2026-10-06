@@ -83,7 +83,8 @@ module.exports = (win, paths) ->
   # check can read what it did before anything else gets a turn.
   t.chord = (key, mods = {}) -> t.js """
     const down = new KeyboardEvent('keydown', { key: #{JSON.stringify key},
-      ctrlKey: #{!!mods.ctrl}, shiftKey: #{!!mods.shift}, bubbles: true, cancelable: true })
+      ctrlKey: #{!!mods.ctrl}, metaKey: #{!!mods.meta}, shiftKey: #{!!mods.shift},
+      bubbles: true, cancelable: true })
     Editor.view().contentDOM.dispatchEvent(down)
     return down.defaultPrevented
   """
