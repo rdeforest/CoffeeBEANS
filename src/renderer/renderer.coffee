@@ -1291,7 +1291,7 @@ linePause = ->
 # DevTools, which it never arms again (see stale in src/main/debugger.coffee).
 UNPAUSED =
   false: '*** could not pause -- is DevTools open? ***'
-  stale: '*** could not pause a sketch that was running when DevTools opened -- pausing works again from the next Run ***'
+  stale: '*** could not pause: this worker was in use before DevTools opened -- pausing works again from the next Run ***'
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
 # paused frame, and V8 must not be moved on under it (main refuses too; this
