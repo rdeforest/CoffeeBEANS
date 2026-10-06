@@ -6,6 +6,18 @@ os   = require 'os'
 path = require 'path'
 url  = require 'url'
 
+# An exception nobody catches in main gets Electron's own modal box, which
+# blocks this process until somebody clicks it. A test run has nobody to
+# click: twice on 2026-10-06 a hidden run sat on that box, on Robert's
+# desktop, until it was killed (Claude, A2). So a test run says it and exits
+# instead. Registered first, so it covers everything below. What a player's
+# app should do is Robert's call (docs/research/unhandled-exceptions.md,
+# Questions); until then it keeps Electron's box.
+if process.env.BEANS_TEST
+  process.on 'uncaughtException', (error) ->
+    console.error "uncaught exception: #{error.stack ? error}"
+    app.exit 1
+
 ROOT     = path.join __dirname, '..', '..'
 EXAMPLES = path.join ROOT, 'examples'
 
@@ -21,11 +33,72 @@ SKETCHES = path.join DATA, 'sketches'
 # the real app reopening a test fixture.
 app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOME
 
+# A failure in this process that no request is waiting to hear about -- a
+# rejection nobody caught, a settings file that would not read or save, a
+# folder that would not open -- is said in the window's console, the one
+# place a player looks; before 2026-10-06 it went to the terminal and nowhere
+# else (Claude's audit, docs/research/unhandled-exceptions.md). A page hears
+# them once it has asked to (`app:problems`). Until one has, they wait, so
+# one from before the window, or from while it reloads, is said once it is
+# up rather than sent to a page with nobody listening yet.
+#
+# At most HELD wait: a page whose loader failed never asks, and would have
+# every problem held for the life of the app. The first are kept, as the
+# likeliest cause of the rest, and the rest only counted.
+HELD      = 50
+waiting   = []
+unheld    = 0
+listening = new Set
+
+hold = (text) ->
+  return unheld += 1 if waiting.length >= HELD
+  waiting.push text
+
+sayProblem = (text, logged = text) ->
+  console.error logged
+  page.send 'app:problem', text for page from listening
+  hold text unless listening.size
+  undefined
+
+join = (page) ->
+  page.send 'app:problem', text for text in waiting.splice 0
+  page.send 'app:problem', "main: #{unheld} more problems, on the terminal only" if unheld
+  unheld = 0
+  listening.add page
+
+ipcMain.on 'app:problems', (event) -> join event.sender
+
+# A page stops hearing them once it starts loading another: said while it
+# goes, a problem went to the page on its way out and was lost with it. If no
+# other page arrives -- a navigation refused (refuseNavigation) starts
+# loading and stops again, measured by Claude, Electron 44, 2026-10-06 -- it
+# hears them again, with whatever was held meanwhile. Nor does a page whose
+# renderer has died: sent to it, a problem was lost rather than held for the
+# page that comes up next.
+leaving = new Set
+
+app.on 'web-contents-created', (event, page) ->
+  page.on 'did-start-loading', -> leaving.add page if listening.delete page
+  page.on 'did-navigate',      -> leaving.delete page
+  page.on 'did-stop-loading',  -> join page if leaving.delete page
+  for gone in ['render-process-gone', 'destroyed']
+    page.on gone, ->
+      listening.delete page
+      leaving.delete page
+
+# Visible, never quiet: the terminal still gets the stack, and the window the
+# message. Not uncaughtException, which Electron already shows in a box
+# (and a test run exits on, above). Listening replaces Node's own warning, so
+# the terminal line says "unhandled" itself: the startup part looks for that
+# word in a launch.
+process.on 'unhandledRejection', (reason) ->
+  sayProblem "main: #{reason?.message ? reason}", "unhandled rejection: #{reason?.stack ? reason}"
+
 # Read in reachWindow, once the data folder is known to be there.
 SETTINGS     = path.join DATA, 'settings.json'
 Settings     = require './settings'
 settings     = {}
-saveSettings = -> Settings.save SETTINGS, settings
+saveSettings = -> Settings.save SETTINGS, settings, sayProblem
 
 ipcMain.handle 'settings:vim',      -> settings.vim is true
 ipcMain.handle 'settings:warnCase', -> settings.warnCase isnt false
@@ -38,6 +111,21 @@ ipcMain.handle 'app:about', ->
   version = await VERSION
   {version: version.text, note: version.note, text: Version.about version}
 ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
+
+# The 📣🐞 button. The draft is redacted here, where the folders and the
+# machine's names are known; what is saved is the text the player was shown,
+# edits and all, so a save is never redacted again behind their back.
+Report  = require './report'
+REPORTS = path.join DATA, 'reports'
+
+ipcMain.handle 'report:draft', (event, ask) ->
+  about = Version.about await VERSION
+  Report.draft {ask..., about}, {data: DATA, app: ROOT}
+ipcMain.handle 'report:save', (event, text) ->
+  file = await Report.save REPORTS, text
+  shell.showItemInFolder file
+  {file, issues: Report.ISSUES}
+ipcMain.handle 'report:issues', -> shell.openExternal Report.ISSUES
 
 # Edit > Undo and Redo in a text field: the page's native step, run from here
 # because document.execCommand, run in the page, edits CodeMirror's DOM
@@ -71,18 +159,26 @@ protocol.registerSchemesAsPrivileged [
     corsEnabled:     yes
 ]
 
+# The suite's way to have one of the app's own files go missing, as from a
+# broken install, which it cannot arrange without breaking the checkout it
+# runs from. Handed only to the suite (createWindow), like `faults` below.
+unserved = new Set
+
+# Rejecting gives the renderer an opaque network error. A 404 says which path
+# it was, which is the whole question when a module fails to load and the
+# worker never comes up.
+notFound = (pathname) -> new Response "not found: #{pathname}", status: 404
+
 serve = (request) ->
   {pathname} = new URL request.url
   file       = path.join ROOT, decodeURIComponent pathname
   return new Response 'forbidden', status: 403 unless file is ROOT or file.startsWith ROOT + path.sep
+  return notFound pathname if unserved.has pathname
 
   try
     source = await net.fetch url.pathToFileURL(file).toString()
   catch error
-    # Rejecting here gives the renderer an opaque network error. A 404 says
-    # which path it was, which is the whole question when a module fails to
-    # load and the worker never comes up.
-    return new Response "not found: #{pathname}", status: 404
+    return notFound pathname
   headers = new Headers
   headers.set 'Content-Type', MIME[path.extname file] ? 'application/octet-stream'
   headers.set 'Cross-Origin-Opener-Policy',   'same-origin'
@@ -356,14 +452,18 @@ settlesWithin = (ms, promise) ->
 # closing window waits only about 500ms, then goes anyway, which is why the
 # quit waits as well (will-quit, below). An async message from the page always
 # arrived too, but nothing waited for its write. The page is gone by the time
-# anything could go wrong, so a failure is said here.
+# anything could go wrong, so a failure -- or the note that the sketch's line
+# endings were mixed -- is said by main: on a reload, to the page that comes
+# up.
 ipcMain.on 'sketch:flush', (event, name, text) ->
   last = Promise.resolve()
     .then -> if text? then queueSave name, text else saving.get caseKey sketchFile name
-    .then (note) -> console.log "sketch:flush: #{note}" if note
-    .catch (error) -> console.error "sketch:flush: could not save #{name}: #{error.message}"
+    .then (note) -> sayProblem note, "sketch:flush: #{note}" if note
+    .catch (error) -> sayProblem "could not save #{name}: #{error.message}", "sketch:flush: could not save #{name}: #{error.message}"
   settlesWithin(SAVE_LIMIT, last).then (settled) ->
-    console.error "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting" unless settled
+    unless settled
+      sayProblem "still saving #{name} after #{SAVE_LIMIT / 1000}s; the editor shows the old text until it lands",
+        "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting"
     event.returnValue = true
 
 ASSETS = path.join DATA, 'assets'
@@ -435,6 +535,7 @@ ipcMain.handle 'sketch:pick', (event) ->
 watchSketches = (win) ->
   timers   = {}
   watchers = new Map
+  failing  = new Set     # paths a read failed for, said already (unread)
 
   # Never read a sketch while a save of it is in flight. The editor sets
   # lastWritten to the new text before the write lands, and takes any text
@@ -471,7 +572,8 @@ watchSketches = (win) ->
         name = await spelled heard
         text = await fsp.readFile sketchFile(name), 'utf8'
       catch error
-        return console.log "watch: #{heard}: #{error.message}"
+        return unread heard, error
+      failing.delete heard
       return again() unless begun.get(key) is before
       win.webContents.send 'sketch:changed', {name, text} unless win.isDestroyed()
     ), 60
@@ -480,6 +582,29 @@ watchSketches = (win) ->
     watchers.get(dir)?.close()
     watchers.delete dir
 
+  # A folder the watcher could not watch, or whose watch stopped: an edit
+  # made in it outside the app -- vim's, say -- is not picked up, and before
+  # 2026-10-06 only the terminal heard (Claude's audit,
+  # docs/research/unhandled-exceptions.md). Not said when it is gone, which
+  # loses nothing: a folder deleted outside the app.
+  unseen = (where, error, label = 'watch') ->
+    logged = "#{label}: #{where}: #{error.message}"
+    return console.log logged if error.code is 'ENOENT'
+    sayProblem "changes made outside CoffeeBEANS to #{where} will not be seen: #{error.message}", logged
+
+  # A sketch, or an entry that may be a new folder, that would not read. That
+  # may pass -- Windows' EBUSY while something else holds the file -- and the
+  # next event reads it again, so it is said once for each path until a read
+  # of it succeeds, not once an event. Gone is not said, as above.
+  unread = (where, error) ->
+    logged = "watch: #{where}: #{error.message}"
+    if error.code is 'ENOENT'
+      failing.delete where
+      return console.log logged
+    return console.log logged if failing.has where
+    failing.add where
+    sayProblem "could not read #{where}: #{error.message}", logged
+
   watchTree = (dir) ->
     return if watchers.has dir
     try
@@ -487,14 +612,15 @@ watchSketches = (win) ->
       children = fs.readdirSync dir, withFileTypes: yes
     catch error
       watcher?.close()
-      console.log "watch: #{dir}: #{error.message}"
-      return
+      return unseen dir, error
     watchers.set dir, watcher
     # Without this, deleting a watched folder while the app runs throws out
-    # of the main process and takes the window with it.
+    # of the main process and takes the window with it. That loses nothing,
+    # and need not come as ENOENT, so only a folder still there is said.
     watcher.on 'error', (error) ->
-      console.log "watch stopped: #{dir}: #{error.message}"
       forget dir
+      return console.log "watch stopped: #{dir}: #{error.message}" unless fs.existsSync dir
+      unseen dir, error, 'watch stopped'
     watcher.on 'change', (event, filename) ->
       return unless filename?
       entry = path.join dir, filename
@@ -502,10 +628,13 @@ watchSketches = (win) ->
       # Anything else may be a folder arriving, which needs its own watch, or
       # one leaving, whose watch should go with it.
       fsp.stat(entry)
-        .then (stats) -> watchTree entry if stats.isDirectory()
+        .then (stats) ->
+          failing.delete entry
+          watchTree entry if stats.isDirectory()
         .catch (error) ->
-          if error.code is 'ENOENT' then forget entry
-          else console.log "watch: #{entry}: #{error.message}"
+          return unread entry, error unless error.code is 'ENOENT'
+          failing.delete entry
+          forget entry
     watchTree path.join dir, child.name for child in children when child.isDirectory()
     undefined
 
@@ -546,6 +675,29 @@ capture = (win) ->
         app.quit() if i is delays.length - 1
       ), delay
 
+# A load overtaken by another -- View > Reload pressed while the window is
+# still coming up, or a second crash during the crash reload -- rejects with
+# ERR_ABORTED, which is not a failure: the other load is the page now
+# (measured by Claude, 2026-10-06). Left uncaught it reached sayProblem as a
+# `main: ERR_ABORTED` line in the page that replaced it. Anything else is
+# said. An index.html that is missing is not one of them: serve answers 404,
+# the load succeeds, and the window shows the 404's text.
+loadPage = (win, query) ->
+  win.loadURL("app://beans/src/renderer/index.html#{query}").catch (error) ->
+    sayProblem "the window could not load: #{error.message}" unless error.code is 'ERR_ABORTED'
+
+# Nothing in the app navigates by itself, so a navigation the page starts is
+# a file dropped on the window outside the editor, or a link: either replaced
+# the app with that file, with only View > Reload to come back. Main's own
+# loads, reloads and in-page changes do not come here (measured by Claude,
+# Electron 44, 2026-10-06). A new window the page asks for -- `window.open`,
+# a link with a target -- is refused too: nothing in the app opens one, and
+# one would come up with Electron's defaults rather than this window's
+# (item 14 of Electron's security checklist).
+refuseNavigation = (contents) ->
+  contents.on 'will-navigate', (event) -> event.preventDefault()
+  contents.setWindowOpenHandler -> action: 'deny'
+
 createWindow = ->
   # A test run has no business taking the screen while you are working in
   # another window. Never shown is also the strongest form of background there
@@ -577,10 +729,11 @@ createWindow = ->
   # comes out unless you asked to watch the run, when hearing it helps.
   win.webContents.setAudioMuted yes if process.env.BEANS_TEST and not process.env.BEANS_SHOW
   query = process.env.BEANS_QUERY ? ''
-  win.loadURL "app://beans/src/renderer/index.html#{query}"
+  loadPage win, query
   win.webContents.openDevTools mode: 'detach' if process.env.BEANS_DEVTOOLS
   win.webContents.on 'console-message', (event) ->
     console.log "[renderer] #{event.message}"
+  refuseNavigation win.webContents
   # The sketch worker lives in the renderer's process, so a crash in either
   # takes the page with it and leaves a black window that says nothing. Come
   # back up and say what happened. A test run lets it lie: a suite that
@@ -588,7 +741,7 @@ createWindow = ->
   win.webContents.on 'render-process-gone', (event, {reason}) ->
     console.error "renderer gone: #{reason}"
     return if reason is 'clean-exit' or process.env.BEANS_TEST or win.isDestroyed()
-    win.loadURL "app://beans/src/renderer/index.html?crashed=#{encodeURIComponent reason}"
+    loadPage win, "?crashed=#{encodeURIComponent reason}"
   # BEANS_MINIMIZE is the way to exercise backgroundThrottling from a test run
   # on macOS: there a hidden window is not throttled and a minimised one is,
   # and with throttling on every buffer.swap in the suite hangs until its
@@ -628,7 +781,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
@@ -654,9 +807,7 @@ installMenu = ->
       {
         label:       'Open Data Folder'
         accelerator: 'CmdOrCtrl+Shift+D'
-        click: ->
-          problem = await shell.openPath DATA
-          console.log "openPath: #{problem}" if problem
+        click: -> openFolder DATA
       }
       {type: 'separator'}
       {role: 'quit'}
@@ -771,10 +922,12 @@ ask = (box) ->
 # Linux under Caja. And not awaited: like showMessageBox's, openPath's
 # promise never settled with no window up, and the box never came back
 # (Claude, 2026-10-05). A test run says which folder instead of opening a
-# file manager on the desktop of whoever is running it.
+# file manager on the desktop of whoever is running it. File > Open Data
+# Folder comes here too, so a file manager that will not start is said in
+# the console rather than being nothing happening.
 openFolder = (folder) ->
   return console.log "openPath: #{folder}" if process.env.BEANS_TEST
-  shell.openPath(folder).then (problem) -> console.log "openPath: #{problem}" if problem
+  shell.openPath(folder).then (why) -> sayProblem "could not open #{folder}: #{why}" if why
 
 tryAgain = (box) ->
   loop
@@ -795,7 +948,7 @@ tryAgain = (box) ->
 reachWindow = ->
   await prepareDataHome()
   folding.probed = probeFolding SKETCHES
-  settings = Settings.read SETTINGS
+  settings = Settings.read SETTINGS, sayProblem
   protocol.handle 'app', serve unless protocol.isProtocolHandled 'app'
   installMenu()
   createWindow()
