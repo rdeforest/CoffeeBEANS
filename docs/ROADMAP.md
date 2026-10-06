@@ -45,9 +45,6 @@ by stage of development.
   so they are made here or on Robert's machines; that is a few release builds
   a month, well inside the private minutes.
 
-Until the content repository exists, game design goes in this one, and moves
-when it does.
-
 **Revised by Robert, 2026-10-05.** This repository's history already holds
 the story and challenge solutions, so it stays private for good. Two new
 repositories, created private that day in the `thatsnice` organization:
@@ -58,7 +55,8 @@ repositories, created private that day in the `thatsnice` organization:
   later, in pieces, as an edited history meant to be read: how the thing
   was built, step by step.
 - **`thatsnice/CoffeeBEANS-content`** -- the story, the challenge tree and its
-  solutions, the art, the music. Private.
+  solutions, the art, the music. Private. The story, the challenge ideas and
+  `sketches/` moved there the same day.
 
 Work continues in this repository until the move.
 
@@ -139,18 +137,11 @@ Open:
 - Demo through build review a few weeks before the fest.
 - Next Fest, mid-to-late October 2027 (expected); release after it ends.
 
-## Game content (todo)
+## Game content
 
-Ideas for the challenge tree, not yet placed in it. These move to the
-content repository when it exists.
-
-- **Pseudo-random numbers, as a hack** (Robert, 2026-10-04). Before the game
-  gives the player `randomize` and `rnd`, they implement a simple
-  pseudo-random number generator themselves and use it to decode a message
-  -- exploiting the fact that a "random" stream is perfectly predictable to
-  anyone who knows the generator and the seed. A good first lesson for a
-  novice, it fits the hacking side of the story, and it needs no graphics.
-  Solving it unlocks the built-in generator (NOTES.md, Seeded randomness).
+Moved on 2026-10-05 to `thatsnice/CoffeeBEANS-content`, with the story and
+Robert's sketches: `docs/challenges.md` there holds the challenge ideas.
+New game design goes there, not here.
 
 ## Robert's own todo
 
