@@ -112,6 +112,21 @@ ipcMain.handle 'app:about', ->
   {version: version.text, note: version.note, text: Version.about version}
 ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
 
+# The 📣🐞 button. The draft is redacted here, where the folders and the
+# machine's names are known; what is saved is the text the player was shown,
+# edits and all, so a save is never redacted again behind their back.
+Report  = require './report'
+REPORTS = path.join DATA, 'reports'
+
+ipcMain.handle 'report:draft', (event, ask) ->
+  about = Version.about await VERSION
+  Report.draft {ask..., about}, {data: DATA, app: ROOT}
+ipcMain.handle 'report:save', (event, text) ->
+  file = await Report.save REPORTS, text
+  shell.showItemInFolder file
+  {file, issues: Report.ISSUES}
+ipcMain.handle 'report:issues', -> shell.openExternal Report.ISSUES
+
 # Edit > Undo and Redo in a text field: the page's native step, run from here
 # because document.execCommand, run in the page, edits CodeMirror's DOM
 # behind its back when that step was typed into the editor (`fromMenu` in

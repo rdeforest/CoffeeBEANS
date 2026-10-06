@@ -1023,6 +1023,117 @@ aboutCopy.onclick = ->
 
 beans.onAbout showAbout
 
+# --- the report -------------------------------------------------------------
+
+# The 📣🐞 button: the player says what happened, main adds About and the
+# console's tail and redacts it, and the player sees -- and may edit --
+# exactly what is saved. They attach the file to an issue; nothing is sent.
+REPORT_LINES = 100
+
+reportButton  = document.getElementById 'feedback'
+reportBox     = document.getElementById 'report'
+reportWords   = document.getElementById 'reportWords'
+reportSketch  = document.getElementById 'reportSketch'
+reportText    = document.getElementById 'reportText'
+reportNext    = document.getElementById 'reportDraft'
+reportSave    = document.getElementById 'reportSave'
+reportRefused = document.getElementById 'reportRefused'
+reportSaved   = document.getElementById 'reportSaved'
+
+# Where the player was before a click on the button took focus. A dialog
+# closing hands focus back to whatever had it when it opened -- after a
+# click, the button itself, so Space would open the report again and typing
+# would go nowhere. pointerdown comes before the click moves focus. Reached
+# by Tab instead, the button is where the player was, and stays null.
+reportReturn  = null
+# Taken at pointerdown, and forgotten if the pointer is let go anywhere but
+# the button, or the press is cancelled: either way there is no click, and
+# the next open, from the keyboard, would hand focus to wherever that press
+# began.
+reportPressed = null
+# Counts opens. A draft or a save still out when the player cancelled
+# answers a dialog that has moved on, and must not move the next one. Not
+# counted at `close`: that event is queued, and a quick reopen beats it.
+reportShown   = 0
+
+reportStep = (id) ->
+  step.hidden = step.id isnt id for step in reportBox.querySelectorAll '.step'
+  undefined
+
+# Said in the dialog, which is where the player is looking; the console is
+# behind it.
+reportFailed = (what, error) ->
+  reportSaved.textContent = "Could not #{what}: #{error.message}"
+  reportStep 'reportDone'
+
+openReport = ->
+  reportShown  += 1
+  reportReturn  = if document.activeElement is reportButton then reportPressed else document.activeElement
+  reportPressed = null
+  reportWords.value     = ''
+  reportSketch.checked  = no
+  reportRefused.hidden  = yes
+  reportNext.disabled   = no
+  reportSave.disabled   = no
+  reportStep 'reportAsk'
+  reportBox.showModal()
+  reportWords.focus()
+
+# One draft at a time, like a save.
+draftReport = ->
+  shown = reportShown
+  reportNext.disabled = yes
+  flushConsole()
+  lines  = (line.textContent for line in output.children)[-REPORT_LINES..]
+  sketch = if reportSketch.checked then {name: Editor.name(), text: Editor.all()} else null
+  try
+    text = await beans.report.draft {words: reportWords.value, lines, sketch}
+  catch error
+    return unless shown is reportShown
+    reportNext.disabled = no
+    return reportFailed 'draft the report', error
+  return unless shown is reportShown
+  reportNext.disabled = no
+  reportText.value    = text
+  reportStep 'reportCheck'
+  reportText.focus()
+
+# One save at a time. A save that fails leaves the player where they were,
+# their edits intact, to try again. One that lands after a cancel still
+# wrote its file, so the console says so either way.
+saveReport = ->
+  shown = reportShown
+  reportSave.disabled  = yes
+  reportRefused.hidden = yes
+  try
+    {file, issues} = await beans.report.save reportText.value
+  catch error
+    return unless shown is reportShown
+    reportSave.disabled       = no
+    reportRefused.textContent = "Could not save the report: #{error.message}"
+    reportRefused.hidden      = no
+    return
+  told = "Saved #{file} -- its folder is open. To send it, open an issue at #{issues} and attach the file."
+  say told, 'sys'
+  return unless shown is reportShown
+  reportSave.disabled     = no
+  reportSaved.textContent = told
+  reportStep 'reportDone'
+
+reportButton.addEventListener 'pointerdown', -> reportPressed = document.activeElement
+window.addEventListener 'pointerup',     ((event) -> reportPressed = null unless reportButton.contains event.target), yes
+window.addEventListener 'pointercancel', (-> reportPressed = null), yes
+# `close` is queued, so a quick reopen can run before the last close's
+# event; that event belongs to a dialog that is open again, not this one.
+reportBox.addEventListener 'close', ->
+  return if reportBox.open
+  reportReturn?.focus()
+  reportReturn = null
+reportButton.onclick = openReport
+reportNext.onclick   = draftReport
+reportSave.onclick   = saveReport
+document.getElementById('reportIssues').onclick = -> beans.report.issues()
+
 # --- presentation -----------------------------------------------------------
 
 resize = ->
@@ -1839,12 +1950,18 @@ document.getElementById('toggle').onclick     = toggleEditor
 document.getElementById('open').onclick = pickSketch
 beans.onOpen pickSketch
 
+# An open dialog -- About, the report -- has the keyboard. Ctrl-E typed in
+# the report's text box must not hide the editor behind it, nor F8 pause a
+# sketch nobody can see; Esc and the dialog's own buttons get out.
+dialogOpen = -> document.querySelector('dialog[open]')?
+
 # The line-stepping keys are DevTools' own, and are caught before the editor
 # or the prompt can see them: Ctrl-\ is a prefix in vim when Vim Keys is on,
 # and a key that pauses only when the right thing has focus is no use in a
 # hurry. Not with Alt as well: AltGr arrives as Ctrl+Alt on Windows, and
 # AltGr+ß is how a German keyboard types a backslash.
 window.addEventListener 'keydown', ((event) ->
+  return if dialogOpen()
   modified = (event.ctrlKey and not event.altKey) or event.metaKey
   verb = if event.key is 'F8' or (modified and event.key is '\\')
     togglePause
@@ -1859,7 +1976,7 @@ window.addEventListener 'keydown', ((event) ->
 # Not with Alt: chordOf leaves Ctrl+Alt with a typed key to the prompt as
 # AltGr, so Ctrl-Alt-E reaching here would toggle the editor from the prompt.
 window.addEventListener 'keydown', (event) ->
-  return unless event.ctrlKey and not event.altKey
+  return unless event.ctrlKey and not event.altKey and not dialogOpen()
   handled =
     'e':      toggleEditor
     '.':      stop
