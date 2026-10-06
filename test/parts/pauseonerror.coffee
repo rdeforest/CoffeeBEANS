@@ -313,6 +313,34 @@ loop
   await click 'runFresh'
   await statusBecomes 'ready'
 
+  # A stack that is not a string made the report itself throw, and with it
+  # the run, which then never ended, error stops on or off (a reviewer of E1,
+  # 2026-10-06). Off, there is no pause to say the line.
+  before = (await pauseNumber()) ? 0
+  await runText "kept = 'yes'\nthrow {stack: 5}\n"
+  got = await nextPause before, 5000
+  stoppedAs = await status()
+  await js "Stepping.resume(); return true"
+  ended = await statusBecomes 'error', 5000
+  await t.stopOnErrors no
+  await runText "kept = 'yes'\nthrow {stack: 5}\n"
+  endedOff = await t.settle()
+  said = await consoleText()
+  await t.stopOnErrors yes
+  check 'a thrown value whose stack is not a string stops, and the run ends as an error, error stops on and off',
+    got and stoppedAs is 'error paused' and ended and endedOff is 'error' and said.includes('run: [object Object]'),
+    "stopped as #{stoppedAs}, then #{ended}; off, #{endedOff}; console=#{JSON.stringify said.trim()}"
+
+  # Every read of this one throws, so no report of it can be made however
+  # the report is written. The run still ends, as the error the report met.
+  await runText "throw new Proxy {}, get: -> throw new Error 'unreadable'\n"
+  ended = await t.settle()
+  await t.quiet()
+  said = await consoleText()
+  check 'a thrown value that cannot be read at all still ends the run, as an error',
+    ended is 'error' and said.includes('run (line 1): unreadable') and not said.includes('after the run'),
+    "status=#{ended} console=#{JSON.stringify said.trim()}"
+
   # 11. A Stop reaching an async function the run left behind: it resumes
   # after the run has unwound, meets the flag still up at a yield point, and
   # its Interrupted is a rejection nobody handles. Not an error.
@@ -401,25 +429,62 @@ loop
         not text.includes("(reading 'u')") and not text.includes('stopped where') and not text.includes('debugger:'),
       "status=#{await status()} pause=#{late} console=#{JSON.stringify text.trim()}"
 
-  # 14. The debugger keeps what it knows of a worker's scripts bounded: the
-  # last 32 sketches, and nothing for the prompt's lines, which come several
-  # to a line typed.
-  await setDoc "x = 1\n"
+  # 14. A function defined long ago is still the author's. Main keeps every
+  # named script's url and the worker every run's source, for the life of the
+  # worker; only source maps are capped, at the newest 32, and fetched again
+  # when needed. Before, both kept the last 32 sketches whole and forgot the
+  # rest: after 40 region evals an error in `old` stopped on its caller, and
+  # the report lost `at old` (a reviewer of E1, 2026-10-06). Each eval here
+  # stops at a breakpoint, so each makes main fetch that script's map.
+  # Not a comment on the first line: a sketch that starts with one keeps none
+  # of its names in the image (declaredNames in worker-boot.js skips only
+  # block comments; found 2026-10-06, and not this check's to fix).
+  await setDoc "z = 0\nold = (v) -> v.x.y\n"
   await wait 500
   await click 'runFresh'
   await statusBecomes 'ready'
-  [first] = await t.scriptsKept()
-  await js """
+  [first] = await t.debugKept()
+  await setDoc "z = 1\nbreakpoint\nz = 2\n"
+  await wait 500
+  stops = await js """
+    const status = () => document.getElementById('status').textContent
+    const until = async (ok) => {
+      const deadline = Date.now() + 5000
+      while (!ok()) {
+        if (Date.now() > deadline) return false
+        await new Promise((r) => setTimeout(r, 5))
+      }
+      return true
+    }
+    let stops = 0
     for (let i = 0; i < 40; i++) {
       Editor.command('/eval')
-      while (document.getElementById('status').textContent !== 'ready') await new Promise((r) => setTimeout(r, 5))
+      if (await until(() => status() === 'line paused')) { stops++; Stepping.resume() }
+      await until(() => status() === 'ready')
     }
-    return true
+    return stops
   """
-  await ask "x + #{n}" for n in [1..5]
-  [last] = await t.scriptsKept()
-  check 'the debugger keeps a bounded record of scripts across many runs and prompt lines',
-    first? and last <= first + 31, "first run #{first}, after 40 more runs and 5 lines #{last}"
+  [mid] = await t.debugKept()
+  await ask "z + #{n}" for n in [1..5]
+  [last] = await t.debugKept()
+  check 'the debugger keeps a url for every script, a source map for at most 32, and nothing for prompt lines',
+    stops is 40 and last.scripts >= first.scripts + 40 and last.scripts is mid.scripts and 0 < last.maps <= 32,
+    "stops=#{stops} first=#{JSON.stringify first} after 40 runs #{JSON.stringify mid} and 5 lines #{JSON.stringify last}"
+
+  await setDoc "old null\n"
+  await wait 500
+  before = (await pauseNumber()) ? 0
+  await clearConsole()
+  await evalAll()
+  got = await nextPause before
+  await t.quiet()
+  said = await consoleText()
+  pane = await paneText()
+  check 'an error in a function defined 40 runs ago stops in it, and the report names it',
+    got and (await status()) is 'error paused' and pane?.includes('old \u00b7 line 2') and said.includes('at old, line 2'),
+    "status=#{await status()} pane=#{JSON.stringify pane} console=#{JSON.stringify said.trim()}"
+  await js "Stepping.resume(); return true"
+  await statusBecomes 'error'
 
   # 15. The switch the preference and the suite share: off, an error ends
   # the run the way it always did.

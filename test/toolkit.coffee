@@ -164,7 +164,7 @@ module.exports = (win, paths) ->
   # pauseonerror (t.reset), so a check that fails a sketch on purpose gets
   # the plain report it was written against.
   t.stopOnErrors = (stop) -> require('../src/main/debugger').stopOnErrors stop
-  t.scriptsKept  = -> require('../src/main/debugger').scriptsKept()
+  t.debugKept    = -> require('../src/main/debugger').kept()
 
   t.pause  = -> t.js "Stepping.pause(); return true"
   t.step   = -> t.js "Stepping.step(); return true"

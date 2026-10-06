@@ -38,8 +38,19 @@
   // Sketches get a real source map and a script id that is safe to put in a
   // regex, because the error path has to find their frames in a stack. The
   // id is not the sketch name: names carry spaces and parentheses.
-  const RUNS_KEPT = 32
-  const runs = new Map()
+  //
+  // Every run's source is kept for the life of the worker: a function a region
+  // defined a hundred runs ago is still in the image, can still throw, and its
+  // frames still need mapping. Capping the runs instead lost them (a reviewer
+  // of E1, 2026-10-06: `at old` dropped out of the report after 32 region
+  // evals). The source is no more than the author has sent this worker, and a
+  // Run starts a fresh one. The compiled map is the heavy part -- objects per
+  // mapped column -- so only the newest RUNS_MAPPED keep theirs, and an older
+  // run's is compiled again when a traceback reaches it: the same source and
+  // options give the same map.
+  const RUNS_MAPPED = 32
+  const runs = new Map()        // id -> {source, name}
+  const mapped = new Map()      // id -> {map, lines, src, name, offset}, newest last
   let runSeq = 0
 
   // The live image. A sketch runs inside a function, so its names never
@@ -114,13 +125,35 @@
     return `//# sourceMappingURL=data:application/json;charset=utf-8;base64,${base64(JSON.stringify(map))}`
   }
 
+  const compileSketch = (source, name) =>
+    CoffeeScript.compile(source, { bare: true, filename: name, sourceMap: true })
+
+  const keepMapping = (id, compiled, { source, name }) => {
+    const entry = {
+      map: compiled.sourceMap,
+      lines: compiled.js.split('\n'),
+      src: source.split('\n'),
+      name,
+      offset: PROLOGUE_LINES,
+    }
+    mapped.set(id, entry)
+    for (const stale of [...mapped.keys()].slice(0, -RUNS_MAPPED)) mapped.delete(stale)
+    return entry
+  }
+
+  const mappingOf = (id) => {
+    if (mapped.has(id)) return mapped.get(id)
+    const sent = runs.get(id)
+    return sent && keepMapping(id, compileSketch(sent.source, sent.name), sent)
+  }
+
   // Compiled, wrapped and evaluated into a function here, and only called once
   // it is dispatched (see dispatchRun): a syntax error is reported from here,
   // under the run handler's catch, and never reaches V8 as an uncaught error
   // of the author's.
   const prepareSketch = (source, name) => {
     const id = `beans-run-${++runSeq}.coffee`
-    const compiled = CoffeeScript.compile(source, { bare: true, filename: name, sourceMap: true })
+    const compiled = compileSketch(source, name)
 
     // Restoring re-declares: `var a = image.a` followed by the sketch's own
     // `var a` leaves the restored value in place, because a bare `var` does
@@ -149,14 +182,8 @@
       `\n//# sourceURL=${id}` +
       `\n${inlineMap(compiled.v3SourceMap)}`
 
-    runs.set(id, {
-      map: compiled.sourceMap,
-      lines: compiled.js.split('\n'),
-      src: source.split('\n'),
-      name,
-      offset: PROLOGUE_LINES,
-    })
-    for (const stale of [...runs.keys()].slice(0, -RUNS_KEPT)) runs.delete(stale)
+    runs.set(id, { source, name })
+    keepMapping(id, compiled, { source, name })
     const sketch = (0, eval)(wrapped)
     return () => sketch(image, frames)
   }
@@ -452,13 +479,16 @@
   // than only the line the error surfaced on. Frames inside our own runtime
   // modules are unmapped and left out -- a frame in them is our problem, not
   // the author's -- so what remains is the author's own chain of calls.
+  //
+  // Only a string is a stack: `throw {stack: 5}` is the author's to make, and
+  // a report that throws on it is no report.
   const traceback = (error) => {
-    const stack = (error && error.stack) || ''
+    const stack = error && typeof error.stack === 'string' ? error.stack : ''
     const frames = []
     for (const raw of stack.split('\n')) {
       const found = /at (?:(.+?) \()?(beans-run-\d+\.coffee):(\d+):(\d+)\)?/.exec(raw)
       if (!found) continue
-      const entry = runs.get(found[2])
+      const entry = mappingOf(found[2])
       if (!entry) continue
       const line = coffeeLine(entry, Number(found[3]) - entry.offset - 1, Number(found[4]) - 1)
       // A sketch's top-level code runs inside an indirect eval, which V8 names
@@ -516,9 +546,17 @@
       return fail('run', error)
     }
     const outcome = dispatchRun(body)
-    if (!outcome.threw) postMessage({ type: 'done' })
-    else if (outcome.error instanceof Interrupted) postMessage({ type: 'stopped' })
-    else fail('run', outcome.error)
+    // Every run ends in one of the three, or the renderer waits on it for good
+    // and Stop blames a missing yield point. So a report that throws -- on a
+    // thrown value whose every read throws, say -- is reported itself. Below
+    // the dispatch, so this catch is never above a run.
+    try {
+      if (!outcome.threw) postMessage({ type: 'done' })
+      else if (outcome.error instanceof Interrupted) postMessage({ type: 'stopped' })
+      else fail('run', outcome.error)
+    } catch (unreported) {
+      fail('run', unreported)
+    }
   }
 
   const MODULES = [
@@ -558,9 +596,11 @@
         // `show` is for the debugger, which answers the prompt against a
         // paused frame and wants the answer to read like any other;
         // `complete` is how Tab asks that frame, in the same JSON the
-        // shared-memory answer comes back in; and `failure` is how an error
-        // pause gets the report the run would have made.
+        // shared-memory answer comes back in; `failure` is how an error
+        // pause gets the report the run would have made; and `owner` tells a
+        // pause of this worker from one of the worker a Run replaced.
         globalThis.REPL = {
+          owner,
           serve: serveAsk,
           show,
           complete: (question, frameNames, root) => JSON.stringify(complete(question, frameNames, root)),

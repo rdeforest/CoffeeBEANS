@@ -57,13 +57,15 @@ CHASE_LIMIT = 200
 SETUP_LIMIT = 2000
 
 # The debugger is on for every run, so what it keeps per script has to stay
-# bounded for the life of a worker. Sketch scripts are kept as many as the
-# worker keeps of them for its tracebacks (RUNS_KEPT in worker-boot.js).
-# V8's own cache of scripts the heap has let go of is unbounded unless told;
-# each run carries an inline source map of tens of kilobytes. The size is a
-# choice, not a measurement.
-SKETCHES_KEPT = 32
-SCRIPT_CACHE  = 8 * 1024 * 1024
+# small for the life of a worker. Every named script keeps its url, which is
+# all that says whose code a frame is in: a function a region defined long ago
+# can still be called, and must still read as the author's. The source map,
+# tens of kilobytes inline in a sketch's script, is fetched from V8 when a
+# pause first needs it and kept for the newest MAPS_KEPT; V8 has the source of
+# any script a frame is in. Its cache of scripts the heap has let go of is
+# unbounded unless told. Both sizes are choices, not measurements.
+MAPS_KEPT    = 32
+SCRIPT_CACHE = 8 * 1024 * 1024
 
 # How long the prompt may run against a paused frame before V8 is told to
 # give up. `Array.from forever()` never returns, and while it runs nothing
@@ -216,7 +218,8 @@ module.exports = (win) ->
   session  = null        # the sketch worker's flattened session
   enabled  = no          # the Debugger domain is on in that session
   ready    = null        # resolves once it is
-  scripts  = new Map     # scriptId -> {url, mapUrl, map}
+  scripts  = new Map     # scriptId -> {url}, for every named script
+  maps     = new Map     # scriptId -> decoded source map, newest last
   stopped  = null        # the pause we are sitting in: {frames, where, seq}
   chase    = null        # a step or pause still looking for a sketch line
   asking   = null        # the prompt's evaluation, while it runs
@@ -241,25 +244,25 @@ module.exports = (win) ->
 
   # Only scripts with a name. The prompt's lines and our own evaluations have
   # none and come several to a line typed; unknown reads as ours everywhere,
-  # which is what they are. A pause in a sketch older than the ones kept
-  # reads as ours too, as its frames drop out of the worker's traceback.
-  remember = ({scriptId, url, sourceMapURL}) ->
-    return unless url
-    scripts.set scriptId, {url, mapUrl: sourceMapURL}
-    return unless SKETCH.test url
-    sketches = (id for [id, script] from scripts when SKETCH.test script.url)
-    scripts.delete id for id in sketches[...-SKETCHES_KEPT]
+  # which is what they are.
+  remember = ({scriptId, url}) ->
+    scripts.set scriptId, {url} if url
 
-  mapOf = (script) ->
-    script.map ?= mapFromUrl script.mapUrl
-    script.map
+  # The map is the script's own sourceMappingURL comment, which V8 hands back
+  # with the rest of its source.
+  mapOf = (scriptId) ->
+    unless maps.has scriptId
+      {scriptSource} = await send 'Debugger.getScriptSource', {scriptId}
+      maps.set scriptId, mapFromUrl /\/\/# sourceMappingURL=(\S+)\s*$/.exec(scriptSource)?[1]
+      maps.delete old for old in [...maps.keys()][...-MAPS_KEPT]
+    maps.get scriptId
 
   # Where a frame is in the author's terms, or null if it is not somewhere
   # the author wrote.
   locate = (frame) ->
     script = scriptOf frame
     return null unless script and SKETCH.test script.url
-    map = mapOf script
+    map = await mapOf frame.location.scriptId
     return null unless map
     line = coffeeAt map, frame.location.lineNumber, frame.location.columnNumber
     return null unless line?
@@ -288,6 +291,7 @@ module.exports = (win) ->
     enabled = no
     ready   = null
     scripts.clear()
+    maps.clear()
     chase = null
     if stopped
       stopped = null
@@ -330,6 +334,7 @@ module.exports = (win) ->
   setUp = (id, waiting) ->
     session = id
     scripts.clear()
+    maps.clear()
     stopped = null
     chase   = null
     enabled = no
@@ -401,11 +406,19 @@ module.exports = (win) ->
   # `at` is the frame to show: the top one, except at an error thrown inside
   # the runtime, where it is the first one the author wrote. `error` is the
   # report the run would have made, for an error pause.
+  #
+  # `owner` is which worker stopped (H.OWNER, which start() in the renderer
+  # bumps before a new one boots), so the renderer can drop the pause of a
+  # worker a Run has already replaced.
+  #
+  # The pause is ours from the start, before anything is asked of V8, so a
+  # Stop in the meantime finds it to resume.
   report = (frames, at = 0, error = null) ->
-    top   = frames[at]
-    where = locate top
-    stopped = {frames, at, where, error, seq: ++seq}
-    tell {type: 'paused', seq, where, error, scopes: await scopesOf top}
+    top  = frames[at]
+    here = stopped = {frames, at, where: null, error, seq: ++seq}
+    here.where = await locate top
+    owner = await ownerOf top
+    tell {type: 'paused', seq: here.seq, owner, where: here.where, error, scopes: await scopesOf top}
 
   # The frame a pause shows, and the one the prompt and the pane work in.
   pausedFrame = -> stopped.frames[stopped.at]
@@ -415,6 +428,19 @@ module.exports = (win) ->
   # nothing of the bootstrap beneath it. See dispatchRun in worker-boot.js.
   inRun = (frames) ->
     frames.some (frame) -> frame.functionName is 'dispatchRun' and scriptOf(frame)?.url?.endsWith BOOT
+
+  ownerOf = (frame) ->
+    global = frame.scopeChain.find (scope) -> scope.type is 'global'
+    {result} = await send 'Runtime.callFunctionOn',
+      objectId: global.object.objectId, returnByValue: yes
+      functionDeclaration: 'function () { return REPL.owner }'
+    result.value
+
+  # The first frame the author wrote, innermost first, or -1.
+  authorsFrame = (frames) ->
+    for frame, depth in frames when not ours(frame) and await locate frame
+      return depth
+    -1
 
   # A thrown value as an argument: by reference if it is an object, by value
   # if not -- `throw 'oops'` comes back as a primitive with no objectId.
@@ -441,23 +467,25 @@ module.exports = (win) ->
   # (2026-10-05); and one with nothing of the author's on the stack, ours.
   onException = (params) ->
     frames = params.callFrames
-    at     = frames.findIndex (frame) -> locate(frame) and not ours frame
     goOn   = not errorStops or params.reason isnt 'exception' or
-      params.data?.className is 'Interrupted' or at < 0 or not inRun frames
+      params.data?.className is 'Interrupted' or not inRun frames
     return onward (chase?.method ? 'Debugger.resume') if goOn
-    chase = null
     # A Run while the worker is asked replaces the session; the old pause is
     # then nobody's, and reported it would land in the new run's console.
     id = session
     try
+      at = await authorsFrame frames
+      return onward (chase?.method ? 'Debugger.resume') if at < 0
+      chase = null
       failure = await failureOf params.data, frames[at]
       return unless session is id
       # A thrown string or number has no stack to find its line in; the
       # pause knows it.
-      failure.line ?= locate(frames[at]).line
+      failure.line ?= (await locate frames[at]).line
       await report frames, at, failure
     catch error
       return unless session is id
+      chase = null
       # Left paused, the run would never end and Stop could not reach it: it
       # ends the ordinary way instead, reported by the worker as it would
       # have been with error stops off.
@@ -482,7 +510,7 @@ module.exports = (win) ->
       chase.count += 1
       if chase.count < CHASE_LIMIT
         return onward 'Debugger.stepOut' if ours top
-        where = locate top
+        where = await locate top
         same  = where and chase.line? and where.line is chase.line and
           frames.length is chase.depth and top.location.scriptId is chase.scriptId
         return onward chase.method if not where or same
@@ -564,8 +592,11 @@ module.exports = (win) ->
     return false unless stopped
     return 'evaluating' if asking
     return 'error' if stopped.error
+    # The pause's own where, not located again: an await here would leave a
+    # gap for the prompt to start an evaluation the step then lands in. A
+    # step is never from an error pause, so the frame shown is the top one.
     top   = stopped.frames[0]
-    where = locate top
+    where = stopped.where
     chase =
       method:   'Debugger.stepInto'
       line:     where?.line
@@ -699,7 +730,8 @@ module.exports = (win) ->
     {text: remoteText(result), kind: 'value'}
 
   id = contents.id
-  controllers.set id, {arm, pause, step, resume, evaluate, members, getter, exceptions, scriptsKept: -> scripts.size}
+  kept = -> {scripts: scripts.size, maps: maps.size}
+  controllers.set id, {arm, pause, step, resume, evaluate, members, getter, exceptions, kept}
   win.on 'closed', -> controllers.delete id
   undefined
 
@@ -710,5 +742,5 @@ module.exports.stopOnErrors = (stop) ->
   await Promise.all (controller.exceptions() for controller from controllers.values())
   errorStops
 
-# For the suite: how many scripts each live session is keeping.
-module.exports.scriptsKept = -> (controller.scriptsKept() for controller from controllers.values())
+# For the suite: how many scripts and source maps each live session is keeping.
+module.exports.kept = -> (controller.kept() for controller from controllers.values())

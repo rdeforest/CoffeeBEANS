@@ -1150,8 +1150,9 @@ beans.debug.onEvent (event) ->
     when 'paused'
       # The worker Run just threw away, reporting an error it stopped on as
       # the Run landed. Applied, it would put the old error in the new run's
-      # console and its pause over the new run's status.
-      return if status is 'booting'
+      # console and its pause over the new run's status. Told apart by owner,
+      # not by status: a second Run while the first boots reads 'arming'.
+      return if event.owner isnt Atomics.load i32, H.OWNER
       linePaused  = event.seq
       pausedNames = (entry.name for entry in scope.vars for scope in event.scopes).flat()
       setStatus if event.error then 'error paused' else 'line paused'
@@ -1282,7 +1283,7 @@ showVars = ({where, scopes}, forGetter = no) ->
   ranGetters.clear() unless forGetter
   head = document.createElement 'div'
   head.className = 'vars-head'
-  place = if where?.line? then "line #{where.line}" else 'somewhere of ours'
+  place = if where?.line? then "line #{where.line}" else 'no line to show'
   head.textContent = "#{where?.fn ? 'top level'} \u00b7 #{place}"
   sections = for scope in scopes
     section = document.createElement 'div'
