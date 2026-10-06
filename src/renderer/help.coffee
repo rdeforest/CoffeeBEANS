@@ -43,6 +43,8 @@ SECTIONS = [
     ['/target <n>',       'flag the first source line past n; /target 0 clears']
     ['/help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']
+    ['Help > About',      'the version and what it runs on; Copy puts it on']
+    ['',                  'the clipboard, ready for a bug report']
     ['/ or : commands',   'typed at the > prompt -- /run and :run are one;']
     ['',                  'a line starting with either is always a command,']
     ['',                  'so CoffeeScript opening with a regex goes in']

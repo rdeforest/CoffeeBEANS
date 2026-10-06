@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('beans', {
   // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
   vim:   ()        => ipcRenderer.invoke('settings:vim'),
   onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
+  // Help > About. The text is main's: it knows git's answer and the OS.
+  about:   ()        => ipcRenderer.invoke('app:about'),
+  onAbout: (handler) => ipcRenderer.on('app:about', () => handler()),
+  // Through main, which writes whether or not the page has focus; Chromium's
+  // navigator.clipboard refuses a page without it, and the suite's never has.
+  copy:    (text)    => ipcRenderer.invoke('clipboard:write', text),
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
     arm:     (want)         => ipcRenderer.invoke('debug:arm', want),

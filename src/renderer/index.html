@@ -106,6 +106,15 @@
   .help-head { color: var(--coffee); font-weight: bold; margin-top: .5rem; }
   .help      { color: #d3d3d8; }
   .help-code { color: #a8d8a8; }
+
+  /* Help > About, and the feedback report after it: a modal in the page. */
+  dialog {
+    background: var(--panel); color: var(--coffee);
+    border: 1px solid var(--edge); border-radius: 4px; padding: 1rem 1.2rem;
+  }
+  dialog::backdrop { background: #000a; }
+  dialog pre  { margin: 0 0 1rem; font: inherit; white-space: pre-wrap; }
+  dialog form { display: flex; gap: .5rem; justify-content: flex-end; margin: 0; }
 </style>
 
 <header>
@@ -138,6 +147,14 @@
   </div>
   <div id="vars" hidden></div>
 </div>
+
+<dialog id="about">
+  <pre id="aboutText"></pre>
+  <form method="dialog">
+    <button id="aboutCopy" type="button" autofocus>Copy</button>
+    <button id="aboutClose" class="ghost">Close</button>
+  </form>
+</dialog>
 
 <script src="/src/renderer/vendor/coffeescript.js"></script>
 <script src="/src/renderer/vendor/editor.js"></script>

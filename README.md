@@ -355,6 +355,29 @@ Sizes are remembered. Ctrl-e hides and shows the editor. Detaching panels
 into their own windows, and driving all of this from a sketch, is planned:
 see NOTES.md.
 
+## Which version
+
+**Help -> About** shows the version and what it is running on -- Electron,
+Chromium, Node and the OS -- with a Copy button that puts exactly that text
+on the clipboard, for a bug report.
+
+The version is never bumped by a commit. `package.json` holds the release
+number, set by hand; at startup the app asks git for the rest -- the commit
+count, the abbreviated commit id, and `-dirty` when the checkout has
+uncommitted changes:
+
+    0.0.1+142.c7e7f6a-dirty
+
+Run without git installed, or where git cannot answer, it shows the bare
+release number and says why there is no commit id. A packaged build has no
+`.git`; the step that makes one is to write the same string into
+`version-stamp.txt` at the app's root (from a full clone -- a shallow one
+counts a single commit), and where there is no `.git` the app reads that
+file's first line instead. In a checkout git is always asked and the stamp
+is ignored, so one left behind by a packaging run cannot go stale, and
+`.gitignore` keeps it out of commits. With neither, the version is the bare
+release number. `src/main/version.coffee` has the details.
+
 ## Layout
 
     src/main/       Electron main process; serves app:// with COOP/COEP
@@ -372,7 +395,7 @@ see NOTES.md.
     BEANS_TESTS=buffers,lifecycle npm test  a few
 
 The parts are `editor image repl buffers stepping debugging focus lifecycle
-drawing color loading shell input random sound perf`. Each starts from a reset app --
+drawing color loading shell about input random sound perf`. Each starts from a reset app --
 scratch loaded, buffer blank, worker restarted -- so running one alone means
 the same thing as running it in the middle of everything else, and a part
 that fails does not take the ones after it with it. The whole suite takes a

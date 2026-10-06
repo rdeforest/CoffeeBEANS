@@ -1,4 +1,4 @@
-{app, BrowserWindow, Menu, dialog, nativeImage, protocol, net, ipcMain, shell} = require 'electron'
+{app, BrowserWindow, Menu, clipboard, dialog, nativeImage, protocol, net, ipcMain, shell} = require 'electron'
 crypto = require 'crypto'
 fs   = require 'fs'
 fsp  = require 'fs/promises'
@@ -27,6 +27,15 @@ settings     = Settings.read SETTINGS
 saveSettings = -> Settings.save SETTINGS, settings
 
 ipcMain.handle 'settings:vim', -> settings.vim is true
+
+# Asked of git once, now, so neither the window nor About waits on it later.
+Version = require './version'
+VERSION = Version.derive ROOT
+
+ipcMain.handle 'app:about', ->
+  version = await VERSION
+  {version: version.text, note: version.note, text: Version.about version}
+ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
 
 prepareDataHome = ->
   {added} = await data.prepare DATA, EXAMPLES
@@ -469,6 +478,16 @@ installMenu = ->
       {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}
       {type: 'separator'}
       {role: 'togglefullscreen'}
+    ]
+  ,
+    role: 'help'
+    submenu: [
+      {
+        # Handed to the window it was chosen from, which shows the dialog.
+        id:    'about'
+        label: 'About CoffeeBEANS'
+        click: (item, win) -> win?.webContents.send 'app:about'
+      }
     ]
   ]
 

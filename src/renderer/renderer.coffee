@@ -783,6 +783,27 @@ showHelp = (topic) ->
   output.scrollTop = top          # land on the first section, not the last
   undefined
 
+# --- about ------------------------------------------------------------------
+
+# In the page rather than Electron's native about panel, which cannot carry a
+# Copy button on every platform (Robert, 2026-10-05). Copy takes the text as
+# shown, so what lands in a bug report is what the player saw.
+aboutBox  = document.getElementById 'about'
+aboutText = document.getElementById 'aboutText'
+aboutCopy = document.getElementById 'aboutCopy'
+
+showAbout = ->
+  {text} = await beans.about()
+  aboutText.textContent = text
+  aboutCopy.textContent = 'Copy'
+  aboutBox.showModal()
+
+aboutCopy.onclick = ->
+  await beans.copy aboutText.textContent
+  aboutCopy.textContent = 'Copied'
+
+beans.onAbout showAbout
+
 # --- presentation -----------------------------------------------------------
 
 resize = ->
@@ -1596,7 +1617,10 @@ do ->
   start()
   frame()
   startSound()
-  say 'CoffeeBEANS 0.0.1  --  Ctrl-Enter evals the block under the cursor, > for a line, /help for the rest', 'sys'
+  # Not awaited: git is asked at startup with a 5s limit, and a git that
+  # hangs must not hold the sketch back for it.
+  beans.about().then ({version}) ->
+    say "CoffeeBEANS #{version}  --  Ctrl-Enter evals the block under the cursor, > for a line, /help for the rest", 'sys'
   if params.has 'crashed'
     say "*** the app crashed (#{params.get 'crashed'}) and has restarted -- your sketch is as it was last saved ***", 'err'
 

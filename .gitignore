@@ -2,6 +2,7 @@ node_modules/
 tmp/
 test_tmp/
 *.log
+version-stamp.txt
 
 # Vim files
 .sw?
