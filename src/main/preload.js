@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('beans', {
   read:  (name)       => ipcRenderer.invoke('sketch:read', name),
   write: (name, text) => ipcRenderer.invoke('sketch:write', name, text),
   list:  ()           => ipcRenderer.invoke('sketch:list'),
+  find:  (name)       => ipcRenderer.invoke('sketch:find', name),
+  create: (name)      => ipcRenderer.invoke('sketch:create', name),
   pick:  ()           => ipcRenderer.invoke('sketch:pick'),
   paths: ()           => ipcRenderer.invoke('beans:paths'),
   image: (url)        => ipcRenderer.invoke('image:load', url),
@@ -17,6 +19,8 @@ contextBridge.exposeInMainWorld('beans', {
   // Through main, which writes whether or not the page has focus; Chromium's
   // navigator.clipboard refuses a page without it, and the suite's never has.
   copy:    (text)    => ipcRenderer.invoke('clipboard:write', text),
+  // Edit > Warn About Name Case: asked whenever it matters.
+  warnCase: ()     => ipcRenderer.invoke('settings:warnCase'),
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
     arm:     (want)         => ipcRenderer.invoke('debug:arm', want),
