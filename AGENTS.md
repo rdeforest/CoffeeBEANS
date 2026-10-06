@@ -351,9 +351,15 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   caught and `pauseOnExceptions: 'uncaught'` never fires. Needs either
   pause-on-all plus auto-resume outside user code, or restructuring how sketch
   errors propagate. Must read as *an error*, not a silent freeze.
-  Researched 2026-10-05: `docs/research/pause-on-error.md` recommends the
-  second way (run the sketch as an event listener with no catch above it)
-  and lists what needs Robert's decision first.
+  Researched 2026-10-05: `docs/research/pause-on-error.md`. **Decided by
+  Robert, 2026-10-05:** build it the note's way -- the sketch runs as an
+  event listener with no catch above it, and the debugger is armed for
+  every run (about 0-50ms per Run; a sketch that throws and catches in a
+  loop pays more, and that is accepted). The status word is `error paused`.
+  The error is reported once, when it stops. A preference turns error
+  stops off. Errors after the run has ended (timers, promise callbacks,
+  after an `await`) are only reported, never stopped on. The suite stops
+  on errors only in the part that tests pausing on them.
 - **Preferences live in main's data folder**, `settings.json` beside
   `sketches/` (`src/main/settings.coffee`), not the renderer's localStorage:
   the Edit menu shows Vim Keys and is built before any page loads, so main
