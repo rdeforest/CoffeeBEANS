@@ -1369,6 +1369,11 @@ beans.debug.onEvent (event) ->
       setStatus (if paused then 'frame paused' else 'running') if status in ['line paused', 'error paused']
     when 'problem'
       say event.text, 'err'
+    # Main set pauses aside for a Stop. It can do that seconds after the Stop
+    # asked, past an arm that cleared `skipping` meanwhile; heard from main,
+    # the next run takes it back however the two crossed.
+    when 'skipping'
+      skipping = yes
   undefined
 
 globalThis.Stepping =
