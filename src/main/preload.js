@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('beans', {
   read:  (name)       => ipcRenderer.invoke('sketch:read', name),
   write: (name, text) => ipcRenderer.invoke('sketch:write', name, text),
   list:  ()           => ipcRenderer.invoke('sketch:list'),
+  find:  (name)       => ipcRenderer.invoke('sketch:find', name),
+  create: (name)      => ipcRenderer.invoke('sketch:create', name),
   pick:  ()           => ipcRenderer.invoke('sketch:pick'),
   paths: ()           => ipcRenderer.invoke('beans:paths'),
   image: (url)        => ipcRenderer.invoke('image:load', url),
@@ -11,6 +13,8 @@ contextBridge.exposeInMainWorld('beans', {
   // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
   vim:   ()        => ipcRenderer.invoke('settings:vim'),
   onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
+  // Edit > Warn About Name Case: asked whenever it matters.
+  warnCase: ()     => ipcRenderer.invoke('settings:warnCase'),
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
     arm:     (want)         => ipcRenderer.invoke('debug:arm', want),

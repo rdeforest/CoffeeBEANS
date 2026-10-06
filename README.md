@@ -156,7 +156,14 @@ edited keeps your edit and one you deleted stays deleted.
 The directory is a directory rather than a bare pile of sketches so it has
 somewhere to grow. Beside `sketches/` sit `assets/`, where `load` caches
 what it downloads, and `settings.json`, what the app remembers about how you
-like to work -- for now, whether Vim Keys is ticked.
+like to work -- for now, whether Vim Keys and Warn About Name Case are
+ticked.
+
+A sketch's name is its path under `sketches/` without the `.coffee`. Where
+the disk ignores case, as macOS's and Windows's do unless set up otherwise,
+`Foo` and `foo` are one sketch: `/e Foo` opens `foo.coffee`, and the console
+says so unless **Edit > Warn About Name Case** is unticked. The app asks the
+disk which kind it is rather than going by the platform.
 
 ## Editing
 

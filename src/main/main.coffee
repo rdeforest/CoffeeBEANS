@@ -26,7 +26,8 @@ Settings     = require './settings'
 settings     = Settings.read SETTINGS
 saveSettings = -> Settings.save SETTINGS, settings
 
-ipcMain.handle 'settings:vim', -> settings.vim is true
+ipcMain.handle 'settings:vim',      -> settings.vim is true
+ipcMain.handle 'settings:warnCase', -> settings.warnCase isnt false
 
 prepareDataHome = ->
   {added} = await data.prepare DATA, EXAMPLES
@@ -70,6 +71,21 @@ serve = (request) ->
   headers.set 'Cross-Origin-Resource-Policy', 'same-origin'
   new Response source.body, {status: source.status, headers}
 
+# Whether names that differ only in case are one sketch. Robert decided
+# (2026-10-05) that where the disk folds case, so does the app. The disk is
+# asked, not process.platform (decided by Claude, 2026-10-05): macOS can be
+# formatted case-sensitive, Windows can mark a folder so, and Linux can mount
+# a disk that folds. `probed` is set once sketches/ exists; `forced` is the
+# suite's, which cannot make this Linux disk fold and so has main behave as
+# if it did. Only the suite is handed this object (createWindow), as with
+# `faults` below.
+folding = {probed: no, forced: no}
+folds   = -> folding.probed or folding.forced
+
+# Where the disk folds, foo.COFFEE is foo's file too.
+EXTENSION = {true: /\.coffee$/i, false: /\.coffee$/}
+extension = -> EXTENSION[folds()]
+
 # A sketch's name is its path under sketches/ without the extension, always
 # with forward slashes, so `challenges/ocean` means the same thing on every
 # platform and in every place a name is typed or shown.
@@ -79,9 +95,96 @@ sketchFile = (name) ->
   file
 
 sketchName = (file) ->
-  path.relative(SKETCHES, file).split(path.sep).join('/').replace /\.coffee$/, ''
+  path.relative(SKETCHES, file).split(path.sep).join('/').replace extension(), ''
 
-ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(name), 'utf8'
+# A name with `.` and `..` walked and doubled slashes made single,
+# so `./foo` is `foo` everywhere: as the editor's name, the watcher's, the
+# save queue's. Throws for a name that leads out of sketches/.
+canonical = (name) -> sketchName sketchFile name
+
+flip      = (c)    -> if c is c.toLowerCase() then c.toUpperCase() else c.toLowerCase()
+flipCase  = (text) -> (flip c for c in text).join ''
+hasLetter = (text) -> flipCase(text) isnt text
+
+# Whether `dir` finds its entry `name` again under `name` with its case
+# swapped. lstat, so a sibling symlink spelled that way is not taken for
+# the entry itself.
+sameUnderFlip = (dir, name) ->
+  twin = fs.lstatSync path.join(dir, flipCase name), bigint: yes, throwIfNoEntry: no
+  self = fs.lstatSync path.join(dir, name), bigint: yes
+  twin? and twin.ino is self.ino and twin.dev is self.dev
+
+# Asked of an entry inside sketches/ (examples are seeded first, so there
+# usually is one), which gets sketches/'s own answer where that differs from
+# its parent's: a disk mounted at sketches/, ext4 casefold set on it, a
+# Windows per-folder flag. With nothing in it whose name has a letter, the
+# folder's own name is asked of its parent instead, and those cases get the
+# parent's answer. Through realpath, so a sketches/ linked to another disk
+# asks that disk. Subfolders are assumed to fold as sketches/ does; ext4 and
+# Windows both hand a new folder its parent's setting, but one changed by
+# hand afterwards is not noticed.
+probeFolding = (dir) ->
+  real  = fs.realpathSync dir
+  child = fs.readdirSync(real).find hasLetter
+  return sameUnderFlip real, child if child?
+  return sameUnderFlip path.dirname(real), path.basename(real) if hasLetter path.basename real
+  process.platform in ['darwin', 'win32']    # no letters to ask with
+
+# A key two spellings of one sketch share. toLowerCase is near enough to what
+# NTFS and APFS fold, though not exact for a handful of characters (the
+# Kelvin sign, dotted I).
+caseKey = (text) -> if folds() then text.toLowerCase() else text
+
+entriesOf = (dir) ->
+  try
+    await fsp.readdir dir
+  catch error
+    throw error unless error.code in ['ENOENT', 'ENOTDIR']
+    []
+
+# A name as the disk spells it. Where the disk folds, `Foo` reads and writes
+# foo.coffee anyway; carrying the disk's spelling on keeps one sketch one
+# name -- in the title, the editor, the watcher -- and keeps a save from
+# renaming onto the file under the spelling it was asked for, which may
+# leave it spelled that way (not verified on macOS or Windows). Whatever part
+# of the name is not on disk yet stays as asked. The extension is not part
+# of the name, so foo.COFFEE is opened, and saved, as foo.coffee.
+spelled = (name) ->
+  name = canonical name
+  return name unless folds()
+  parts = "#{name}.coffee".split '/'
+  dir   = SKETCHES
+  for part, i in parts
+    entries = await entriesOf dir
+    exact   = entries.find (entry) -> entry is part
+    match   = exact ? entries.find (entry) -> caseKey(entry) is caseKey part
+    break unless match
+    parts[i] = match
+    dir      = path.join dir, match
+  parts.join('/').replace extension(), ''
+
+# The sketch a typed name means, and whether there is one yet. :e and
+# ?sketch= ask this rather than looking for the name in sketch:list, which
+# cannot know whether the disk folds: `:e Foo` with foo.coffee present
+# missed it, "created" Foo, and on a disk that folds wrote '' over foo.coffee.
+ipcMain.handle 'sketch:find', (event, asked) ->
+  name = await spelled asked
+  {name, exists: fs.statSync(sketchFile(name), throwIfNoEntry: no)?}
+
+# A new, empty sketch -- unless one has appeared since sketch:find said
+# there was none, which the disk decides ('wx'), not a look beforehand.
+# Then that one is opened as it is.
+ipcMain.handle 'sketch:create', (event, asked) ->
+  file = sketchFile asked
+  await fsp.mkdir path.dirname(file), recursive: yes     # :e sub/new makes sub/
+  try
+    await fsp.writeFile file, '', flag: 'wx'
+    {name: canonical(asked), created: yes}
+  catch error
+    throw error unless error.code is 'EEXIST'
+    {name: await spelled(asked), created: no}
+
+ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(await spelled name), 'utf8'
 # Written beside the target and renamed into place. writeFile truncates
 # first, so a watcher firing mid-write could read an empty file, hand it to
 # the editor, and have the editor autosave the emptiness back. A rename is
@@ -138,18 +241,21 @@ renameOnto = (staging, file) ->
 #
 # The watcher reads both maps: `saving` holds a file's chain while any save
 # of it is in flight, `begun` counts the saves ever asked for (see reload in
-# watchSketches).
+# watchSketches). Both are keyed by caseKey, so two spellings of one sketch
+# queue together rather than racing for the one staging file a folding disk
+# gives them. The spelling is looked up inside the queue: looked up first, a
+# later save could overtake an earlier one while each waited on its readdir.
 saving = new Map
 begun  = new Map
 
 ipcMain.handle 'sketch:write', (event, name, text) ->
-  file  = sketchFile name
-  write = -> writeSketch file, text
-  begun.set file, (begun.get(file) ? 0) + 1
-  ahead = saving.get(file) ? Promise.resolve()
+  key   = caseKey sketchFile name
+  write = -> writeSketch sketchFile(await spelled name), text
+  begun.set key, (begun.get(key) ? 0) + 1
+  ahead = saving.get(key) ? Promise.resolve()
   done  = ahead.then write, write
-  saving.set file, done
-  forget = -> saving.delete file if saving.get(file) is done
+  saving.set key, done
+  forget = -> saving.delete key if saving.get(key) is done
   done.then forget, forget
   done
 ASSETS = path.join DATA, 'assets'
@@ -186,7 +292,7 @@ ipcMain.handle 'image:load', (event, url) ->
 ipcMain.handle 'beans:paths', -> {data: DATA, sketches: SKETCHES, assets: ASSETS}
 ipcMain.handle 'sketch:list',  ->
   entries = await fsp.readdir SKETCHES, recursive: yes
-  (sketchName path.join(SKETCHES, entry) for entry in entries when entry.endsWith '.coffee').sort()
+  (sketchName path.join(SKETCHES, entry) for entry in entries when extension().test entry).sort()
 
 # The native picker, so the header does not carry a list that stops being
 # usable past a dozen sketches. It opens in sketches/ and answers a name; a
@@ -201,10 +307,12 @@ ipcMain.handle 'sketch:pick', (event) ->
     filters:     [{name: 'CoffeeScript', extensions: ['coffee']}]
   return {canceled: yes} if canceled or not filePaths.length
   # Compared as real paths: the dialog may hand back /private/tmp for /tmp.
+  # Spelled as the disk spells it, as :e's names are, in case a dialog hands
+  # back the case it was typed in.
   root = await fsp.realpath SKETCHES
   file = await fsp.realpath filePaths[0]
   return {outside: filePaths[0]} unless file.startsWith root + path.sep
-  {name: sketchName path.join SKETCHES, path.relative root, file}
+  {name: await spelled sketchName path.join SKETCHES, path.relative root, file}
 
 # Watch directories, never files: a file replaced by renaming a new one into
 # place leaves a file watch on the dead inode. Vim saves that way by default,
@@ -239,19 +347,24 @@ watchSketches = (win) ->
   # old text and still reverts the editor until the echo. Not taken: a write
   # sequence number the renderer sends and main echoes in sketch:changed, so
   # applyExternal could ignore a read older than its latest write.
-  reload = (name) ->
-    clearTimeout timers[name]
-    timers[name] = setTimeout (->
+  #
+  # Sent under the disk's spelling, which is the one the editor opened it by,
+  # whatever spelling the event carried.
+  reload = (heard) ->
+    timer = caseKey heard
+    clearTimeout timers[timer]
+    timers[timer] = setTimeout (->
       return if win.isDestroyed()
-      file  = sketchFile name
-      again = -> reload name
-      return saving.get(file).then again, again if saving.has file
-      before = begun.get file
+      key   = caseKey sketchFile heard
+      again = -> reload heard
+      return saving.get(key).then again, again if saving.has key
+      before = begun.get key
       try
-        text = await fsp.readFile file, 'utf8'
+        name = await spelled heard
+        text = await fsp.readFile sketchFile(name), 'utf8'
       catch error
-        return console.log "watch: #{name}: #{error.message}"
-      return again() unless begun.get(file) is before
+        return console.log "watch: #{heard}: #{error.message}"
+      return again() unless begun.get(key) is before
       win.webContents.send 'sketch:changed', {name, text} unless win.isDestroyed()
     ), 60
 
@@ -277,7 +390,7 @@ watchSketches = (win) ->
     watcher.on 'change', (event, filename) ->
       return unless filename?
       entry = path.join dir, filename
-      return reload sketchName entry if filename.endsWith '.coffee'
+      return reload sketchName entry if extension().test filename
       # Anything else may be a folder arriving, which needs its own watch, or
       # one leaving, whose watch should go with it.
       fsp.stat(entry)
@@ -407,7 +520,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
@@ -460,6 +573,17 @@ installMenu = ->
           saveSettings()
           win.webContents.send 'settings:vim', item.checked for win in BrowserWindow.getAllWindows()
       }
+      {
+        # On unless unticked: a sketch opened under another spelling says so
+        # in the console. The renderer asks each time, so nobody is told.
+        id:      'warnCase'
+        label:   'Warn About Name Case'
+        type:    'checkbox'
+        checked: settings.warnCase isnt false
+        click: (item) ->
+          settings.warnCase = item.checked
+          saveSettings()
+      }
     ]
   ,
     label: 'View'
@@ -474,6 +598,7 @@ installMenu = ->
 
 app.whenReady().then ->
   await prepareDataHome()
+  folding.probed = probeFolding SKETCHES
   protocol.handle 'app', serve
   installMenu()
   createWindow()
