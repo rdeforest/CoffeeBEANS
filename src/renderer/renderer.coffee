@@ -28,6 +28,9 @@ status = ''
 # `error paused` is a line pause at an uncaught error, which can only end.
 PAUSED = ['frame paused', 'line paused', 'error paused']
 BUSY   = ['running', PAUSED...]
+# No sketch is running at these. A booting worker counts: a Stop drops the
+# run it was booting for, and that leaves it nothing to unwind.
+IDLE   = ['ready', 'error', 'booting']
 
 # What the hold button does from each pause; anywhere else, it holds.
 RUN_ON      = 'Let the sketch run on (F8)'
@@ -298,6 +301,10 @@ drainAsk = ->
   answer = new Uint8Array askBytes.subarray 0, Atomics.load i32, H.ASK_LEN
   kind   = Atomics.load i32, H.ASK_KIND
   Atomics.store i32, H.ASK_STATE, 0
+  # A Stop that reached a line at an idle worker raised the flag, and only
+  # this answer says the line is over. Never while a sketch is busy, nor
+  # arming: that flag is the sketch's.
+  standDown() if status in IDLE
   text = decoder.decode answer
   return completed completing, text, state is 3 if kind is LAYOUT.ASK_FOR.completion
   say text, (if state is 3 then 'err' else 'value')
@@ -1683,18 +1690,21 @@ start = (thenRun = null) ->
 
 stop = ->
   pending = null
+  # Going through goFrames rather than just dropping the flag is what puts the
+  # status line back: left saying "paused", nothing that reads it -- the
+  # buttons, a test, the next run -- can tell the pause is over. First, so a
+  # hold at an idle worker reads as idle once it is let go. A busy worker
+  # parked on the swap is released below, by clearing it.
+  goFrames()
   # Nothing running is nothing to unwind, but a note with no length can
   # outlive the sketch that started it, and Stop is where anyone reaches to
   # make it quiet. Raising the flag here would leave it up with no worker
-  # busy to report idle and lower it.
-  if status in ['ready', 'error']
+  # busy to report idle and lower it -- unless the worker is busy in a prompt
+  # line it has claimed, which answers, and drainAsk lowers it then.
+  if status in IDLE
     Atomics.add i32, H.SOUND_EPOCH, 1
+    Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
-  # Stop clears the swap itself and notifies, so it releases a paused worker
-  # without any help. Going through goFrames rather than just dropping the flag
-  # is what puts the status line back: left saying "paused", nothing that reads
-  # it -- the buttons, a test, the next run -- can tell the pause is over.
-  goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
