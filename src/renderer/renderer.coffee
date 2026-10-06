@@ -1284,8 +1284,14 @@ linePause = ->
   pressedFor = worker
   took = await beans.debug.pause()
   return unless worker is pressedFor
-  return say '*** could not pause -- is DevTools open? ***', 'sys' unless took
+  return say UNPAUSED[took], 'sys' unless took is true
   goFrames()
+
+# Why main did not pause, by its answer. `stale` is a worker it let go of to
+# DevTools, which it never arms again (see stale in src/main/debugger.coffee).
+UNPAUSED =
+  false: '*** could not pause -- is DevTools open? ***'
+  stale: '*** could not pause a sketch that was running when DevTools opened -- pausing works again from the next Run ***'
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
 # paused frame, and V8 must not be moved on under it (main refuses too; this
@@ -1905,6 +1911,8 @@ start = (thenRun = null) ->
   worker.onerror = (event) ->
     event.preventDefault()
     say "worker: #{event.message ? 'failed to start'}", 'err'
+    # As messages.error does: a hold left pressed would hold the next run.
+    finished()
     setStatus 'error'
   worker.postMessage type: 'boot', sab: sab, owner: Atomics.load i32, H.OWNER
   setStatus 'booting'

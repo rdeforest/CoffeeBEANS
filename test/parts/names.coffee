@@ -9,10 +9,10 @@
 # does. On the Windows and macOS CI runners the disk folds for real, the
 # override stays off, and the same checks run against the real thing.
 
-fsp      = require 'fs/promises'
-path     = require 'path'
-{Menu}   = require 'electron'
-Settings = require '../../src/main/settings'
+fsp            = require 'fs/promises'
+path           = require 'path'
+{Menu, dialog} = require 'electron'
+Settings       = require '../../src/main/settings'
 
 module.exports = (t) ->
   {js, check, setDoc, consoleText, clearConsole, quiet, untilDoc, waitFor, paths} = t
@@ -247,3 +247,29 @@ module.exports = (t) ->
     await js "await Editor.load('scratch'); return true"
     await fsp.rm file, force: yes
     await fsp.rm folder, recursive: yes, force: yes
+
+  # The Open button's picker. Until 2026-10-06 sketch:pick was the one call
+  # of main's that would open something on the desktop in a test run with
+  # nothing in the way (found by the completeness review of I1); onDesktop
+  # in main answers it as canceled now, at once, and says what it would have
+  # opened. `dialog` is stood in for around the check, as the report part
+  # stands in for `shell`, to count a picker that gets past onDesktop -- so
+  # against the code before, this fails without opening one on the desktop.
+  escaped  = []
+  realPick = dialog.showOpenDialog
+  dialog.showOpenDialog = (win, options) ->
+    escaped.push options.title
+    Promise.resolve canceled: yes, filePaths: []
+  throw new Error 'could not stand in for dialog' if dialog.showOpenDialog is realPick
+  try
+    since  = paths.opened.length
+    asked  = Date.now()
+    picked = await js "return await beans.pick()"
+    took   = Date.now() - asked
+    meant  = paths.opened[since..]
+  finally
+    dialog.showOpenDialog = realPick
+  check 'in a test run the Open button\'s picker opens nothing, answers canceled at once, and main says what it would have opened',
+    escaped.length is 0 and picked?.canceled is true and took < 1000 and
+      meant.length is 1 and meant[0].what is 'showOpenDialog' and meant[0].detail is sketches,
+    JSON.stringify {escaped, picked, took, meant}

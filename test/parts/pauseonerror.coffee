@@ -919,3 +919,77 @@ throw slow
     before is 'error paused' and told.includes('work again from the next Run') and
       after.every(({how, said}) -> how is 'error paused' and not said.includes 'debugger:'),
     JSON.stringify {before, told, after}
+
+  # 28-30, from a Claude review of I1 (2026-10-06): a worker that was running
+  # when DevTools took the session. Enabling it again once DevTools let go
+  # hung for as long as it was busy (AGENTS.md, "Never re-attach"), so main
+  # never enables it again; breakpoints and error stops come back with the
+  # next Run, as the app says when DevTools closes.
+  LOOPING = "screen 320, 200\nn = 0\nloop\n  n += 1\n  buffer.swap\n"
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-opened'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+
+  # 28. A Run over it arms first, and the arm attached it again and waited on
+  # it: the Run sat at `arming` for two seconds and said the debugger had
+  # timed out.
+  await setDoc failing
+  await wait 500
+  await clearConsole()
+  asked  = Date.now()
+  await click 'runFresh'
+  await until_ (-> s = await status(); s if s isnt 'arming'), 10000
+  arming = Date.now() - asked
+  how    = await until_ (-> s = await status(); s if s in ['error', 'error paused']), 10000
+  if how is 'error paused'
+    await js "Stepping.resume(); return true"
+    await statusBecomes 'error'
+  await t.quiet()
+  said = await consoleText()
+  check 'a Run over a sketch that was running when DevTools opened and closed goes at once, and stops on its error',
+    arming < 500 and how is 'error paused' and not said.includes('debugger:'),
+    JSON.stringify {arming, how, said}
+
+  # 29. A worker born while DevTools held the page was never ours to let go
+  # of. The first Ctrl-\ after DevTools closed took its speaker before there
+  # was a session to speak to, and said "could not pause -- is DevTools
+  # open?"; only the second paused.
+  t.webContents.emit 'devtools-opened'
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+  await clearConsole()
+  since = (await pauseNumber()) ? 0
+  await js "Stepping.suspend(); return true"
+  seq   = await nextPause since, 5000
+  now   = await status()
+  said  = await consoleText()
+  check 'a sketch run while DevTools was open pauses at the first Ctrl-\\ after it closes',
+    seq and now is 'line paused' and not said.includes('could not pause'),
+    JSON.stringify {seq, now, said}
+  await click 'stop'
+  await t.settle()
+
+  # 30. Ctrl-\ at a worker that was running when DevTools opened: the same
+  # wait as 28, then "is DevTools open?". It says what is true, at once.
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-opened'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+  await clearConsole()
+  asked = Date.now()
+  await js "await Stepping.suspend(); return true"
+  took  = Date.now() - asked
+  await t.quiet()
+  now   = await status()
+  said  = await consoleText()
+  check 'Ctrl-\\ at a sketch that was running when DevTools opened says, at once, that pausing works again from the next Run',
+    took < 500 and now is 'running' and said.includes('pausing works again from the next Run') and
+      not said.includes('debugger:') and not said.includes('is DevTools open'),
+    JSON.stringify {took, now, said}
+  await click 'stop'
+  await t.settle()

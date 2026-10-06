@@ -252,6 +252,8 @@ module.exports = (win) ->
   wanted   = no          # the buffer holds a breakpoint
   forced   = no          # a line pause was asked for by key
   session  = null        # the sketch worker's flattened session
+  target   = null        # that worker's targetId, which outlives the session
+  dropped  = null        # the targetId of the worker last let go of; see stale
   enabled  = no          # the Debugger domain is on in that session
   ready    = null        # resolves once it is
   scripts  = new Map     # scriptId -> {url}, for every named script
@@ -402,10 +404,29 @@ module.exports = (win) ->
 
   # Armed is the Debugger domain on; disarmed is it off. Attachment itself is
   # for good once made: re-attaching to a worker we have let go of leaves
-  # Debugger.enable hanging forever (Electron 44), so we never let go --
-  # except to DevTools, which gives us no choice.
+  # Debugger.enable hanging while that worker is busy (Electron 44), so we
+  # never let go -- except to DevTools, which gives us no choice.
+  #
+  # That worker is attached again with the next attach, which Target's
+  # auto-attach makes for whatever worker is there, but never enabled: the
+  # first Run after DevTools closed, made over a sketch still running, sat at
+  # `arming` for SETUP_LIMIT and said the debugger had timed out (found by a
+  # Claude review of I1, 2026-10-06). Breakpoints and error stops come back
+  # with the next worker, as devtools-closed says. A worker born while
+  # DevTools held the page was never ours to let go of, and is enabled as
+  # any other; with a real DevTools, which attaches it too, that is untested.
+  #
+  # `target` is kept when the session goes: letting go reports
+  # Target.detachedFromTarget, which resets the session, before either caller
+  # of dropSession runs (seen by Claude in the suite, 2026-10-06).
+  stale = -> session? and target is dropped
+
+  dropSession = ->
+    dropped = target
+    resetSession()
+
   enable = ->
-    return null unless session
+    return null if not session or stale()
     return ready if enabled
     enabled = yes
     mine = session
@@ -435,9 +456,10 @@ module.exports = (win) ->
     ready   = null
     send('Debugger.disable').catch ->
 
-  setUp = (id, waiting) ->
+  setUp = (id, waiting, targetId) ->
     sessionGone()
     session = id
+    target  = targetId
     talk    = speaker()
     scripts.clear()
     maps.clear()
@@ -703,7 +725,8 @@ module.exports = (win) ->
     try
       switch method
         when 'Target.attachedToTarget'
-          setUp params.sessionId, params.waitingForDebugger if params.targetInfo.type is 'worker'
+          {targetInfo} = params
+          setUp params.sessionId, params.waitingForDebugger, targetInfo.targetId if targetInfo.type is 'worker'
         when 'Target.detachedFromTarget'
           resetSession() if params.sessionId is session
         when 'Debugger.scriptParsed'
@@ -728,7 +751,7 @@ module.exports = (win) ->
   # and that the debugger is not armed any more, so its next run arms first
   # (armFirst in the renderer).
   cdp.on 'detach', (event, reason) ->
-    resetSession()
+    dropSession()
     tell type: 'detached'
     tell type: 'problem', text: "debugger detached: #{reason}" unless devtools or reason is 'target closed'
 
@@ -740,9 +763,9 @@ module.exports = (win) ->
     tell type: 'detached'
     if cdp.isAttached()
       cdp.detach()
-      resetSession()          # which says `resumed` if we were paused
+      dropSession()           # which says `resumed` if we were paused
       tell type: 'problem', text: 'breakpoints and error stops are off while DevTools is open'
-  # The worker we had cannot be attached again (see enable), so breakpoints
+  # The worker we had is never enabled again (see stale), so breakpoints
   # come back with the next worker, which Run makes.
   contents.on 'devtools-closed', ->
     devtools = no
@@ -771,17 +794,32 @@ module.exports = (win) ->
   # set up can hold the turn for seconds, and a Run in that time used to have
   # this pause the new worker at its first line, or leave `chase` set for
   # whatever paused next (found by a Claude review of main at 404fb07).
+  # There may be no session yet when asked -- after DevTools, until settle
+  # attaches -- so the speaker is taken once settle has made one: taken
+  # before, the first Ctrl-\ after DevTools closed always failed (found by a
+  # Claude review of I1, 2026-10-06).
+  #
+  # Answers true, false, or 'stale' for a worker we let go of (see stale).
   pause = ->
     return true if stopped
-    talk   = speaker()
+    asked  = session
     forced = yes
-    return false unless await settle()
+    armed  = await settle()
+    return false if asked? and asked isnt session
+    return 'stale' if stale()
+    return false unless armed
+    talk = speaker()
     # A pause still being set up can be running JS of ours in the worker.
     await whenFree ->
       return true if stopped
       return false unless talk.live()
-      chase = {method: 'Debugger.stepInto', count: 0}
-      talk('Debugger.pause').then -> true
+      # Set before the command, as it always was: which arrives first, the
+      # pause or the command's answer, is not known.
+      chase = mine = {method: 'Debugger.stepInto', count: 0}
+      talk('Debugger.pause').then (-> true), (error) ->
+        chase = null if chase is mine
+        sayUnlessGone(talk) error
+        false
 
   # To the next line that runs, wherever it is: into a sketch function, back
   # out to its caller, round a loop. The runtime is ignore-listed, so `print`
