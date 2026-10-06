@@ -19,6 +19,7 @@ current     = null
 lastWritten = null
 saveTimer   = null
 writing     = {}      # sketch name -> this page's saves of it not yet answered
+sent        = {}      # sketch name -> the text of this page's latest save of it
 
 # --- ran-region flash -------------------------------------------------------
 
@@ -148,6 +149,7 @@ save = ->
   lastWritten = text
   name        = current
   writing[name] = (writing[name] ? 0) + 1
+  sent[name]    = text
   try
     await beans.write name, text
   catch error
@@ -168,14 +170,18 @@ scheduleSave = ->
 # too while one of this page's saves is in flight: if that save fails, nobody
 # is left to save it again, so main writes it once more behind it. Blocks
 # until main answers (sketch:flush). A crashed renderer runs none of this,
-# and comes back as last saved.
+# and comes back as last saved. A sketch switched away from while its
+# autosave was in flight is flushed the same way, with the text that save
+# sent: switching saves first, but a save already going is not waited for.
 flush = ->
   clearTimeout saveTimer
-  return unless current and view
-  text        = view.state.doc.toString()
-  resend      = text isnt lastWritten or writing[current] > 0
-  lastWritten = text
-  beans.flush current, (text if resend)
+  if current and view
+    text        = view.state.doc.toString()
+    resend      = text isnt lastWritten or writing[current] > 0
+    lastWritten = text
+    beans.flush current, (text if resend)
+  beans.flush name, sent[name] for name, count of writing when count > 0 and name isnt current
+  undefined
 
 # A pending debounced edit is the only "unsaved" state this editor has, and
 # only briefly: switching sketches saves it first. :e honours it anyway so

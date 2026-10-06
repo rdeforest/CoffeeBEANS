@@ -379,6 +379,8 @@ module.exports = (t) ->
 
   leaving  = 'unload-edit'
   leaveAt  = path.join t.paths.sketches, "#{leaving}.coffee"
+  other    = 'unload-other'
+  otherAt  = path.join t.paths.sketches, "#{other}.coffee"
   {faults} = t.paths
   try
     # View > Reload, the item Ctrl-r from the canvas or the pane reaches. The
@@ -433,6 +435,26 @@ module.exports = (t) ->
       sent and doc is "print 'REFUSED'\n" and disk is "print 'REFUSED'\n",
       "sent #{sent} doc #{JSON.stringify doc} disk #{JSON.stringify disk}"
 
+    # The same, but the page has moved on to another sketch by the time it
+    # reloads: switching saves first, yet does not wait for a save already
+    # going, so the flush has to cover a sketch that is no longer current.
+    await fsp.writeFile leaveAt, "print 'OLD'\n", 'utf8'
+    await fsp.writeFile otherAt, "print 'OTHER'\n", 'utf8'
+    page = await openPage leaving
+    Object.assign faults, slow: 1500, refuse: 1
+    await edit page, "print 'SWITCHED'\n"
+    sent = await page.webContents.executeJavaScript 'Editor.save(), !Editor.dirty()'
+    away = await page.webContents.executeJavaScript "Editor.load('#{other}')"
+    await reload page
+    Object.assign faults, slow: 0, refuse: 0
+    await onSketch page, leaving
+    doc  = await page.webContents.executeJavaScript 'Editor.all()'
+    disk = await fsp.readFile leaveAt, 'utf8'
+    page.destroy()
+    check 'an autosave that fails after the page switched sketches is saved again at View > Reload',
+      sent and away is other and doc is "print 'SWITCHED'\n" and disk is "print 'SWITCHED'\n",
+      "sent #{sent} away #{away} doc #{JSON.stringify doc} disk #{JSON.stringify disk}"
+
     # A save that hangs, as one on an NFS or FUSE data folder can: the reload
     # waits SAVE_LIMIT for it and then goes, rather than freezing the page.
     # The page it brings up shows the old text; the save still lands later.
@@ -469,12 +491,15 @@ module.exports = (t) ->
     Object.assign faults, slow: 0, refuse: 0
     page?.destroy() unless page?.isDestroyed()
     await fsp.rm leaveAt, force: yes
+    await fsp.rm otherAt, force: yes
 
   # Quitting, for real: File > Quit, the item Cmd-Q reaches. It cannot happen
   # in the app the suite runs in, so a second Electron runs the `quit` part
   # (test/parts/quit.coffee) on a data folder of its own, with its save held
   # for `hold`, and the disk is read once it has exited. Bounded: a child
-  # still running after 30s is killed, and fails the check.
+  # still running after 30s is sent SIGTERM, which only asks it to quit -- a
+  # quit that stalls outlives it (below) -- so SIGKILL follows 5s later, and
+  # either fails the check rather than leaving the suite waiting for good.
   quitChild = (hold) ->
     home  = path.join t.paths.data, 'quit-child'
     saved = path.join home, 'sketches', 'quit-edit.coffee'
@@ -486,24 +511,28 @@ module.exports = (t) ->
     output = ''
     child.stdout.on 'data', (chunk) -> output += chunk
     child.stderr.on 'data', (chunk) -> output += chunk
-    killer = setTimeout (-> child.kill()), 30000
+    killed = null
+    kill   = (signal) -> killed = signal; child.kill signal
+    killer = setTimeout (-> kill 'SIGTERM'; killer = setTimeout (-> kill 'SIGKILL'), 5000), 30000
     [code, signal] = await new Promise (resolve) -> child.on 'exit', (code, signal) -> resolve [code, signal]
     took = Date.now() - began
     clearTimeout killer
     disk = try fs.readFileSync(saved, 'utf8') catch error then error.code
     said = output.split('\n').filter (line) -> /PASS|FAIL|quit|crash|flush/.test line
-    {code, disk, said, took, report: "exit #{code} #{signal ? ''} after #{took}ms disk #{JSON.stringify disk} child said #{JSON.stringify said}"}
+    {code, disk, said, took, killed, report: "exit #{code} #{signal ? ''} after #{took}ms#{if killed then ", sent #{killed}" else ''} disk #{JSON.stringify disk} child said #{JSON.stringify said}"}
 
-  {code, disk, report} = await quitChild 1500
+  {code, disk, killed, report} = await quitChild 1500
   check 'an edit made just before the app quits is on disk after it has exited',
-    code is 0 and disk is "print 'QUIT'\n", report
+    code is 0 and not killed and disk is "print 'QUIT'\n", report
 
   # A save held for a minute stands for one that hangs: the quit gives up on
   # it after SAVE_LIMIT and exits, saying which sketch it left unsaved. The
-  # time is checked as well, because the 30s kill does not bound this one: run
-  # against the unbounded quit (Claude, 2026-10-06), the child outlived the
-  # kill and exited 0 once the save landed, so SIGTERM apparently goes through
-  # the same quit and waits with it.
-  {code, said, took, report} = await quitChild 60000
+  # time is checked as well, because the SIGTERM does not bound this one: run
+  # against the unbounded quit (Claude, 2026-10-06), the child outlived it and
+  # exited 0 once the save landed. SIGTERM only starts a quit, and will-quit
+  # holds it: a windowless Electron 44 app whose will-quit always holds logs
+  # before-quit and will-quit on SIGTERM and stays up; a second signal kills
+  # it (measured by a Claude reviewer, 2026-10-06). Hence the SIGKILL.
+  {code, said, took, killed, report} = await quitChild 60000
   check 'the app quits with a save that hangs, after SAVE_LIMIT, and says so',
-    code is 0 and took < 30000 and said.some((line) -> /will-quit: still saving .*quit-edit\.coffee/.test line), report
+    code is 0 and not killed and took < 30000 and said.some((line) -> /will-quit: still saving .*quit-edit\.coffee/.test line), report
