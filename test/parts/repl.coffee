@@ -376,6 +376,87 @@ module.exports = (t) ->
     wide.value is "smile = '\u{1F600}!'" and wide.mark is 'bck-i-search: \u{1F600}_',
     JSON.stringify wide
 
+  # 11b. Up and Down search the history by what is left of the caret, as the
+  # node REPL does (lib/internal/readline/interface.js and lib/internal/repl/
+  # history.js in Node 24.20). Each walk starts from the bottom of the
+  # history: Ctrl-C on an empty line puts it there.
+  await enter line for line in ['circle 4, 5, 6', 'print 2', 'circle 1, 2, 3', 'print 1', 'print 1']
+  fromTheBottom = (line, at = line.length) ->
+    await promptAt '', 0
+    await press 'C-c'
+    await promptAt line, at
+  pressing = (keys...) ->
+    shown = []
+    for key in keys
+      await press key
+      shown.push (await promptNow()).value
+    shown
+
+  await fromTheBottom 'ciXYZ', 2
+  ups   = await pressing 'Up', 'Up', 'Up'
+  downs = await pressing 'Down', 'Down', 'Down'
+  back  = await promptNow()
+  check 'with ci typed, Up skips print 1 to reach circle 1, 2, 3', ups[0] is 'circle 1, 2, 3', JSON.stringify ups
+  check 'Up never leaves the prefix, and stays on the oldest match',
+    ups.join('|') is 'circle 1, 2, 3|circle 4, 5, 6|circle 4, 5, 6', JSON.stringify ups
+  check 'Down walks back to the line as it was typed, caret and all, and no further',
+    downs.join('|') is 'circle 1, 2, 3|ciXYZ|ciXYZ' and back.from is 2 and back.to is 2,
+    JSON.stringify {downs, back}
+
+  await fromTheBottom ''
+  plain = await pressing 'Up', 'Up'
+  check 'with nothing typed, Up is the last line, and a run of repeats is one step',
+    plain.join('|') is 'print 1|circle 1, 2, 3', JSON.stringify plain
+
+  # Ended, the next Up asks for lines starting with the line as it now is,
+  # from where the walk got to. Still walking, it would find circle 4, 5, 6.
+  await fromTheBottom 'ci'
+  await press 'Up'
+  await press 'C-u'
+  keyed = await pressing 'Up'
+  await fromTheBottom 'ci'
+  await press 'Up'
+  await js """
+    const p = document.getElementById('promptLine')
+    p.select()
+    document.execCommand('insertText', false, '')
+    return true
+  """
+  pasted = await pressing 'Up'
+  await fromTheBottom 'ci'
+  await press 'Up'
+  escaped = await pressing 'Escape', 'Up'
+  check 'an edit, one with no key of its own, or Esc, ends the walk',
+    keyed[0] is 'print 2' and pasted[0] is 'print 2' and escaped.join('|') is 'circle 1, 2, 3|circle 1, 2, 3',
+    JSON.stringify {keyed, pasted, escaped}
+
+  # Node's Ctrl-P and Ctrl-N are its history keys without the prefix: they
+  # end the walk and step through every line, repeats passed over.
+  await fromTheBottom 'ci'
+  steps = await pressing 'Up', 'C-p', 'C-n', 'C-n', 'C-n'
+  check 'Ctrl-P and Ctrl-N walk every line, as node\'s do, and end a walk by prefix',
+    steps.join('|') is 'circle 1, 2, 3|print 2|circle 1, 2, 3|print 1|ci', JSON.stringify steps
+
+  # A search taken by Up walks every line from the match, as node's does --
+  # not those starting with "circle 1, 2, ", left of where the match put the
+  # caret. And Down from the newest line comes back to the one from before
+  # the search.
+  await fromTheBottom 'draft'
+  await press 'C-r'
+  await typeText '3'
+  await press 'Up'
+  fromMatch = await promptNow()
+  await fromTheBottom 'draft'
+  await press 'C-r'
+  await typeText '1'
+  await press 'Down'
+  drafted = await promptNow()
+  check 'Up or Down takes a reverse search\'s match and walks on from it',
+    fromMatch.value is 'print 2' and fromMatch.mark is '>' and
+      drafted.value is 'draft' and drafted.from is 5 and drafted.mark is '>',
+    JSON.stringify {fromMatch, drafted}
+  await fromTheBottom ''
+
   # 12. Ctrl-L clears the console, as it clears the screen
   await promptAt '', 0
   had = (await consoleText()).length
@@ -1002,7 +1083,9 @@ noisyToo = 1
     took.value is 'noisy.betaTwo' and took.from is 13 and closed? and not closed.open and ran is '' and
       (await js "return Prompt.entered()").length is earlier.length,
     JSON.stringify {took, closed, ran}
-  await press 'Up'
+  # From the start of the line, where Up's prefix is empty: at the end of it,
+  # nothing in the history starts with noisy.betaTwo.
+  await press 'C-a', 'Up'
   recalled = await promptNow()
   check 'once the list has closed, Up is the history again',
     took.value is 'noisy.betaTwo' and recalled.value is earlier.at(-1),
