@@ -103,6 +103,11 @@ saveSettings = -> Settings.save SETTINGS, settings, sayProblem
 ipcMain.handle 'settings:vim',      -> settings.vim is true
 ipcMain.handle 'settings:warnCase', -> settings.warnCase isnt false
 
+# On unless unticked (Edit > Stop on Errors). No page is told or asks: the
+# switch is the debugger's, in this process, and every window's session
+# reads it -- so a page built afresh has it as it was.
+stopsOnErrors = -> settings.stopOnErrors isnt false
+
 # Asked of git once, now, so neither the window nor About waits on it later.
 Version = require './version'
 VERSION = Version.derive ROOT
@@ -851,6 +856,17 @@ installMenu = ->
           win.webContents.send 'settings:vim', item.checked for win in BrowserWindow.getAllWindows()
       }
       {
+        # Off, an uncaught error ends the run, reported, as before E1 (2026-10-06).
+        id:      'stopOnErrors'
+        label:   'Stop on Errors'
+        type:    'checkbox'
+        checked: stopsOnErrors()
+        click: (item) ->
+          settings.stopOnErrors = item.checked
+          saveSettings()
+          debugSketches.stopOnErrors item.checked
+      }
+      {
         # On unless unticked: a sketch opened under another spelling says so
         # in the console. The renderer asks each time, so nobody is told.
         id:      'warnCase'
@@ -949,6 +965,7 @@ reachWindow = ->
   await prepareDataHome()
   folding.probed = probeFolding SKETCHES
   settings = Settings.read SETTINGS, sayProblem
+  await debugSketches.stopOnErrors stopsOnErrors()
   protocol.handle 'app', serve unless protocol.isProtocolHandled 'app'
   installMenu()
   createWindow()

@@ -170,7 +170,19 @@ module.exports = (win, paths) ->
   # switch the Stop on Errors preference uses. Off for every part but
   # pauseonerror (t.reset), so a check that fails a sketch on purpose gets
   # the plain report it was written against.
+  #
+  # One switch, two writers, the last one wins (decided by Claude, E2,
+  # 2026-10-06). In a launch the preference is the only writer -- at startup
+  # and on each click -- so the tick and what errors do always agree. The
+  # suite writes the switch behind the menu's back, never the tick or
+  # settings.json, and t.reset writes it before every part, so no part runs
+  # on what the stored preference or the part before left. A check that
+  # clicks the menu has the switch until the next t.stopOnErrors or reset.
   t.stopOnErrors = (stop) -> require('../src/main/debugger').stopOnErrors stop
+  t.stopsItem    = -> Menu.getApplicationMenu().getMenuItemById 'stopOnErrors'
+  t.stopsState   = ->
+    ticked:   t.stopsItem()?.checked
+    stopping: require('../src/main/debugger').errorStops()
   t.debugKept    = -> require('../src/main/debugger').kept()
   t.debugHooks   = require('../src/main/debugger').hooks
   t.crossings    = -> require('../src/main/debugger').crossings()
@@ -195,7 +207,9 @@ module.exports = (win, paths) ->
   # Claude reviewer, 2026-10-05). A hidden Linux test run shows its window and
   # then minimises it, so reloading it would stall the present loop for every
   # part after. `query` is the URL's, for a part that drives the boot.
-  t.freshPage = (probe, limit = 15000, query = '') ->
+  # `debugged` gives the page the debugger a launch gives its window, for a
+  # check that needs a pause in it.
+  t.freshPage = (probe, limit = 15000, query = '', debugged = no) ->
     page = new BrowserWindow
       show: no
       webPreferences:
@@ -203,6 +217,7 @@ module.exports = (win, paths) ->
         nodeIntegration:  no
         preload:          path.join paths.root, 'src', 'main', 'preload.js'
     page.webContents.setAudioMuted yes
+    require('../src/main/debugger') page if debugged
     try
       await page.loadURL "app://beans/src/renderer/index.html#{query}"
       deadline = Date.now() + limit
@@ -236,9 +251,9 @@ module.exports = (win, paths) ->
   #
   # Vim is off at the start of every part, the way a fresh install has it, and
   # a part that drives vim turns it on. What the app came up with is kept
-  # first, for the check that a fresh install has no vim.
+  # first, for the checks of what a launch reads from settings.json.
   t.reset = ->
-    t.launched ?= await t.vimState()
+    t.launched ?= {(await t.vimState())..., stops: t.stopsState()}
     await t.stopOnErrors no
     await t.vimKeys off
     await t.js "await Editor.load('scratch'); return true"

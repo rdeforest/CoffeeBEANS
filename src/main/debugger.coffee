@@ -922,6 +922,9 @@ module.exports.stopOnErrors = (stop) ->
   await Promise.all (controller.exceptions() for controller from controllers.values())
   errorStops
 
+# For the suite: the switch as it stands, without moving it.
+module.exports.errorStops = -> errorStops
+
 module.exports.hooks = hooks
 
 # For the suite: how many scripts and source maps each live session is keeping.
