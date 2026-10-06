@@ -151,7 +151,8 @@ save = ->
   writing[name] = (writing[name] ? 0) + 1
   sent[name]    = text
   try
-    await beans.write name, text
+    note = await beans.write name, text
+    handlers.onMessage? note if note
   catch error
     lastWritten = was if lastWritten is text
     handlers.onProblem? "could not save #{name}: #{error.message}"
@@ -196,8 +197,9 @@ dropPending = ->
 
 # lastWritten is the text as CodeMirror holds it, never the bytes on disk:
 # CodeMirror reads \r\n and \r as \n, so a CRLF sketch compared raw read dirty
-# forever and its next save rewrote a file nobody edited. A sketch the author
-# does edit is saved with \n (decided by Claude, 2026-10-05).
+# forever and its next save rewrote a file nobody edited. A save sends \n and
+# main writes it back with the endings the file already has (writeSketch), so
+# the echo of a CRLF save is recognised here in its \n form.
 asHeld = (text) -> view.state.toText(text).toString()
 
 # Echoes of our own writes come back through the watcher; ignore those.

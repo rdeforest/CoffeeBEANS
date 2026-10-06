@@ -11,9 +11,17 @@ Each entry: what to do, what should happen, where it came from.
 
 - **A CRLF sketch opens clean.** Make a sketch in Notepad (CRLF line
   endings), open it in CoffeeBEANS: it is not marked dirty, `/e` to another
-  sketch is not refused, and the file on disk is not rewritten. If it is
-  edited, it is saved with LF (decided by Claude, 2026-10-05). From K4,
-  overnight 2026-10-05, play-test item 9.
+  sketch is not refused, and the file on disk is not rewritten. Edited, it
+  stays CRLF (Notepad++'s status bar, or `Format-Hex`), and the console does
+  not say "reloaded from disk" (U2, overnight 2026-10-06, after Robert decided
+  line endings follow the platform). From K4, overnight 2026-10-05,
+  play-test item 9.
+- **A new sketch is CRLF, an LF one stays LF.** `/e something-new`, type
+  two lines, wait a moment: the file is CRLF. Then edit an LF sketch made
+  elsewhere (VS Code set to LF, or one of the shipped examples, which are
+  copied as they are in git, LF): it is still LF. The `lifecycle` part
+  checks both on the Windows CI job; this is the by-hand look, through a
+  player's own editor. From U2, overnight 2026-10-06.
 - **The hidden test window.** `npm test` from cmd.exe or PowerShell runs the
   suite; its window shows unfocused and stays up for the whole run. From C1,
   overnight 2026-10-05.

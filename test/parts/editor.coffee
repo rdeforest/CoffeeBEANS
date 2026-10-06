@@ -21,7 +21,7 @@ onMac = process.platform is 'darwin'
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
-   settled, evalRegion, untilDoc} = t
+   settled, evalRegion, untilDoc, asHeld} = t
   {waitFor, type, chord, vimKeys, vimItem} = t
 
   # 1. the editor is mounted, with ordinary keys unless Edit > Vim Keys says
@@ -97,7 +97,7 @@ module.exports = (t) ->
   untilDisk = (wanted, limit = 3000) ->
     deadline = Date.now() + limit
     loop
-      text = await fsp.readFile scratch, 'utf8'
+      text = asHeld await fsp.readFile scratch, 'utf8'
       return text if text is wanted or Date.now() > deadline
       await wait 25
 
@@ -167,7 +167,7 @@ module.exports = (t) ->
   # 2. edits reach disk without an explicit save
   await setDoc "print 'autosave check'\n"
   await wait 600
-  onDisk = await fsp.readFile scratch, 'utf8'
+  onDisk = asHeld await fsp.readFile scratch, 'utf8'
   check 'autosave writes to disk', onDisk is "print 'autosave check'\n", JSON.stringify onDisk
 
   # 3. eval-region runs only the paragraph under the cursor
