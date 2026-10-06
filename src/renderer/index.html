@@ -35,6 +35,10 @@
   button.ghost { background: #22222a; color: var(--coffee); }
   button.stop  { background: #ff6b6b; }
   button:disabled { opacity: .35; cursor: default; }
+  /* Stop grays and comes back on the console's timer as well as the status,
+     and a prompt line at an idle worker is out for a millisecond or two:
+     eased, so a tick that catches one does not flash the button. */
+  #stop { transition: opacity .15s; }
   #status { opacity: .7; min-width: 6rem; text-align: right; }
   #meter  { opacity: .45; font-variant-numeric: tabular-nums; }
   #lines  { opacity: .6; font-variant-numeric: tabular-nums; }

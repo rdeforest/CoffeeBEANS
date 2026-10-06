@@ -20,7 +20,7 @@ path = require 'path'
 PARTS = [
   'startup', 'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'about', 'input', 'random', 'names', 'sound', 'perf'
-  'pauseonerror'
+  'pauseonerror', 'stopbutton'
 ]
 
 # Run only when named, never in a full run: `quit` ends the app it runs in, so

@@ -146,7 +146,9 @@ print 'a4=' + sound.hz('A4') + ' c4=' + sound.hz('C4').toFixed(2) + ' bb3=' + so
   # 7b. a note that outlives its sketch is silenced by Stop, and Stop with
   # nothing running leaves the prompt working
   text = await run "sound 262, voice: 'drone'\nprint 'finished'\n"
-  lingering = await until_ -> (await busy()) is 1
+  # The button lights for a sounding voice on the console's next tick, and a
+  # click on it while it is still gray does nothing.
+  lingering = await until_ -> (await busy()) is 1 and not await js "return document.getElementById('stop').disabled"
   await click 'stop'
   hushed = await until_ -> (await busy()) is 0
   asked = await ask '6 * 7'

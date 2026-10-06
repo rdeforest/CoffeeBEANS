@@ -52,6 +52,35 @@ setStatus = (text) ->
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
   hold.title       = HOLD_TITLES[text] ? 'Hold the sketch at its next frame'
+  showStop()
+  undefined
+
+# Stop is gray only when there is nothing for it to end (Robert, 2026-10-05).
+# Not merely when no sketch is running: a note with no length outlives its
+# sketch, and Stop is how it is hushed. So it is live while a run is on its
+# way, running or paused, while a prompt line or Tab is out, and while any
+# voice sounds. Ctrl-. calls stop whatever the button shows: a note queued
+# but not yet begun is not sounding yet, and a Stop with nothing to end is
+# harmless.
+#
+# The status covers the run. The rest is written by the worker and the audio
+# thread, which tell nobody, so the console's timer looks again as well.
+STOP_LIVE  = ['arming', BUSY...]
+STOP_TITLE =
+  live: 'Stop the sketch and silence its notes (Ctrl-.)'
+  gray: 'Nothing to stop: no sketch is running, no prompt line is out, no note is sounding'
+
+stoppable = ->
+  status in STOP_LIVE or (status is 'booting' and pending isnt null) or
+    Atomics.load(i32, H.ASK_STATE) in [1, 4] or Atomics.load(i32, H.SOUND_BUSY) > 0
+
+showStop = ->
+  live   = stoppable()
+  title  = STOP_TITLE[if live then 'live' else 'gray']
+  button = document.getElementById 'stop'
+  return if button.title is title
+  button.disabled = not live
+  button.title    = title
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -1497,13 +1526,15 @@ startSound = ->
     say "sound: #{error.message ? error}", 'err'
   undefined
 
-# What the audio thread says it is doing. The suite reads this; nothing else
-# needs to.
+# What the audio thread says it is doing, and how many times this side has
+# told it to drop everything queued -- a Stop with nothing sounding does only
+# that. The suite reads this; nothing else needs to.
 globalThis.Sound =
   started: -> Atomics.load i32, H.SOUND_STARTED
   peak:    -> Atomics.load(i32, H.SOUND_PEAK) / 1e6
   busy:    -> Atomics.load i32, H.SOUND_BUSY
   rate:    -> Atomics.load i32, H.SOUND_RATE
+  epoch:   -> Atomics.load i32, H.SOUND_EPOCH
 
 # --- worker lifecycle -------------------------------------------------------
 
@@ -1831,7 +1862,7 @@ listenForPrompt()
 dragPanel document.getElementById('splitEditor'),  'editor'
 dragPanel document.getElementById('splitConsole'), 'console'
 
-setInterval (-> drainPrints(); drainAsk()), CONSOLE_EVERY
+setInterval (-> drainPrints(); drainAsk(); showStop()), CONSOLE_EVERY
 
 new ResizeObserver(resize).observe stage
 window.addEventListener 'resize', reflowPanels
