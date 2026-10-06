@@ -48,6 +48,20 @@ by stage of development.
 Until the content repository exists, game design goes in this one, and moves
 when it does.
 
+**Revised by Robert, 2026-10-05.** This repository's history already holds
+the story and challenge solutions, so it stays private for good. Two new
+repositories, created private that day in the `thatsnice` organization:
+
+- **`thatsnice/CoffeeBEANS`** -- the engine's public home, empty for now. It
+  hosts the issues (the in-app report points there) and goes public when
+  play testers arrive. Its name is still open until then. The code moves in
+  later, in pieces, as an edited history meant to be read: how the thing
+  was built, step by step.
+- **`thatsnice/CoffeeBEANS-content`** -- the story, the challenge tree and its
+  solutions, the art, the music. Private.
+
+Work continues in this repository until the move.
+
 Open:
 
 - **How the art is handled** -- Robert's todo, 2026-10-04: where the files
