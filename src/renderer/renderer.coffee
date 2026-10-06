@@ -996,8 +996,9 @@ reportSaved   = document.getElementById 'reportSaved'
 # by Tab instead, the button is where the player was, and stays null.
 reportReturn  = null
 # Taken at pointerdown, and forgotten if the pointer is let go anywhere but
-# the button: a press dragged off is no click, and the next open, from the
-# keyboard, would hand focus to wherever that press began.
+# the button, or the press is cancelled: either way there is no click, and
+# the next open, from the keyboard, would hand focus to wherever that press
+# began.
 reportPressed = null
 # Counts opens. A draft or a save still out when the player cancelled
 # answers a dialog that has moved on, and must not move the next one. Not
@@ -1069,7 +1070,8 @@ saveReport = ->
   reportStep 'reportDone'
 
 reportButton.addEventListener 'pointerdown', -> reportPressed = document.activeElement
-window.addEventListener 'pointerup', ((event) -> reportPressed = null unless reportButton.contains event.target), yes
+window.addEventListener 'pointerup',     ((event) -> reportPressed = null unless reportButton.contains event.target), yes
+window.addEventListener 'pointercancel', (-> reportPressed = null), yes
 reportBox.addEventListener 'close', ->
   reportReturn?.focus()
   reportReturn = null

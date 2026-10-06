@@ -5,6 +5,7 @@
 # a line:col, CoffeeScript's `::` -- must come through untouched.
 
 {execFileSync} = require 'child_process'
+crypto         = require 'crypto'
 fs             = require 'fs'
 fsp            = require 'fs/promises'
 path           = require 'path'
@@ -63,6 +64,11 @@ TAIL = 'Ab3Cd5Ef7Gh9Ij=='
 # cases have to be enough. And a key with no digits at all.
 AWS_EXAMPLE = ['wJalrXUtnFEMI', 'K7MDENG', 'bPxRfiCY' + 'EXAMPLEKEY']
 NO_DIGITS   = 'qWeRtYuIoPaSdFgHjKl+' + 'ZxCvBnMqWeRtYuIoPaSd'
+# Stripe's and Hugging Face's, drawn with no digits and one case, which the
+# random-string patterns rightly take for words: only the prefix says.
+STRIPE  = 'sk' + '_live_' + 'qwertyuiopasdfghjklzxcvb'
+RESTRICTED = 'rk' + '_test_' + 'mnbvcxzlkjhgfdsapoiuytre'
+HUGGING = 'hf' + '_' + 'qwertyuiopasdfghjklzxcvbnmqwerty'
 
 CASES = [
   # pattern, machine, a realistic line, what must be gone, what must be
@@ -89,10 +95,22 @@ CASES = [
     ['alice'], ["open '~/sketches/x.coffee'"], 'through a link']
   ['home-shaped folder', ALICE, "ENOENT: open '/Users/Mike Smith/Library/beans/x.png'",
     ['Mike', 'Smith'], ["open '~/Library/beans/x.png'"], 'a name with a space']
+  ['home-shaped folder', ALICE, "EPERM: open 'C:\\Users\\Mike Smith'; ENOENT: /Users/Sean O'Brien/Library/x.png",
+    ['Mike', 'Smith', 'Sean', 'Brien'], ["open '~';", 'ENOENT: ~/Library/x.png'], 'a name with a space, then a quote or an apostrophe']
+  ['home-shaped folder', ALICE, 'EACCES: /home/alice.smith/x.png',
+    ['alice', 'smith'], ['EACCES: ~/x.png'], "a longer name that starts with this account's"]
+  ['home-shaped folder', LINKED, "open '/var/home/carol/x.coffee' from <data>/sketches/home/menu.coffee",
+    ['carol', '/var'], ["open '~/x.coffee'", '<data>/sketches/home/menu.coffee'], "Silverblue's /var/home, and a folder called home"]
+  ['home-shaped folder', ALICE, 'GET https://example.com/open?file=/home/bob/x.png and ?u=file%3A%2F%2F%2Fhome%2Fcarol%2Fy',
+    ['bob', 'carol'], ['https://example.com/open?file=~/x.png', 'file%3A%2F%2F~%2Fy'], "a web address's query"]
   ['network share', ALICE, 'EACCES: \\\\fileserver\\Users\\erin\\Documents and \\\\fs\\home$\\frank\\docs',
     ['fileserver', 'erin', 'fs\\', 'frank'], ['EACCES: \\\\<share>\\Documents and \\\\<share>\\docs']]
+  ['network share', ALICE, '{"path":"\\\\\\\\fileserver\\\\Users\\\\erin\\\\x.png"}',
+    ['fileserver', 'erin'], ['{"path":"\\\\\\\\<share>\\\\x.png"}'], 'doubled by JSON']
   ['mounted drive', PI, 'loaded /run/media/pi/BEANS/x.coffee from the stick at /media/pi',
     ['/pi'], ['/run/media/<user>/BEANS/x.coffee', 'the stick at /media/<user>']]
+  ['mounted drive', ALICE, 'file:///media/bob/USB/x.coffee, not /home/alice/game/media/sounds/boom.wav nor /home/alice/.local/share/coffeebeans/sketches/media/hit.wav',
+    ['bob'], ['file:///media/<user>/USB', '~/game/media/sounds/boom.wav', '<data>/sketches/media/hit.wav'], 'and a folder called media']
   ['home by account name', ALICE, 'open ~bob/.ssh/id_rsa failed; ~carol/games/x.coffee loaded',
     ['bob', 'carol'], ['open ~/.ssh/id_rsa failed; ~/games/x.coffee loaded']]
   ['password in a URL', ALICE, 'fetch https://bob:hunter2@example.com/feed.json failed: 401',
@@ -101,6 +119,8 @@ CASES = [
     ['eyJ'], ['session <secret> expired']]
   ['known key prefix', ALICE, "GitHub said 401 to #{GITHUB}; AWS refused #{AWS}",
     [GITHUB, AWS], ['401 to <secret>; AWS refused <secret>']]
+  ['known key prefix', ALICE, "Stripe refused #{STRIPE} and #{RESTRICTED}; HF_TOKEN #{HUGGING}",
+    [STRIPE[8..], RESTRICTED[8..], HUGGING[3..]], ['refused <secret> and <secret>; HF_TOKEN <secret>'], 'Stripe and Hugging Face']
   ['authorization header', ALICE, '401 from the server: Authorization: Basic YWxhZGRpbjpvcGVuc2VzYW1l',
     ['YWxhZGRp'], ['Authorization: Basic <secret>']]
   ['bearer token', ALICE, 'request sent with Bearer 7f3a9c2e1b4d8f60a5e7c3b2',
@@ -115,6 +135,8 @@ CASES = [
     ['s3cr3t', '(1)'], ['client_secret=<secret> in the body'], 'random, with parentheses']
   ['secret assignment', ALICE, 'PGPASSWORD=hunter2 SESSIONTOKEN=abc psql -h db',
     ['hunter2', '=abc'], ['PGPASSWORD=<secret> SESSIONTOKEN=<secret> psql'], 'glued in capitals']
+  ['secret assignment', ALICE, 'config.yml:\npassword: hunter2',
+    ['hunter2'], ['config.yml:\npassword: <secret>'], 'under a line that ends in a colon']
   ['secret block', ALICE, "config.yml:\nsecret: |\n  hunter2-the-real-one\n\n  and-a-second-line\nnext: 1",
     ['hunter2', 'second-line'], ['secret: ', '\n  <secret>\nnext: 1']]
   ['cookie', ALICE, 'sent Cookie: session=abcdefg12345; theme=dark, got Set-Cookie: sid=s%3Aabc123xyz; Path=/',
@@ -127,6 +149,8 @@ CASES = [
     ['smith', 'example.co.uk'], ['failed for <email>']]
   ['e-mail address', ALICE, 'sign-in failed for jose\u0301.garci\u0301a@example.com',
     ['garci', 'example.com'], ['failed for <email>'], 'written decomposed']
+  ['e-mail address', ALICE, 'GET https://api.example.com/users/bob.jones%40mailhost.org/avatar failed',
+    ['jones', 'mailhost'], ['/users/<email>/avatar failed'], 'in a web address']
   ['MAC address', ALICE, 'en0: ether 3c:22:fb:01:9a:7e, on Windows 3C-22-FB-01-9A-7E',
     ['3c:22', '3C-22'], ['ether <mac>, on Windows <mac>']]
   ['MAC address', ALICE, 'switch port Gi0/1 learned 3c22.fb01.9a7e.',
@@ -149,6 +173,8 @@ CASES = [
     [NO_DIGITS[..19], NO_DIGITS[20..]], ['AWS refused <secret> too'], 'a key with no digits']
   ['base64 last line', ALICE, "pasted:\n#{BODY[0]}\n#{TAIL}\nand it failed",
     [TAIL[..13]], ['pasted:\n<secret>\n<secret>\nand it failed']]
+  ['mDNS host name', ALICE, 'connect ETIMEDOUT bobs-macbook.local:8080, then Carols-iPad.local.',
+    ['bobs', 'Carols'], ['ETIMEDOUT <host>:8080, then <host>.']]
   ['host name', ALICE, 'getaddrinfo ENOTFOUND alices-laptop.lan, and alices-laptop is not answering',
     ['alices-laptop'], ['ENOTFOUND <host>, and <host> is not']]
   ['user name', ALICE, 'Alice here: it froze when alice pressed space; malice is not a name',
@@ -191,6 +217,21 @@ KEPT = [
     'Greek question mark \u037e, Kelvin \u212a, ohm \u2126, angstrom \u212b, CJK \uf900, Hangul \u1100\u1161']
 ]
 
+# Redaction runs in main, in `report:draft`, so a slow line freezes the app.
+# At bc1ee71 three patterns cost the line's length at every position in it
+# (the web-address lookbehind, an unbounded name in `secret assignment`, a
+# lookbehind for `Bearer`), and these took 4.4s, 7.7s, 12.4s, 5.9s and 5.3s;
+# linear, under 30ms each (measured by V2's third fixer, Claude, 2026-10-06,
+# in Electron 44). The bound leaves a loaded runner thirty times that.
+LONG = [
+  ['a 200,000-character base64 line', crypto.randomBytes(150000).toString 'base64']
+  ['100,000 slashes',                 '/'.repeat 100000]
+  ['100,000 backslashes',             '\\'.repeat 100000]
+  ['100,000 letters',                 'a'.repeat 100000]
+  ['100,000 blank lines',             '\n'.repeat 100000]
+]
+LONG_BOUND = 1000
+
 module.exports = (t) ->
   {js, check, click, setDoc, ask, waitFor, paths} = t
 
@@ -219,6 +260,13 @@ module.exports = (t) ->
   for [what, line] in KEPT
     out = Redact.redactor(ALICE) line
     check "comes through whole: #{what}", out is line, JSON.stringify out
+
+  took = for [what, line] in LONG
+    started = performance.now()
+    Redact.redactor(ALICE) line
+    [what, Math.round performance.now() - started]
+  check "redaction takes under #{LONG_BOUND}ms on each of five long lines",
+    took.every(([what, ms]) -> ms < LONG_BOUND), JSON.stringify took
 
   # The real machine's own: About says nothing a billboard would mind, so it
   # must come through whole -- redacted as a report redacts it, with the
@@ -415,6 +463,30 @@ module.exports = (t) ->
     closedOn = await waitFor "return window.suiteClosedOn"
     check 'a press dragged off the button is forgotten: opened from the keyboard after it, closing leaves focus on the button',
       closedOn is 'feedback', closedOn
+
+    # The same for a press the browser cancels (a touch that turns into a
+    # scroll): no pointerup comes, and no click.
+    await js """
+      document.getElementById('promptLine').focus()
+      const button = document.getElementById('feedback')
+      button.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))
+      button.dispatchEvent(new PointerEvent('pointercancel', {bubbles: true}))
+      button.focus()
+      button.click()
+      return true
+    """
+    await waitFor "return document.getElementById('report').open"
+    await js """
+      window.suiteClosedOn = null
+      document.getElementById('report').addEventListener('close', () => {
+        window.suiteClosedOn = document.activeElement.id || document.activeElement.tagName
+      }, {once: true})
+      document.querySelector('#reportAsk form button.ghost').click()
+      return true
+    """
+    cancelledOn = await waitFor "return window.suiteClosedOn"
+    check 'a cancelled press is forgotten too: closing leaves focus on the button',
+      cancelledOn is 'feedback', cancelledOn
 
     drafts = 0
     Report.draft = (args...) -> drafts += 1; realDraft args...

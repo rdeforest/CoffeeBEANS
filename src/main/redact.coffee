@@ -47,32 +47,44 @@ whole = (names) ->
   new RegExp either.join('|'), 'giu'
 
 # Folders end where a path segment ends: /home/al must not eat the front of
-# /home/alice.
+# /home/alice, nor /home/bob the front of /home/bob.smith. A dot that ends a
+# sentence still ends the folder.
 folder = (where) ->
-  new RegExp "(?:#{spellings(where).map(escape).join '|'})(?![\\p{L}\\p{M}\\p{N}_-])", 'giu'
+  new RegExp "(?:#{spellings(where).map(escape).join '|'})(?![\\p{L}\\p{M}\\p{N}_-]|\\.[\\p{L}\\p{N}])", 'giu'
 
 # Anyone's home folder, not only this account's: the same folder reached by
 # another spelling -- Windows's 8.3 `ROBERT~1`, a file URL's `Robert%20Smith`
 # or `jos%C3%A9`, a symlink's other path -- and another account's. A
 # separator is a slash, a backslash, either doubled by JSON, or one
 # percent-encoded; the name runs to the next separator, through single
-# spaces only when one follows (`/Users/Mike Smith/Library`), so prose after
-# a bare /home/bob is left alone.
+# spaces only when a separator or a closing quote follows (`/Users/Mike
+# Smith/Library`, `'C:\Users\Mike Smith'`), so prose after a bare /home/bob
+# is left alone. An apostrophe inside a name is part of it: O'Brien.
 SEPARATOR = '(?:\\\\\\\\|[\\\\/]|%2F|%5C)'
-NAME_PART = "(?:[^\\\\/\\s'\"<>%:;,()[\\]{}]|%(?!2F|5C)[0-9A-F]{2})+"
-NAME      = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}))?"
+NAME_PART = "(?:[^\\\\/\\s'\"<>%:;,()[\\]{}]|%(?!2F|5C)[0-9A-F]{2}|'(?=[A-Za-z]))+"
+NAME      = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}|['\"`]))?"
 # A web address's path is the site's, not the player's: /home/ and /users/42/
-# there are how a load failure says what it was loading.
-NOT_IN_URL = "(?<!\\bhttps?://[^\\s'\"<>`]*)"
+# there are how a load failure says what it was loading. Its query and
+# fragment are not exempt, since a local path is often passed in one. The
+# address is matched and put back rather than looked behind for: a
+# lookbehind that ran back over the line made every position cost the
+# line's length, and one 100k-character line took seconds in main (V2's
+# third review, 2026-10-06). So the rules below put back group 1 when set.
+IN_URL = "(\\bhttps?://[^\\s'\"<>`?#]*)|"
+# A path's root, not a folder inside one: `sketches/media/boom.wav` and
+# `<data>/sketches/home/menu.coffee` are the player's own folders. Straight
+# after a percent-encoded separator is a root too.
+AT_ROOT = "(?<![\\w.~>-](?<!%2F|%5C))"
 
-HOME_SHAPED = new RegExp "#{NOT_IN_URL}(?:[A-Z](?::|%3A))?#{SEPARATOR}(?:Users|home)#{SEPARATOR}#{NAME}", 'gi'
+# Silverblue's /var/home/<user> is reached through its /var.
+HOME_SHAPED = new RegExp "#{IN_URL}#{AT_ROOT}(?:[A-Z](?::|%3A))?(?:#{SEPARATOR}var)?#{SEPARATOR}(?:Users|home)#{SEPARATOR}#{NAME}", 'gi'
 # A drive udisks mounted for its owner: /media/<user> on Debian and Ubuntu,
 # /run/media/<user> on Fedora and Arch. The mount point stays, since where a
 # sketch was loaded from can be the bug.
-MOUNTED = new RegExp "#{NOT_IN_URL}((?:#{SEPARATOR}run)?#{SEPARATOR}media#{SEPARATOR})#{NAME}", 'gi'
+MOUNTED = new RegExp "#{IN_URL}#{AT_ROOT}((?:#{SEPARATOR}run)?#{SEPARATOR}media#{SEPARATOR})#{NAME}", 'gi'
 # The shell's way to another account's home, `~bob/games`. Only before a
 # path, so `~str.indexOf` and `~x/2` are left to be code.
-TILDE_HOME = new RegExp "#{NOT_IN_URL}(?<![\\w~])~[A-Za-z_][\\w.-]*(?=[\\\\/](?![\\d\\s(]))", 'g'
+TILDE_HOME = new RegExp "#{IN_URL}(?<![\\w~])~[A-Za-z_][\\w.-]*(?=[\\\\/](?![\\d\\s(]))", 'g'
 
 IPV4_OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)'
 
@@ -150,17 +162,22 @@ patterns = ({home, user, host, data, app}) ->
       {name: "folder #{put}", find: folder(where), put: put})...
     # \\server\share names a machine and, often, whose folder it is:
     # \\fs\home$\frank, \\server\Users\erin. Not \\?\C:\, which is a long
-    # local path.
-    {name: 'network share', find: /(?<![\w\\])\\\\\w[^\\\s'"<>]*\\(?:(?:Users|home\$?)\\)?[^\\\s'"<>]+/gi, put: '\\\\<share>'}
-    {name: 'home-shaped folder', find: HOME_SHAPED, put: '~'}
-    {name: 'mounted drive', find: MOUNTED, put: '$1<user>'}
-    {name: 'home by account name', find: TILDE_HOME, put: '~'}
+    # local path. Group 1 is one backslash, or two where JSON doubled them.
+    {
+      name: 'network share'
+      find: /(?<![\w\\])(\\\\?)\1\w[^\\\s'"<>]*\1(?:(?:Users|home\$?)\1)?[^\\\s'"<>]+/gi
+      put:  '$1$1<share>'
+    }
+    {name: 'home-shaped folder', find: HOME_SHAPED, put: (match, url) -> url ? '~'}
+    {name: 'mounted drive', find: MOUNTED, put: (match, url, mount) -> url ? "#{mount}<user>"}
+    {name: 'home by account name', find: TILDE_HOME, put: (match, url) -> url ? '~'}
     {name: 'password in a URL', find: /(?<=\/\/)[^\s\/@:]+:[^\s\/@]+(?=@)/g, put: SECRET}
     {name: 'JSON web token', find: /\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*/g, put: SECRET}
-    # GitHub, GitLab, OpenAI and Anthropic, Slack, AWS, Google.
+    # GitHub, GitLab, OpenAI and Anthropic, Slack, AWS, Google, Stripe,
+    # Hugging Face.
     {
       name: 'known key prefix'
-      find: /(?<![\w-])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{16,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,})(?![\w-])/g
+      find: /(?<![\w-])(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|glpat-[\w-]{20,}|sk-[\w-]{16,}|xox[abprs]-[\w-]{10,}|AKIA[0-9A-Z]{16}|AIza[\w-]{30,}|[sr]k_(?:live|test)_[A-Za-z0-9]{20,}|hf_[A-Za-z]{30,})(?![\w-])/g
       put: SECRET
     }
     # The scheme stays: `Bearer` or `Basic` says what kind of login failed.
@@ -169,7 +186,9 @@ patterns = ({home, user, host, data, app}) ->
       find: /(\bAuthorization["']?\s*[:=]\s*["']?(?:(?:Bearer|Basic|Token|Digest)\s+)?)[^\s"',;]+/gi
       put:  "$1#{SECRET}"
     }
-    {name: 'bearer token', find: /(?<=\bBearer\s+)[\w.~+\/-]{8,}=*/g, put: SECRET}
+    # Matched forward from `Bearer`: a lookbehind for it ran back over every
+    # space before each position, and 100k blank lines took five seconds.
+    {name: 'bearer token', find: /(\bBearer\s+)[\w.~+\/-]{8,}=*/g, put: "$1#{SECRET}"}
     # A session cookie is a login. The names stay, to say which cookie.
     {
       name: 'cookie'
@@ -177,7 +196,9 @@ patterns = ({home, user, host, data, app}) ->
       put:  (match, head, pairs) -> head + pairs.replace /(=)[^;\s]+/g, "$1#{SECRET}"
     }
     # YAML's block scalar, `secret: |` with the value indented below it.
-    # Before `secret assignment`, which would take the `|` for the value.
+    # Before `secret assignment`: that takes the `|` for the value, which
+    # leaves the lines below with no header for this to find. It still takes
+    # the `|` afterwards.
     {
       name: 'secret block'
       find: /^([ \t]*)([A-Za-z_][\w-]*)(["']?[ \t]*:[ \t]*[|>][1-9+-]{0,2}[ \t]*)((?:(?:\n[ \t]*(?=\n))*\n\1[ \t]+\S[^\n]*)+)/gm
@@ -192,10 +213,13 @@ patterns = ({home, user, host, data, app}) ->
     # name -- `PASSWORD=hunter2`, a query string's `token=`, a header's
     # `X-Api-Key: abc` -- or ends its line, `PASSWORD = hunter2`; but not
     # from code that computes it, `secret = random 100` in a guessing game,
-    # nor a call like `token = nextToken()`.
+    # nor a call like `token = nextToken()`. All on one line: across a line
+    # end, `config.yml:` took the next line's `password:` for its value and
+    # hid it. The name is bounded so that a long run of letters costs its
+    # length, not its length squared.
     {
       name: 'secret assignment'
-      find: /([A-Za-z_][\w-]*)(["']?\s*(?::|=(?![=>]))\s*)("[^"\n]*"|'[^'\n]*'|[^\s"'`,;&#()[\]{}]+(?:\([^\s()]*\))?)/g
+      find: /([A-Za-z_][\w-]{0,63})(["']?[ \t]*(?::|=(?![=>]))[ \t]*)("[^"\n]*"|'[^'\n]*'|[^\s"'`,;&#()[\]{}]+(?:\([^\s()]*\))?)/g
       put:  (match, name, between, value, offset, text) ->
         quoted = value[0] in ['"', "'"]
         head   = value.split('(')[0]
@@ -213,8 +237,12 @@ patterns = ({home, user, host, data, app}) ->
       put:  (match, name, between, value, offset, text) ->
         if randomish(value) or endsLine(text, offset + match.length) then "#{name}#{between}#{SECRET}" else match
     }
-    # \p{M}: an accent left decomposed is part of its letter.
-    {name: 'e-mail address', find: /[\p{L}\p{M}\p{N}._%+-]+@[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.\p{L}{2,}(?![\p{L}\p{M}\p{N}-])/gu, put: '<email>'}
+    # \p{M}: an accent left decomposed is part of its letter. `%40` is an
+    # `@` in a web address. Started only where a run of the local part
+    # starts: a match could not start later in the run without starting at
+    # its front, and trying each position cost 100,000 letters 6.5s under
+    # Node 26 (none under Electron 44's V8; V2's third fixer, 2026-10-06).
+    {name: 'e-mail address', find: /(?<![\p{L}\p{M}\p{N}._%+-])[\p{L}\p{M}\p{N}._%+-]+(?:@|%40)[\p{L}\p{M}\p{N}-]+(?:\.[\p{L}\p{M}\p{N}-]+)*\.\p{L}{2,}(?![\p{L}\p{M}\p{N}-])/gu, put: '<email>'}
     # Colons, dashes, or Cisco's three dotted groups.
     {
       name: 'MAC address'
@@ -258,6 +286,10 @@ patterns = ({home, user, host, data, app}) ->
       find: /(?<![\w+-])[A-Za-z0-9_+-]{32,}=*/g
       put:  (match) -> if randomish(match) or mixed(match) then SECRET else match
     }
+    # Other machines on the network, by the names Bonjour and Avahi give
+    # them: `bobs-macbook.local`. Only hyphenated, where a name is a host's
+    # and not a word.
+    {name: 'mDNS host name', find: /(?<![\w.-])[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\.local(?![\w-]|\.\w)/gi, put: '<host>'}
     ({name: 'host name', find: whole(hosts), put: '<host>', word: yes} if hosts.length)
     ({name: 'user name', find: whole([user]), put: '<user>', word: yes} if user)
   ].filter Boolean
