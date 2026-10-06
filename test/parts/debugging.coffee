@@ -512,3 +512,68 @@ loop
     "swaps #{mine} of #{presented} frames, console=#{JSON.stringify said.trim()[-300..]}"
   await click 'stop'
   await until_ -> (await status()) is 'ready'
+
+  # 20. No name a sketch picks can hide the debugger's own. Setting a pause up
+  # evaluates in the paused frame, and it used to name `globalThis` there: a
+  # parameter of that name turned every pause into "could not pause", and a
+  # top-level one, kept in the image, every later run's as well (a reviewer
+  # of 5d16bc3, 2026-10-06). A fresh worker for each, so the first cannot
+  # spoil the second.
+  shadows =
+    'a top-level globalThis':       "globalThis = {}\nbreakpoint\nprint 'after'"
+    'a parameter named globalThis': "f = (globalThis) ->\n  breakpoint\n  print 'in f'\nf 1"
+  for what, source of shadows
+    await setDoc source
+    await wait 500
+    await clearConsole()
+    await click 'runFresh'
+    ended = await t.settle 10000
+    await t.quiet()
+    said = await consoleText()
+    check "#{what} does not stop a breakpoint pausing",
+      ended is 'line paused' and not said.includes('could not'),
+      "status=#{ended} console=#{JSON.stringify said.trim()}"
+    await click 'stop'
+    await until_ -> (await status()) is 'ready'
+
+  # 21. A Stop tells V8 to skip every pause until the next run, and the next
+  # run has to know to take that back. A Stop waiting out an endless line at
+  # the prompt only sets the skip once the line gives up, about 3s later; an
+  # arm in that wait -- an edit adding or removing `breakpoint`, a Run --
+  # found nothing skipped yet, the renderer then believed nothing was, and
+  # the run after it went past its breakpoint without a word (a reviewer of
+  # E1, 2026-10-06; it predates E1).
+  stopWhileAsking = ->
+    await setDoc "n = 0\nbreakpoint\nprint 'after'"
+    await wait 500
+    await click 'runFresh'
+    await t.settle 10000
+    await js "Prompt.ask('loop then n += 1'); return true"
+    await until_ -> js "return Prompt.pending()"
+    await click 'stop'
+  pausesAfter = (what) ->
+    await until_ (-> (await status()) is 'ready'), 15000
+    await setDoc "q = 0\nbreakpoint\nprint 'q ran'"
+    await wait 500
+    await clearConsole()
+    await evalAll()
+    ended = await t.settle 10000
+    await t.quiet()
+    said = await consoleText()
+    check "the run after a Stop pauses at its breakpoint, #{what}",
+      ended is 'line paused' and not said.includes('q ran'),
+      "status=#{ended} console=#{JSON.stringify said.trim()}"
+    await click 'stop'
+    await until_ -> (await status()) is 'ready'
+
+  await stopWhileAsking()
+  await setDoc "n = 0\nprint 'after'"
+  await wait 700
+  await setDoc "n = 0\nbreakpoint\nprint 'after'"
+  await wait 700
+  await pausesAfter 'though the buffer was armed and disarmed while the Stop waited'
+
+  await stopWhileAsking()
+  await wait 300
+  await evalAll()
+  await pausesAfter 'though a Run came while the Stop waited'

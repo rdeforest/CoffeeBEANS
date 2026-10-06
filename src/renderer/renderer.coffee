@@ -28,6 +28,9 @@ status = ''
 # `error paused` is a line pause at an uncaught error, which can only end.
 PAUSED = ['frame paused', 'line paused', 'error paused']
 BUSY   = ['running', PAUSED...]
+# No sketch is running at these. A booting worker counts: a Stop drops the
+# run it was booting for, and that leaves it nothing to unwind.
+IDLE   = ['ready', 'error', 'booting']
 
 # What the hold button does from each pause; anywhere else, it holds.
 RUN_ON      = 'Let the sketch run on (F8)'
@@ -52,6 +55,35 @@ setStatus = (text) ->
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
   hold.title       = HOLD_TITLES[text] ? 'Hold the sketch at its next frame'
+  showStop()
+  undefined
+
+# Stop is gray only when there is nothing for it to end (Robert, 2026-10-05).
+# Not merely when no sketch is running: a note with no length outlives its
+# sketch, and Stop is how it is hushed. So it is live while a run is on its
+# way, running or paused, while a prompt line or Tab is out, and while any
+# voice sounds. Ctrl-. calls stop whatever the button shows: a note queued
+# but not yet begun is not sounding yet, and a Stop with nothing to end is
+# harmless.
+#
+# The status covers the run. The rest is written by the worker and the audio
+# thread, which tell nobody, so the console's timer looks again as well.
+STOP_LIVE  = ['arming', BUSY...]
+STOP_TITLE =
+  live: 'Stop the sketch and silence its notes (Ctrl-.)'
+  gray: 'Nothing to stop: no sketch is running, no prompt line is out, no note is sounding'
+
+stoppable = ->
+  status in STOP_LIVE or (status is 'booting' and pending isnt null) or
+    Atomics.load(i32, H.ASK_STATE) in [1, 4] or Atomics.load(i32, H.SOUND_BUSY) > 0
+
+showStop = ->
+  live   = stoppable()
+  title  = STOP_TITLE[if live then 'live' else 'gray']
+  button = document.getElementById 'stop'
+  return if button.title is title
+  button.disabled = not live
+  button.title    = title
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -212,6 +244,14 @@ withdrawTab = ->
   drainAsk()
   yes
 
+# Stop at an idle worker takes back a question it has not claimed, as a line
+# takes back a Tab. Left there, it would run whenever the worker got to it --
+# after the boot a Stop cut short, say. A Tab goes as withdrawTab lets it go;
+# a line is over without having run, and says so as a stopped run does.
+withdrawAsk = ->
+  return withdrawTab() if Atomics.load(i32, H.ASK_KIND) is LAYOUT.ASK_FOR.completion
+  say '*** stopped ***', 'sys' if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 1
+
 # The one way a question reaches a worker that is not line paused, a line or
 # Tab's alike; ASK_KIND says which, so drainAsk knows whose the answer is.
 askWorker = (text, kind) ->
@@ -280,6 +320,10 @@ drainAsk = ->
   answer = new Uint8Array askBytes.subarray 0, Atomics.load i32, H.ASK_LEN
   kind   = Atomics.load i32, H.ASK_KIND
   Atomics.store i32, H.ASK_STATE, 0
+  # A Stop that reached a line at an idle worker raised the flag, and only
+  # this answer says the line is over. Never while a sketch is busy, nor
+  # arming: that flag is the sketch's.
+  standDown() if status in IDLE
   text = decoder.decode answer
   return completed completing, text, state is 3 if kind is LAYOUT.ASK_FOR.completion
   say text, (if state is 3 then 'err' else 'value')
@@ -1191,10 +1235,13 @@ paused   = no
 stepOnce = no
 resumeTo = 'ready'
 
+# A hold pressed while a run is being armed holds what the worker is doing;
+# remembering 'arming' would put the status back to a wait long over.
 pauseFrames = ->
   return if paused
   paused   = yes
-  resumeTo = if status is 'line paused' then 'running' else status
+  beneath  = underneath()
+  resumeTo = if beneath is 'line paused' then 'running' else beneath
   setStatus 'frame paused' unless linePaused
 
 goFrames = ->
@@ -1322,6 +1369,11 @@ beans.debug.onEvent (event) ->
       setStatus (if paused then 'frame paused' else 'running') if status in ['line paused', 'error paused']
     when 'problem'
       say event.text, 'err'
+    # Main set pauses aside for a Stop. It can do that seconds after the Stop
+    # asked, past an arm that cleared `skipping` meanwhile; heard from main,
+    # the next run takes it back however the two crossed.
+    when 'skipping'
+      skipping = yes
   undefined
 
 globalThis.Stepping =
@@ -1652,18 +1704,28 @@ startSound = ->
     say "sound: #{error.message ? error}", 'err'
   undefined
 
-# What the audio thread says it is doing. The suite reads this; nothing else
-# needs to.
+# What the audio thread says it is doing, and how many times this side has
+# told it to drop everything queued -- a Stop with nothing sounding does only
+# that. The suite reads this; nothing else needs to.
 globalThis.Sound =
   started: -> Atomics.load i32, H.SOUND_STARTED
   peak:    -> Atomics.load(i32, H.SOUND_PEAK) / 1e6
   busy:    -> Atomics.load i32, H.SOUND_BUSY
   rate:    -> Atomics.load i32, H.SOUND_RATE
+  epoch:   -> Atomics.load i32, H.SOUND_EPOCH
 
 # --- worker lifecycle -------------------------------------------------------
 
 worker  = null
 pending = null
+
+# A run being armed is not a run yet. A Stop at `arming` stops whatever the
+# worker is really doing -- the status the run was asked from -- and cancels
+# the run: armFirst lets it go ahead only if no Stop came while it waited.
+armedOver = 'ready'
+stops     = 0
+
+underneath = -> if status is 'arming' then armedOver else status
 
 # Once the worker says it is idle there is nothing left for a Stop to unwind.
 # Left raised, the flag makes every yield point reached from the prompt --
@@ -1698,9 +1760,15 @@ messages =
 LATE = 'after the run'
 
 # The worker only speaks once it is running again, so a pause still showing
-# is over, whether or not the debugger has said so yet.
+# is over, whether or not the debugger has said so yet. So is a hold: the run
+# it held has ended without reaching a swap, and a hold outliving it would
+# hold the next run at its first frame under a status saying 'running'.
+# Only the end of a run lets a hold go -- the 'ready' that ends a boot keeps
+# a hold pressed during it for the run it was booting for.
 finished = ->
   standDown()
+  paused    = no
+  stepOnce  = no
   errorSaid = no
   endLinePause() if linePaused
 
@@ -1755,8 +1823,10 @@ answerLoad = (url) ->
 # The worker runs one thing at a time and its inbox is not a queue we want:
 # a run posted while a sketch is busy would sit there and fire the moment the
 # sketch ended, which looks exactly like the sketch running itself twice.
+# A run being armed hides the status it was asked over, and a second run sent
+# in the meantime -- two evals in one tick -- must still find the worker busy.
 send = ({source, name, cut}) ->
-  if status in BUSY
+  if underneath() in BUSY
     say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
     return
   # The last failure's marks are stale the moment something else runs.
@@ -1811,17 +1881,37 @@ start = (thenRun = null) ->
 
 stop = ->
   pending = null
+  stops  += 1
+  setStatus armedOver if status is 'arming'
+  # Going through goFrames rather than just dropping the flag is what puts the
+  # status line back: left saying "paused", nothing that reads it -- the
+  # buttons, a test, the next run -- can tell the pause is over.
+  #
+  # Before the idle test only for a hold taken at an idle worker, so it reads
+  # as idle once let go. A hold over a busy worker is let go in the busy
+  # branch, as 'running'. The end of a run ends its hold (finished), but the
+  # 'ready' that ends a boot does not, so a hold can still sit under a status
+  # it did not set: pressed while the worker booted for a run, it remembers
+  # 'booting' under a run that reads 'running'.
+  goFrames() if status is 'frame paused' and resumeTo in IDLE
   # Nothing running is nothing to unwind, but a note with no length can
   # outlive the sketch that started it, and Stop is where anyone reaches to
   # make it quiet. Raising the flag here would leave it up with no worker
-  # busy to report idle and lower it.
-  if status in ['ready', 'error']
+  # busy to report idle and lower it -- unless the worker is busy in a prompt
+  # line it has claimed, which answers, and drainAsk lowers it then. A line
+  # not claimed yet is taken back, or it would run whenever the worker got
+  # to it.
+  if status in IDLE
     Atomics.add i32, H.SOUND_EPOCH, 1
+    withdrawAsk()
+    Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
-  # Stop clears the swap itself and notifies, so it releases a paused worker
-  # without any help. Going through goFrames rather than just dropping the flag
-  # is what puts the status line back: left saying "paused", nothing that reads
-  # it -- the buttons, a test, the next run -- can tell the pause is over.
+  # A busy worker parked on the swap is released below, by clearing it. The
+  # hold is let go as 'running' whatever it remembers -- 'booting', for one
+  # pressed during the boot -- or the deadline below, which waits on
+  # 'running', would never start, and a sketch that catches its stop would
+  # spin on under a gray Stop.
+  resumeTo = 'running'
   goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
@@ -1867,9 +1957,15 @@ stop = ->
 # has already finished.
 armFirst = (source, run) ->
   return run() if wantsDebug(source) is armedFor and not skipping
-  before = status
+  before    = status
+  armedOver = before unless before is 'arming'   # a second arming keeps the first's
+  asked     = stops
   setStatus 'arming'
   await syncDebug source
+  # Cancelled, it leaves the status alone: the Stop put it back already, and
+  # by now it may be a newer arming's 'arming', whose own `before` is the one
+  # that counts.
+  return unless stops is asked
   setStatus before if status is 'arming'
   run()
 
@@ -1998,7 +2094,7 @@ listenForPrompt()
 dragPanel document.getElementById('splitEditor'),  'editor'
 dragPanel document.getElementById('splitConsole'), 'console'
 
-setInterval (-> drainPrints(); drainAsk()), CONSOLE_EVERY
+setInterval (-> drainPrints(); drainAsk(); showStop()), CONSOLE_EVERY
 
 new ResizeObserver(resize).observe stage
 window.addEventListener 'resize', reflowPanels

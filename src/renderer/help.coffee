@@ -9,6 +9,8 @@ SECTIONS = [
     ['Ctrl-Enter',        'eval the selection, or the paragraph at the cursor']
     ['Ctrl-Shift-Enter',  'run -- fresh worker, then the whole buffer']
     ['Ctrl-.',            'stop a running sketch']
+    ['',                  'the Stop button greys out when there is nothing to']
+    ['',                  'stop -- no run, no prompt line, no note sounding']
     ['Ctrl-e',            'show or hide the editor']
     ['Ctrl-r',            'does nothing in the editor with ordinary keys, so it']
     ['',                  'cannot reload under an edit; View > Reload does']

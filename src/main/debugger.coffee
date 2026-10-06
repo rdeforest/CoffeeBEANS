@@ -74,16 +74,19 @@ SCRIPT_CACHE = 8 * 1024 * 1024
 EVAL_LIMIT  = 3000
 ITEMS       = 200            # members listed when an object is opened
 
-# Where a getter's owner waits for the expression that runs it; see runGetter.
-STASH       = '__beansGetterOwner'
+# The one name an expression of ours looks up in a paused frame; see onParked.
+PARKED      = '__beansParked'
 
 # For the suite: called, and waited for, while a pause is being set up and
 # before the renderer has heard of it -- 'exception' as an error pause starts,
 # 'report' once a pause is numbered -- and, `stopping`, while a Stop has taken
 # V8's pause but not yet set breakpoints aside. On its own each window is a
 # few milliseconds; a check holds it open to land a Stop, a stale line or a
-# step's landing in it. Null outside those checks.
-hooks = {pausing: null, stopping: null}
+# step's landing in it. `arming`, the same way, before each arm does its
+# work: an arming takes about 4ms (measured by a Claude reviewer,
+# 2026-10-06), and the renderer's `arming` is held open to Stop and run again
+# inside it. Null outside those checks.
+hooks = {pausing: null, stopping: null, arming: null}
 
 # For the suite: the rule EVAL_LIMIT is there for, kept count of. Nothing may
 # reach V8 in a session while an evaluation -- ours or the author's -- is
@@ -288,6 +291,11 @@ module.exports = (win) ->
   whenFree = (work) ->
     await asking.catch(->) while asking
     work()
+
+  # For a command whose failure nobody else hears. Failed because its session
+  # has gone is the session going, not news.
+  sayUnlessGone = (talk) -> (error) ->
+    tell type: 'problem', text: "debugger: #{error.message}" if talk.live()
 
   within = (ms, promise) ->
     timer = null
@@ -544,17 +552,27 @@ module.exports = (win) ->
   # be told to give up (Runtime.callFunctionOn has no timeout), and it takes
   # an expression, not a value. So the value is parked on the worker's global
   # first, and the expression takes it off again before it runs anything of
-  # the author's -- `body`, which names it `v`. If the evaluation fails for
-  # any reason but being given up on, the value stays parked there, which is
-  # harmless: nothing reads it, and the next worker starts without it.
+  # the author's -- `body`, which names it `v` and the global `home`. If the
+  # evaluation fails for any reason but being given up on, the value stays
+  # parked there, which is harmless: nothing reads it, and the next worker
+  # starts without it.
+  #
+  # The expression runs in the author's scope, so it looks nothing up by name
+  # but PARKED: it named `globalThis` once, and a sketch's own `globalThis`
+  # -- a parameter, or a top-level one kept in the image -- turned every
+  # pause into "could not pause" (a reviewer of 5d16bc3, 2026-10-06). The
+  # parking itself runs on the global, `this`, where no sketch name reaches.
+  # A sketch could still name a variable PARKED; names starting `__` are the
+  # wrapper's plumbing (`__image`, `__frames`), which the pane hides too, and
+  # a sketch that takes one has reached into it.
   onParked = (talk, frame, value, body, more = {}) ->
     global = frame.scopeChain.find (scope) -> scope.type is 'global'
     await talk 'Runtime.callFunctionOn',
       objectId: global.object.objectId, arguments: [value]
-      functionDeclaration: "function (v) { globalThis.#{STASH} = v }"
+      functionDeclaration: "function (v) { this.#{PARKED} = {v, home: this} }"
     talk 'Debugger.evaluateOnCallFrame', {
       callFrameId: frame.callFrameId, throwOnSideEffect: no, timeout: EVAL_LIMIT
-      expression: "(function (v) { delete globalThis.#{STASH}; return #{body} })(globalThis.#{STASH})"
+      expression: "(function ({v, home}) { delete home.#{PARKED}; return #{body} })(#{PARKED})"
       more...
     }
 
@@ -562,11 +580,10 @@ module.exports = (win) ->
   # the owner would be undefined and the renderer would drop a live worker's
   # pause as a replaced one's, leaving it halted with nothing said. Read in
   # the frame, bounded, since a sketch could as well make it a getter that
-  # never returns.
+  # never returns -- which is why REPL is read by `body`, not by the parking.
   ownerOf = (talk, frame) ->
-    {result, exceptionDetails} = await callInPause talk 'Debugger.evaluateOnCallFrame',
-      callFrameId: frame.callFrameId, expression: 'globalThis.REPL.owner'
-      returnByValue: yes, throwOnSideEffect: no, timeout: EVAL_LIMIT
+    {result, exceptionDetails} = await callInPause onParked talk, frame, {value: null},
+      'home.REPL.owner', returnByValue: yes
     throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
     # Replaced rather than nulled, REPL reads without a murmur.
     throw new Error "REPL.owner reads #{typeof result.value}, not a number" unless typeof result.value is 'number'
@@ -591,7 +608,7 @@ module.exports = (win) ->
   # of its own.
   failureOf = (talk, thrown, frame) ->
     {result, exceptionDetails} = await callInPause onParked talk, frame, argumentFor(thrown),
-      'globalThis.REPL.failure(v)', returnByValue: yes
+      'home.REPL.failure(v)', returnByValue: yes
     throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
     result.value
 
@@ -720,6 +737,7 @@ module.exports = (win) ->
   arm = (want) ->
     wanted = want
     forced = no unless stopped or chase
+    await hooks.arming() if hooks.arming
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
     # them back. Only then, and never into a turn: every arm used to send
@@ -727,7 +745,8 @@ module.exports = (win) ->
     # prompt's endless line (a reviewer of cbe904b, 2026-10-06).
     if enabled and skipped
       skipped = no
-      await whenFree(-> send 'Debugger.setSkipAllPauses', skip: no if session).catch(->)
+      talk    = speaker()
+      await whenFree(-> talk 'Debugger.setSkipAllPauses', skip: no).catch sayUnlessGone talk
     armed
 
   # Suspend now, wherever the sketch is. Arms on demand, since this is the
@@ -798,8 +817,15 @@ module.exports = (win) ->
     chase  = null
     if skip
       await hooks.stopping() if hooks.stopping
+      # The renderer is told here, not left to assume it from having asked.
+      # A Stop waiting out the prompt's line sets this seconds after it was
+      # pressed, and an arm in between -- an edit adding or removing
+      # `breakpoint`, a Run -- found nothing to take back; the renderer then
+      # thought nothing was skipped, and the next run went past its
+      # breakpoint without a word (a reviewer of E1, 2026-10-06).
       skipped = yes
-      await whenFree(-> talk 'Debugger.setSkipAllPauses', skip: yes).catch(->)
+      tell type: 'skipping'
+      await whenFree(-> talk 'Debugger.setSkipAllPauses', skip: yes).catch sayUnlessGone talk
       # A step sent just before the Stop can land while that was out; its
       # pause, set up or still being set up, is let go as well.
       await asking.catch(->) while asking
@@ -847,7 +873,7 @@ module.exports = (win) ->
     text = remoteText result
     if result.objectId
       try
-        shown = await onParked talk, top, {objectId: result.objectId}, 'globalThis.REPL.show(v)', returnByValue: yes
+        shown = await onParked talk, top, {objectId: result.objectId}, 'home.REPL.show(v)', returnByValue: yes
         text = shown.result.value ? text unless shown.exceptionDetails
       catch error
         throw error unless /terminated/.test error.message

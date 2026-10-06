@@ -72,6 +72,19 @@ in voxel-mvp that is the step that caught the cross-track bugs.
   every worktree of the repo. On 2026-10-05 two agents stashed at the same
   moment and each popped the other's chunk into the wrong worktree. Set a
   change aside as a patch file (`git diff HEAD > tmp/mine.patch`) instead.
+- **Never touch Robert's desktop.** On 2026-10-06 an author looking for the
+  test window ran `xdotool search --name CoffeeBEANS`, matched his Firefox (a
+  GitHub tab named for the repo), sent it Escape, and moved the real pointer.
+  Find a window by the PID you started, never by title; never move the
+  pointer or focus a window you did not create.
+- **Reviewers mutate a copy, never the worktree under review**: `git archive
+  HEAD | tar -x` into `tmp/`, then `git diff --cached | patch -p1` (`git
+  apply` silently does nothing there), and symlink `node_modules`. Twice on
+  2026-10-06 a reviewer reverted code in the real worktree mid-run and
+  invalidated the other reviewer's results.
+- **A fixer's commit that adds mechanism gets its own correctness review**
+  before merge. On 2026-10-06 nearly every such review found something, and
+  several were blocking.
 
 **The morning brief**, at the bottom of the plan: what needs Robert first;
 what landed; what was decided without him; what was not done and why; and a
@@ -94,9 +107,14 @@ ubuntu-24.04 (under xvfb) and windows-latest on every push, macOS on a `v*`
 tag or by hand (`gh workflow run test.yml`). The repo is private, so runs
 cost minutes: push merges, not every commit.
 
-Parts: `editor image repl buffers stepping debugging focus lifecycle drawing
-color loading shell input random sound perf`. Each starts from a reset app, so running one alone means
-the same thing as running it in the middle of everything else.
+Parts: `startup problems editor image repl buffers stepping debugging focus
+lifecycle drawing color loading shell about report input random names sound
+perf pauseonerror`. Each starts from a reset app, so running one alone means
+the same thing as running it in the middle of everything else. `quit` runs
+only when named (`BY_NAME` in `test/suite.coffee`): it ends the app it runs
+in, so `lifecycle` starts a second Electron to run it, and `startup` starts
+children of its own. Error stops are off in every part except `pauseonerror`
+(Robert, 2026-10-05), through the same switch the preference uses.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
 run never steals focus; on Linux a hidden run is shown inactive and then
@@ -105,7 +123,13 @@ minimised, see Platform facts),
 `backgroundThrottling`), `BEANS_DEVTOOLS=1` opens DevTools detached,
 `BEANS_CAPTURE=2500` screenshots to `tmp/` then quits, `BEANS_QUERY='?sketch=
 bounce&run=1'` drives the app from the URL, `BEANS_DATA_HOME=test_tmp` keeps a
-run away from the real data folder.
+run away from the real data folder, `BEANS_STARTUP_ANSWERS` answers the
+startup problem box in a child run (`startup` part).
+
+Under `BEANS_TEST` an uncaught exception in main prints its stack and exits
+1 (since 2026-10-06, A2). Without that, Electron puts a modal "JavaScript
+error in the main process" box on screen and a hidden run hangs under the
+suite lock until someone kills it -- which happened twice that night.
 
 **Do not pipe `npm test` into `head`.** Closing stdout mid-run throws EPIPE out
 of the main process and Electron shows a modal dialog. Redirect to a file.
@@ -142,6 +166,17 @@ compiled output -- an inner `var name` or a `typeof name` guard is the tell.
 **`screen` resets every drawing mode** — buffering, fps cap, draw target,
 brush, text cursor. Each of those, left set, makes the next sketch draw
 nothing with no error.
+
+**The image keeps what the compiled `var` names.** CoffeeScript puts every
+top-level name into one leading `var`, and `declaredNames` in
+`worker-boot.js` reads it. Until 2026-10-06 (D2) it skipped only `/* */`
+ahead of it, so a sketch whose first line was a `#` comment (compiled to
+`//`) kept none of its names. Comments of either kind are skipped now. A
+sketch that opens with a literal -- a docstring, a number, backtick
+JavaScript that is more than a comment -- still keeps nothing: skipping
+those safely needs a lexer, because a heredoc can hold a line starting
+`var`. A `###` block followed by a `#` line compiles the `//` *after* the
+`var`, so a check written in that order passes against the old code.
 
 ## Priorities
 
@@ -471,8 +506,16 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   holds `\n`, so a CRLF sketch read dirty forever, refused `/e`, and was
   rewritten LF on the next switch -- was fixed the same night (K4,
   `a9a427a`): disk text goes through CodeMirror's own line splitting
-  (`asHeld`) at load and on an outside change. An edited CRLF sketch is
-  saved LF (Claude's call; keeping CRLF would be about five lines).
+  (`asHeld`) at load and on an outside change. Line endings follow the
+  platform since 2026-10-06 (U2, Robert reversing K4's always-LF): every save
+  reads the file's current endings and keeps the majority, saying once in the
+  console when they were mixed; a file with none yet (new, emptied, one line
+  with no newline) takes the platform's, CRLF on Windows. Nothing is
+  remembered between saves -- the disk is the record. A raw CR inside a
+  string was already lost before U2: CodeMirror splits on `\r` at load.
+  Examples seeded by `data.coffee` are copied as they are in git, so they
+  land LF on Windows; whether they should take the platform's is Robert's
+  call (open).
 - **Saves failed on Windows, and a stale read reverted the editor** (fixed
   the same night, S1). Overlapping `sketch:write` calls shared one staging
   name, `.<name>.saving`, so one save's rename carried off another's file
@@ -491,6 +534,67 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
 - **macOS missed the first save in a folder created outside the app** once
   (`a folder created outside the app is watched, every save`), in the one
   by-hand run. Not investigated.
+
+Found on the night of 2026-10-06, Electron 44, measured unless marked:
+
+- **On GitHub's Xvfb runner a page gets no animation frames until its window
+  is shown** (K6), and the suite starts at `did-finish-load`, before `show`
+  -- which came about 2.7s into the first part. CodeMirror measures only on
+  a frame, so the editor part's first checks failed on time. The suite now
+  waits for one frame (`t.drawing()`, `test/suite.coffee`) before any part.
+  On Robert's machine a never-shown window gets about 3 frames a second, not
+  none. Why `show` is late on CI is not known.
+- **Before any window exists, async `dialog.showMessageBox` never resolves
+  and `shell.openPath` never settles** (Linux; A1). The startup problem box
+  (a `sketches/` link that leads nowhere: Try Again / Open Folder / Quit)
+  uses the sync box for that reason.
+- **Electron's main process runs Node's `warn` mode** (A2): an unhandled
+  rejection is a line on stderr and nothing else. Listening for
+  `unhandledRejection` silences even that, so the handler says "unhandled"
+  itself. Problems in main go through `sayProblem` to the window's console,
+  held (at most 50, the rest counted) until a page listens. A throwing
+  `ipcMain.handle` reaches the renderer as "Error invoking remote method
+  '…': Error: …", which tells a player nothing -- each call site should say
+  its own failure. `Worker.onerror` never fires for a worker's unhandled
+  rejection. A `loadURL` overtaken by another load rejects with
+  `ERR_ABORTED` and is not reported to `did-fail-load`; a 404 from our own
+  `serve` resolves and shows the 404 text. `shell.openPath` resolves to an
+  error string rather than rejecting. A refused navigation or a hash change
+  fires `did-start-loading` and `did-stop-loading` with no `did-navigate`.
+  `win.destroy()` is deferred, and `destroyed` fires before `closed`. Every
+  `will-navigate` is refused and `window.open` denied. The whole audit, with
+  what is still open, is `docs/research/unhandled-exceptions.md`.
+- **Leaving a page** (U1): async IPC sent from `pagehide` does reach main; a
+  reload waits indefinitely for a `sendSync` answer; a closing window waits
+  about 500ms from `pagehide`; quit loses a slow save unless `will-quit` is
+  held. The unload flush and the quit hold are both bounded by `SAVE_LIMIT`
+  (5s). SIGTERM only *starts* a quit, so the quit check falls back to
+  SIGKILL.
+- **The system clipboard is never touched by the suite** (V1): on X11 the
+  owner's clipboard empties when it exits, so a run that wrote and restored
+  it cost Robert what he had last copied. The About check spies on
+  `clipboard.writeText` instead.
+- **The version comes from git** (`src/main/version.coffee`, V1): release,
+  commit count, short id, `-dirty`. `version-stamp.txt` is read only where
+  there is no `.git`. Every `GIT_*` variable is scrubbed -- a git hook in a
+  linked worktree exports `GIT_DIR`, which sent the About check's own
+  commits into the outer repository -- and `GIT_CEILING_DIRECTORIES` stops
+  an empty `.git` from answering for the checkout around it. Git for Windows
+  cannot open `\\.\nul` (`os.devNull`) as `GIT_CONFIG_GLOBAL`; use an empty
+  file.
+- **Chromium keeps one native undo stack per page** (K7). `{role: 'undo'}`
+  with the editor focused did nothing, undid the wrong field, or killed
+  redo. So Edit > Undo and Redo are our own items: CodeMirror's history when
+  the editor has focus, `webContents.undo`/`redo` (`edit:native`) for a text
+  field -- never `execCommand`, which reached into the editor's DOM behind
+  CodeMirror's back. Their accelerators are registered on macOS only, where
+  the menu is the only way a key reaches them; `Mod-Shift-z` redo was added
+  for Windows.
+- **Whether names fold case is asked of the disk, not `process.platform`**
+  (F1): the realpath of a case-swapped name, falling back to the platform.
+  The fold is `toLowerCase`, which is not exact for a few characters (the
+  Kelvin sign) and does no Unicode normalisation. The "Warn About Name Case"
+  setting says when the name asked for and the name on disk differ.
 
 ## Sound, the facts worth keeping
 
@@ -519,6 +623,66 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   render quantum and a busy bit per voice (`Sound.*` in the renderer), and
   the `sound` part checks those. None of it says the result sounds good --
   that takes an ear.
+
+## Vim emulation (codemirror-vim), the facts worth keeping
+
+- **Autoindent is taken back the way Vim does it** (K5, 2026-10-06): `o`,
+  `O`, `cc`, `S` then Esc leave the line blank, not holding the indent. The
+  measured table of what real Vim 9.1 does (`vim -u NONE -N -i NONE -n -c
+  'set ai bs=indent,eol,start'`) is the comment above `indentField` in
+  `src/renderer/editor.coffee`; rows marked "ours" are where we differ, and
+  every one keeps an indent Vim would take back, never the reverse.
+- **It leans on codemirror-vim's internals**, so check it after any upgrade
+  of the plugin: `lastEditInputState`, `curOp.isVimOp`, the
+  `input.type.compose` label, and `Vim.getVimGlobalState_()` -- labelled a
+  testing hook -- for `macroModeState.isPlaying`.
+- **`.` sets `isPlaying` and then clears it**, without restoring what it was,
+  so a `.` inside a macro ends the macro's "playing" for everything after
+  it. Playback is therefore decided once per vim command (`playedBack`
+  latches it on `cm.curOp`). `3o`'s repeated insert runs outside any vim
+  command.
+- **A macro that calls itself overflows the stack** and leaves `isPlaying`
+  raised until a reload; after that `.` does nothing in the plugin itself.
+- **`Vc` on an indented line deletes the line and its newline** in
+  codemirror-vim, where Vim (and `cc`/`S`) leave a blank line. A plugin bug,
+  not reported upstream; K5's checks use `S` and `cj` for that path.
+- **Undo after clicking off a fresh indent takes two steps**: CodeMirror's
+  pointer tracking reads only the first transaction's label, so the strip
+  has to be a second one.
+
+## Bug reports (V2, 2026-10-06)
+
+The 📣🐞 button between the title and the folder opens a three-step dialog:
+what happened, the report as it will be saved (editable), then the file and
+how to open an issue at thatsnice/CoffeeBEANS. Robert's rule for what a
+report may hold: **safe to post on a large billboard in a big city.** So
+`src/main/redact.coffee` leans towards taking too much:
+
+- This player's home, data and app folders become `~`, `<data>` and
+  `<app>`; anyone's home folder under any root (`/home`, `/Users`, `/var/
+  home`, `/media`, `/run/media`, Git Bash's `/c/Users`, WSL's `/mnt/c/
+  Users`, `/Volumes/…/Users`) loses its owner's name. A relative
+  `sketches/media/boom.wav` or `y = x/media/2` is over-redacted to keep
+  that; chosen.
+- The player's user and host names go wherever they stand as a whole word;
+  names under three letters only inside paths. Their full name (git
+  `user.name`, the macOS long name) is not looked up.
+- All IP addresses, loopback included; MAC addresses; e-mail addresses,
+  `%40` forms too; `.local` names with a hyphen; network shares.
+- Secrets: values after secret-looking names (`password`, `PGPASSWORD`,
+  `token`…), on the same line or a quoted value on the next; bearer tokens;
+  cookies; known key prefixes (`sk_live_`, `hf_`, `ghp_`…); private key
+  blocks; long random-looking runs (mixed case, and digits or a balanced
+  share of capitals, and not path-shaped -- measured on 200,000 keys).
+- Web addresses keep their paths (a sketch's load failure needs them), not
+  their query strings.
+- Every rule is linear: a check redacts lines of 100k-400KB in under a
+  second each (about 40ms in practice). Three earlier versions were
+  quadratic and froze main for up to 36s.
+- Known limits, accepted for now: `/Users/Mike Smith` at the very end of a
+  line leaves the surname; an unquoted secret value on the next line stays.
+  The player sees the report and can edit it before it is saved. A small
+  local model to review it was deferred by Robert (ROADMAP).
 
 ## Open for discussion
 
@@ -562,15 +726,42 @@ building added:
 - `/` and `:` command names complete from `Editor.commands()`, no worker
   needed. Tab inside a reverse search takes the match and then completes.
 
-The design, decided 2026-10-04:
+Changed by Robert on 2026-10-05, built on 2026-10-06 (T1, T2, T3):
+
+- **A list, not a console dump** (T2). The second Tab opens a list over the
+  stage, just above the prompt, that narrows as the word grows and asks
+  again when the word is deleted back past where it was asked or a `.` is
+  typed. While it is open, Up/Down/Ctrl-P/Ctrl-N/Tab/Enter/Esc belong to the
+  list (`CHOICE_KEYS`, ahead of `PROMPT_KEYS`), which is how it no longer
+  fights the history. It closes on one candidate or none, Esc, a caret move,
+  blur, submit, a recall and Ctrl-R. The first Tab that opens it does not
+  beep.
+- **Some JavaScript is offered, ranked last** (T1). Sketch names first, then
+  the runtime's, then an allowlist of the JavaScript a player would use
+  (`Math`, `JSON`, `Array`, `Object`, `Number`, `String`, `Date`, `Map`,
+  `Set`, `parseInt` and the like; `src/renderer/worker-boot.js`). Plumbing
+  is left out: `on*`, `postMessage`, `console` (it prints to DevTools),
+  `Promise`, `setTimeout`, `Proxy`, `Reflect`, `globalThis`, `crypto`.
+  `structuredClone` was taken out again because `st` became ambiguous with
+  `step`. Ranking only orders the list; how far Tab completes is unchanged.
+  While line paused, the frame's names and the image's rank alike: a
+  closure captures the image's names, so V8 cannot tell them apart.
+- **Up and Down search history by what is typed, as node does** (T3, ported
+  from Node 24.20's readline and `ReplHistory`, checked against Node 26.10's
+  internals). The prefix is the text before the caret at the first Up; any
+  key but Up/Down ends the walk; repeats are skipped. Ctrl-P/Ctrl-N walk
+  every line, as node's do. Two deliberate differences: Up past the oldest
+  match stays on it, and Down past the newest gives back the whole line as
+  typed, caret and all, edits to a recalled line included.
+
+The design as decided 2026-10-04, its first two points replaced by the
+above:
 
 - **Bash style.** Tab completes as far as every candidate agrees, and beeps
-  when that is ambiguous; a second Tab lists the candidates in the console.
-  No popup -- it would fight the prompt history for Up/Down.
-- **Only the CoffeeBEANS vocabulary.** Candidates are the image, the running
-  sketch's harvested locals, and the runtime API. Worker globals (`Atomics`,
-  `postMessage`, `WebAssembly`...) are left out: anyone who wants those is not
-  using them from the console.
+  when that is ambiguous; a second Tab lists the candidates. (Was: in the
+  console, no popup.)
+- **The vocabulary.** Candidates are the image, the running sketch's
+  harvested locals, the runtime API, and (since T1) the allowlist above.
 - **The worker answers, over the ask channel.** Only the worker knows the
   names worth completing. A new header word marks a completion question;
   `drainAsk` routes the answer to the completer instead of printing it, and
