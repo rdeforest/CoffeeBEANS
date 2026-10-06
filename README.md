@@ -218,6 +218,11 @@ it first, or Run, which replaces the worker and never has to ask. Otherwise
 the second eval would fire the instant the first ended and look exactly like
 the sketch starting itself again.
 
+The Stop button greys out too, when there is nothing for it to end: no run
+on its way, running or paused, no prompt line out, no note sounding. Its
+tooltip says so. A note with no length outlives its sketch, so Stop stays
+live while one sounds, and pressing it is how to hush it.
+
 **Where the keyboard goes.** Run and `/eval` hand it to the canvas, because
 a sketch you just ran is almost always one you are about to play with.
 Region eval leaves it in the editor: that is the loop of redefining something

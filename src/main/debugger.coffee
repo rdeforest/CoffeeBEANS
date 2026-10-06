@@ -82,8 +82,11 @@ STASH       = '__beansGetterOwner'
 # 'report' once a pause is numbered -- and, `stopping`, while a Stop has taken
 # V8's pause but not yet set breakpoints aside. On its own each window is a
 # few milliseconds; a check holds it open to land a Stop, a stale line or a
-# step's landing in it. Null outside those checks.
-hooks = {pausing: null, stopping: null}
+# step's landing in it. `arming`, the same way, before each arm does its
+# work: an arming takes about 4ms (measured by a Claude reviewer,
+# 2026-10-06), and the renderer's `arming` is held open to Stop and run again
+# inside it. Null outside those checks.
+hooks = {pausing: null, stopping: null, arming: null}
 
 # For the suite: the rule EVAL_LIMIT is there for, kept count of. Nothing may
 # reach V8 in a session while an evaluation -- ours or the author's -- is
@@ -720,6 +723,7 @@ module.exports = (win) ->
   arm = (want) ->
     wanted = want
     forced = no unless stopped or chase
+    await hooks.arming() if hooks.arming
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
     # them back. Only then, and never into a turn: every arm used to send
