@@ -248,7 +248,7 @@ withdrawTab = ->
 # takes back a Tab. Left there, it would run whenever the worker got to it --
 # after the boot a Stop cut short, say. A Tab goes as withdrawTab lets it go;
 # a line is over without having run, and says so as a stopped run does.
-takeBack = ->
+withdrawAsk = ->
   return withdrawTab() if Atomics.load(i32, H.ASK_KIND) is LAYOUT.ASK_FOR.completion
   say '*** stopped ***', 'sys' if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 1
 
@@ -1769,7 +1769,7 @@ stop = ->
   # to it.
   if status in IDLE
     Atomics.add i32, H.SOUND_EPOCH, 1
-    takeBack()
+    withdrawAsk()
     Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
   # A busy worker parked on the swap is released below, by clearing it.
