@@ -9,6 +9,11 @@
 # (research/pause-on-error, c5c788d) got those last ones wrong four ways,
 # and each has a check here that fails against it.
 
+fsp       = require 'fs/promises'
+path      = require 'path'
+{spawn}   = require 'child_process'
+Settings  = require '../../src/main/settings'
+
 module.exports = (t) ->
   {wait, check, setDoc, evalAll, consoleText, clearConsole, js, status, settled, ask, click} = t
 
@@ -712,3 +717,110 @@ loop
     "answered=#{answered} crossings=#{JSON.stringify crossings}"
   await click 'stop'
   await statusBecomes 'ready', 5000
+
+
+  # 24. Edit > Stop on Errors (Robert, 2026-10-05): ticked unless unticked,
+  # remembered in settings.json, and unticked an error ends the run as it
+  # did before E1. The menu and the suite write one switch and the last
+  # write wins (t.stopOnErrors says why), so each click below is made with
+  # the suite's switch set the other way, and is seen to win.
+  {paths, stopsItem, stopsState} = t
+  file    = path.join paths.data, 'settings.json'
+  stored  = -> Settings.read(file).stopOnErrors
+  tick    = (wanted) -> stopsItem()?.click() unless stopsItem()?.checked is wanted
+  failing = "ball = null\nball.x\n"
+
+  # How a failing run ends: stopped or not. A stop is let go again, so the
+  # next check starts from a run that has ended.
+  endsAs = ->
+    since  = (await pauseNumber()) ? 0
+    await runText failing
+    await until_ -> (await consoleText()).includes NULL_X
+    how    = await until_ (-> s = await status(); s if s in ['error', 'error paused'])
+    halted = ((await pauseNumber()) ? 0) > since
+    if how is 'error paused'
+      await js "Stepping.resume(); return true"
+      await statusBecomes 'error'
+    {ended: how, paused: halted}
+
+  check 'a fresh install has Edit > Stop on Errors ticked, and errors stop',
+    t.launched.stops?.ticked is true and t.launched.stops?.stopping is true and not (stored())?,
+    JSON.stringify {launched: t.launched.stops, stored: stored()}
+
+  await t.stopOnErrors yes
+  tick no
+  unticked = await endsAs()
+  check 'unticked, an error ends the run without stopping -- over the suite\'s switch -- and that is saved',
+    unticked.ended is 'error' and not unticked.paused and stored() is false and stopsState().stopping is false,
+    JSON.stringify {unticked..., stored: stored(), state: stopsState()}
+
+  # The suite's own write moves the switch and nothing else.
+  await t.stopOnErrors yes
+  over = await endsAs()
+  check 'the suite\'s switch overrides the tick without moving it or what is saved',
+    over.ended is 'error paused' and over.paused and stopsItem()?.checked is false and stored() is false,
+    JSON.stringify {over..., ticked: stopsItem()?.checked, stored: stored()}
+
+  await t.stopOnErrors no
+  tick yes
+  ticked = await endsAs()
+  check 'ticked again, an error stops -- over the suite\'s switch -- and that is saved',
+    ticked.ended is 'error paused' and ticked.paused and stored() is true and stopsState().stopping is true,
+    JSON.stringify {ticked..., stored: stored(), state: stopsState()}
+
+  # A page built afresh, with the debugger a launch gives its window, opening
+  # a sketch that fails and running it from the URL. The page shares
+  # localStorage with the window under test, which it would leave pointing
+  # at the probe's sketch.
+  probeAt = path.join paths.sketches, 'stops-probe.coffee'
+  await fsp.writeFile probeAt, failing, 'utf8'
+  last  = await js "return localStorage.getItem('lastSketch')"
+  freshRun = -> t.freshPage """
+    const now = document.getElementById('status').textContent
+    return ['error', 'error paused'].includes(now) && now
+  """, 15000, '?sketch=stops-probe&run=1', yes
+  tick no
+  freshOff = await freshRun()
+  tick yes
+  freshOn = await freshRun()
+  await js "localStorage.setItem('lastSketch', #{JSON.stringify last}); return true" if last?
+  await fsp.rm probeAt
+  check 'the choice holds in a page built afresh: unticked an error ends its run, ticked it stops',
+    freshOff is 'error' and freshOn is 'error paused', JSON.stringify {freshOff, freshOn}
+
+  # A launch reads it before the menu is built and before any window has a
+  # debugger: a second Electron, on a data folder whose settings.json has it
+  # off, runs the `launched` part (test/parts/launched.coffee), which prints
+  # what that app came up with. Bounded, as lifecycle's quit child is.
+  home = path.join paths.data, 'stops-child'
+  await fsp.rm home, recursive: yes, force: yes
+  await fsp.mkdir home, recursive: yes
+  await fsp.writeFile path.join(home, 'settings.json'), '{"stopOnErrors": false}\n', 'utf8'
+  env = {process.env..., BEANS_DATA_HOME: home, BEANS_TESTS: 'launched'}
+  delete env[name] for name in ['ELECTRON_RUN_AS_NODE', 'BEANS_SHOW', 'BEANS_DEVTOOLS', 'BEANS_CAPTURE', 'BEANS_QUERY']
+  child  = spawn process.execPath, [paths.root], {cwd: paths.root, env}
+  output = ''
+  child.stdout.on 'data', (chunk) -> output += chunk
+  child.stderr.on 'data', (chunk) -> output += chunk
+  # On 'exit', not 'close': 'close' waits for every holder of the child's
+  # pipes, and Chromium's helper processes inherit them, so one outliving a
+  # SIGKILL would leave this waiting for good. The `launched:` line is printed
+  # long before the exit, with the rest of the child's run after it.
+  killer = setTimeout (-> child.kill 'SIGKILL'), 30000
+  code   = await new Promise (resolve) -> child.on 'exit', (code, signal) -> resolve code ? signal
+  clearTimeout killer
+  said   = output.split('\n').find (line) -> line.startsWith 'launched: '
+  came   = try JSON.parse(said['launched: '.length..]).stops if said
+  check 'a launch on a settings.json with Stop on Errors off comes up unticked, with errors not stopping',
+    code is 0 and came?.ticked is false and came?.stopping is false,
+    "exit #{code} came up #{JSON.stringify came} from #{JSON.stringify said ? output[-400..]}"
+
+  # And /help finds all of it.
+  helped = await js """
+    const text = (hits) => hits.filter((s) => s.title === 'Stopping to look')
+      .flatMap((s) => s.lines).map((l) => l.join(' ')).join(' | ')
+    return {paused: text(HELP.match('error paused')), off: text(HELP.match('stop on errors'))}
+  """
+  check '/help error paused says what it is and how it ends, and /help stop on errors how to turn it off',
+    helped.paused.includes('Continue') and helped.paused.includes('refused') and helped.off.includes('Edit > Stop on Errors'),
+    JSON.stringify helped

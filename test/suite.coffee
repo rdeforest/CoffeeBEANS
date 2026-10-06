@@ -24,8 +24,9 @@ PARTS = [
 ]
 
 # Run only when named, never in a full run: `quit` ends the app it runs in, so
-# the lifecycle part starts a second Electron to run it.
-BY_NAME = ['quit']
+# the lifecycle part starts a second Electron to run it; `launched` only
+# means something in a second Electron, which pauseonerror starts.
+BY_NAME = ['quit', 'launched']
 
 module.exports = (win, paths) ->
   asked   = (name.trim() for name in (process.env.BEANS_TESTS ? '').split(',') when name.trim())

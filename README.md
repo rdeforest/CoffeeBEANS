@@ -163,8 +163,9 @@ edited keeps your edit and one you deleted stays deleted.
 The directory is a directory rather than a bare pile of sketches so it has
 somewhere to grow. Beside `sketches/` sit `assets/`, where `load` caches
 what it downloads, and `settings.json`, what the app remembers about how you
-like to work -- for now, whether Vim Keys and Warn About Name Case are
-ticked. Problem reports from the 📣🐞 button are saved in `reports/`.
+like to work -- for now, whether Vim Keys, Stop on Errors and Warn About
+Name Case are ticked. Problem reports from the 📣🐞 button are saved in
+`reports/`.
 
 A sketch's name is its path under `sketches/` without the `.coffee`. Where
 the disk ignores case, as macOS's and Windows's do unless set up otherwise,
@@ -369,12 +370,30 @@ The `>` prompt then asks about the stopped call, and can change it.
     F10  /line         step to the next line that runs, wherever it is
     /pause             hold the sketch at the next frame
     /step              run on to the next frame and hold there
-    /continue          carry on, from either kind of pause
+    /continue          carry on, from any kind of pause
 
-The debugger is on for every run, so an uncaught error stops on the line
-that threw, with its frame in the pane and the prompt, until Continue (F8)
-ends the run. With DevTools open neither happens, and `breakpoint` does
-nothing: the two cannot share the page.
+**When something goes wrong**, the sketch stops on the line that threw, as
+if a `breakpoint` were there. The status line says `error paused`, the line
+is marked, the error and where it happened are in the console, and the pane
+beside it holds the names that call could see. The `>` prompt asks about
+that call -- `ball` there shows the `null` that `ball.x` tripped on -- and
+can change it, but cannot rescue the run. Continue (F8) ends it as the
+error it was, without saying the error twice, and leaves what any failed
+run leaves: the stack beside the console and the line marked. Stop ends it
+too. Step is refused: nothing catches the error, so no line of the sketch's
+would ever run next, and all that is left is to end the run.
+
+An error the sketch catches itself, with `try`/`catch`, never stops it. Nor
+does one thrown after the run has ended -- in a `setTimeout` callback, a
+promise's `then`, or an async function after its `await`: that is reported,
+saying it came after the run, because by then there is no run to stop.
+
+**Edit > Stop on Errors** turns these stops off. Unticked, an error ends the
+run straight away, reported with its stack beside the console. It is ticked
+until you untick it, and remembered. `breakpoint` stops either way.
+
+With DevTools open, neither `breakpoint` nor an error stops the sketch in
+the app: the two cannot share the page.
 
 ## Panels
 

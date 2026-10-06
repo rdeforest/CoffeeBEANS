@@ -100,8 +100,43 @@ Settings     = require './settings'
 settings     = {}
 saveSettings = -> Settings.save SETTINGS, settings, sayProblem
 
-ipcMain.handle 'settings:vim',      -> settings.vim is true
-ipcMain.handle 'settings:warnCase', -> settings.warnCase isnt false
+# The remembered checkboxes of the Edit menu, in menu order. A value that is
+# not a boolean -- a hand-edited "yes", say -- reads as the default. `changed`
+# brings whatever follows a preference into line with it: run on every click,
+# and for each one at launch (reachWindow), before the menu or any window.
+#
+# - Vim Keys: every window is told, not just the focused one -- there may be
+#   none focused, and at launch there is none at all -- and a page asks once
+#   as it mounts.
+# - Stop on Errors: no page is told or asks. The switch is the debugger's, in
+#   this process, and every window's session reads it, so a page built
+#   afresh has it as it was. Off, an uncaught error ends the run, reported,
+#   as before E1 (2026-10-06).
+# - Warn About Name Case: a sketch opened under another spelling says so in
+#   the console. The renderer asks each time, so nothing needs telling.
+PREFERENCES =
+  vim:          {label: 'Vim Keys',             default: no,  changed: (ticked) -> tellWindows 'settings:vim', ticked}
+  stopOnErrors: {label: 'Stop on Errors',       default: yes, changed: (ticked) -> debugSketches.stopOnErrors ticked}
+  warnCase:     {label: 'Warn About Name Case', default: yes}
+
+preference  = (key) -> if typeof settings[key] is 'boolean' then settings[key] else PREFERENCES[key].default
+tellWindows = (channel, value) -> win.webContents.send channel, value for win in BrowserWindow.getAllWindows()
+
+ipcMain.handle 'settings:get', (event, key) ->
+  throw new Error "no such preference: #{key}" unless Object.hasOwn PREFERENCES, key
+  preference key
+
+# Electron flips `checked` before calling the click.
+preferenceItem = (key) ->
+  {label, changed} = PREFERENCES[key]
+  id:      key
+  label:   label
+  type:    'checkbox'
+  checked: preference key
+  click: (item) ->
+    settings[key] = item.checked
+    saveSettings()
+    changed? item.checked
 
 # Asked of git once, now, so neither the window nor About waits on it later.
 Version = require './version'
@@ -838,29 +873,7 @@ installMenu = ->
       {type: 'separator'}
       {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}
       {type: 'separator'}
-      {
-        # Electron flips `checked` before calling this. Every window is told,
-        # not just the focused one: there may be none focused.
-        id:      'vim'
-        label:   'Vim Keys'
-        type:    'checkbox'
-        checked: settings.vim is true
-        click: (item) ->
-          settings.vim = item.checked
-          saveSettings()
-          win.webContents.send 'settings:vim', item.checked for win in BrowserWindow.getAllWindows()
-      }
-      {
-        # On unless unticked: a sketch opened under another spelling says so
-        # in the console. The renderer asks each time, so nobody is told.
-        id:      'warnCase'
-        label:   'Warn About Name Case'
-        type:    'checkbox'
-        checked: settings.warnCase isnt false
-        click: (item) ->
-          settings.warnCase = item.checked
-          saveSettings()
-      }
+      (preferenceItem key for key of PREFERENCES)...
     ]
   ,
     label: 'View'
@@ -949,6 +962,7 @@ reachWindow = ->
   await prepareDataHome()
   folding.probed = probeFolding SKETCHES
   settings = Settings.read SETTINGS, sayProblem
+  await Promise.all (changed preference key for key, {changed} of PREFERENCES when changed)
   protocol.handle 'app', serve unless protocol.isProtocolHandled 'app'
   installMenu()
   createWindow()
