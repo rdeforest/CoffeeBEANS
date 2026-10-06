@@ -115,10 +115,19 @@
   dialog::backdrop { background: #000a; }
   dialog pre  { margin: 0 0 1rem; font: inherit; white-space: pre-wrap; }
   dialog form { display: flex; gap: .5rem; justify-content: flex-end; margin: 0; }
+  dialog p    { margin: 0 0 .8rem; max-width: 72ch; }
+  dialog label { display: block; margin-bottom: .4rem; }
+  dialog textarea {
+    display: block; width: 100%; margin-bottom: .8rem; padding: .4rem;
+    background: var(--ink); color: var(--coffee); border: 1px solid var(--edge);
+    font: inherit; resize: vertical;
+  }
+  #report { width: min(80ch, 90vw); }
 </style>
 
 <header>
   <b>CoffeeBEANS</b>
+  <button id="feedback" class="ghost icon" title="Report a problem, or tell us what you think">&#128227;&#128030;</button>
   <button id="open" class="ghost icon" title="Open a sketch (Cmd/Ctrl-O)">&#128194;</button>
   <button id="evalRegion">&#9654; Eval</button>
   <button id="runFresh" class="ghost">&#8635; Run</button>
@@ -154,6 +163,37 @@
     <button id="aboutCopy" type="button" autofocus>Copy</button>
     <button id="aboutClose" class="ghost">Close</button>
   </form>
+</dialog>
+
+<!-- One step showing at a time: say what happened, check what will be
+     saved, then where it went. -->
+<dialog id="report">
+  <div id="reportAsk" class="step">
+    <label for="reportWords">What happened? What did you expect instead?</label>
+    <textarea id="reportWords" rows="6"></textarea>
+    <label><input id="reportSketch" type="checkbox"> Include the sketch that is open</label>
+    <form method="dialog">
+      <button id="reportDraft" type="button">Next</button>
+      <button class="ghost">Cancel</button>
+    </form>
+  </div>
+  <div id="reportCheck" class="step" hidden>
+    <p>This is exactly what will be saved. Names, addresses and keys have been
+    taken out; change or remove anything else you would rather not share.</p>
+    <textarea id="reportText" rows="18" spellcheck="false"></textarea>
+    <p id="reportRefused" hidden></p>
+    <form method="dialog">
+      <button id="reportSave" type="button">Save</button>
+      <button class="ghost">Cancel</button>
+    </form>
+  </div>
+  <div id="reportDone" class="step" hidden>
+    <p id="reportSaved"></p>
+    <form method="dialog">
+      <button id="reportIssues" type="button">Open the issues page</button>
+      <button id="reportClose" class="ghost">Close</button>
+    </form>
+  </div>
 </dialog>
 
 <script src="/src/renderer/vendor/coffeescript.js"></script>
