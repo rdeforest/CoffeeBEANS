@@ -802,14 +802,18 @@ loop
   output = ''
   child.stdout.on 'data', (chunk) -> output += chunk
   child.stderr.on 'data', (chunk) -> output += chunk
+  # On 'exit', not 'close': 'close' waits for every holder of the child's
+  # pipes, and Chromium's helper processes inherit them, so one outliving a
+  # SIGKILL would leave this waiting for good. The `launched:` line is printed
+  # long before the exit, with the rest of the child's run after it.
   killer = setTimeout (-> child.kill 'SIGKILL'), 30000
-  code   = await new Promise (resolve) -> child.on 'close', (code, signal) -> resolve code ? signal
+  code   = await new Promise (resolve) -> child.on 'exit', (code, signal) -> resolve code ? signal
   clearTimeout killer
   said   = output.split('\n').find (line) -> line.startsWith 'launched: '
-  came   = if said then JSON.parse(said['launched: '.length..]).stops
+  came   = try JSON.parse(said['launched: '.length..]).stops if said
   check 'a launch on a settings.json with Stop on Errors off comes up unticked, with errors not stopping',
     code is 0 and came?.ticked is false and came?.stopping is false,
-    "exit #{code} came up #{JSON.stringify came}#{if said then '' else ": #{JSON.stringify output[-400..]}"}"
+    "exit #{code} came up #{JSON.stringify came} from #{JSON.stringify said ? output[-400..]}"
 
   # And /help finds all of it.
   helped = await js """

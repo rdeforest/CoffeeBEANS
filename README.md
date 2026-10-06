@@ -164,7 +164,8 @@ The directory is a directory rather than a bare pile of sketches so it has
 somewhere to grow. Beside `sketches/` sit `assets/`, where `load` caches
 what it downloads, and `settings.json`, what the app remembers about how you
 like to work -- for now, whether Vim Keys, Stop on Errors and Warn About
-Name Case are ticked. Problem reports from the 📣🐞 button are saved in `reports/`.
+Name Case are ticked. Problem reports from the 📣🐞 button are saved in
+`reports/`.
 
 A sketch's name is its path under `sketches/` without the `.coffee`. Where
 the disk ignores case, as macOS's and Windows's do unless set up otherwise,

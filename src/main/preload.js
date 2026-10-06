@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('beans', {
   image: (url)        => ipcRenderer.invoke('image:load', url),
   onOpen: (handler) => ipcRenderer.on('sketch:open', () => handler()),
   // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
-  vim:   ()        => ipcRenderer.invoke('settings:vim'),
+  vim:   ()        => ipcRenderer.invoke('settings:get', 'vim'),
   onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
   // Edit > Undo and Redo, which the page sends to whichever history has focus.
   onHistory: (handler) => ipcRenderer.on('edit:history', (_event, verb) => handler(verb)),
@@ -26,7 +26,7 @@ contextBridge.exposeInMainWorld('beans', {
   // navigator.clipboard refuses a page without it, and the suite's never has.
   copy:    (text)    => ipcRenderer.invoke('clipboard:write', text),
   // Edit > Warn About Name Case: asked whenever it matters.
-  warnCase: ()     => ipcRenderer.invoke('settings:warnCase'),
+  warnCase: ()     => ipcRenderer.invoke('settings:get', 'warnCase'),
   // The feedback button. Main redacts the draft and writes the file.
   report: {
     draft:  (ask)  => ipcRenderer.invoke('report:draft', ask),
