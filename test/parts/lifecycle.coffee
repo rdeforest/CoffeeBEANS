@@ -592,7 +592,10 @@ module.exports = (t) ->
       echo and after.doc is "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n" and not after.dirty and not after.said.includes('reloaded'),
       JSON.stringify {echo, after}
 
-    # And an LF sketch stays LF, pretending to be Windows.
+    # And an LF sketch stays LF, pretending to be Windows. K4's always-LF
+    # saves pass this too; the check above is the one they fail. This one
+    # fails a save that keeps CRLF where it finds it and otherwise follows
+    # the platform, which every other check here lets through.
     newline.forced = '\r\n'
     await openEnds "print 'ONE'\nprint 'TWO'\n"
     disk = await saveAs "print 'ONE'\nprint 'TWO'\nprint 'THREE'\n"
@@ -659,8 +662,46 @@ module.exports = (t) ->
     disk = await fsp.readFile endsAt, 'utf8'
     check 'an edit flushed at View > Reload keeps the sketch\'s CRLF endings',
       pending and disk is crlf("print 'FLUSHED'\nprint 'CRLF'\n"), "pending #{pending} disk #{JSON.stringify disk}"
+
+    # A save asks the file for its endings, and a file that will not be read
+    # must not fail the save: the rename needs only the folder. A holder on
+    # Windows refuses the read for a moment, and that is waited out as the
+    # rename's refusals are (main's `faults` stands in for the holder).
+    newline.forced = '\n'
+    await openEnds crlf "print 'ONE'\n"
+    faults.windows    = yes
+    faults.unreadable = 3
+    disk  = await saveAs "print 'ONE'\nprint 'HELD'\n"
+    left  = faults.unreadable
+    faults.windows    = no
+    faults.unreadable = 0
+    dirty = await js "return Editor.dirty()"
+    check 'a save whose read of the sketch is refused a few times waits it out, and keeps the CRLF',
+      disk is crlf("print 'ONE'\nprint 'HELD'\n") and left is 0 and not dirty,
+      "disk #{JSON.stringify disk} refusals left #{left} dirty #{dirty}"
+
+    # A refusal that lasts leaves the endings unknown, and the save takes the
+    # platform's. Mode 000 is one Linux and macOS make for real; Windows has
+    # no unreadable mode that a rename would still replace, and root reads
+    # through it.
+    unless process.platform is 'win32' or process.getuid() is 0
+      newline.forced = '\n'
+      await openEnds crlf "print 'ONE'\n"
+      await fsp.chmod endsAt, 0o000
+      await clearConsole()
+      await setDoc "print 'ONE'\nprint 'LOCKED'\n"
+      await js "await Editor.save(); return true"
+      await quiet()
+      said  = await consoleText()
+      dirty = await js "return Editor.dirty()"
+      disk  = await fsp.readFile(endsAt, 'utf8').catch (error) -> error.code
+      check 'a sketch that cannot be read is still saved, with the platform\'s endings',
+        disk is "print 'ONE'\nprint 'LOCKED'\n" and not dirty and not said.includes('could not save'),
+        JSON.stringify {disk, dirty, said}
   finally
-    newline.forced = null
+    newline.forced    = null
+    faults.windows    = no
+    faults.unreadable = 0
     page?.destroy() unless page?.isDestroyed()
     await js "window.heardChanges = null; await Editor.load('scratch'); return true"
     await fsp.rm endsAt,  force: yes
