@@ -1275,11 +1275,16 @@ pausedNames = []          # every name the paused frame's scopes hold, for Tab
 errorSaid = no
 
 # Suspend now, on whatever line is running. From a frame pause the swap has to
-# be let go, or the sketch never reaches a line to stop on.
+# be let go, or the sketch never reaches a line to stop on. The answer can
+# take as long as an error pause takes to set up, and a Run meanwhile leaves
+# it nothing to say: main does not pause the new worker, and its hold, if
+# one is pressed, is not this press's to let go.
 linePause = ->
   return unless status in ['running', 'frame paused']
-  unless await beans.debug.pause()
-    return say '*** could not pause -- is DevTools open? ***', 'sys'
+  pressedFor = worker
+  took = await beans.debug.pause()
+  return unless worker is pressedFor
+  return say '*** could not pause -- is DevTools open? ***', 'sys' unless took
   goFrames()
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
@@ -1311,13 +1316,25 @@ continueAll = ->
 togglePause = ->
   if linePaused then continueAll() else linePause()
 
-# The buffer arms the debugger: attached while it says `breakpoint` anywhere,
-# let go when it does not. Nothing to remember to turn on, and nothing left
-# on by mistake. Keystrokes are debounced; a run checks for itself, so it can
-# never set off ahead of the attach it needs.
+# Whether the debugger is armed is main's to say: `armed` is set only from
+# what an arm answers, and cleared when main says it let the session go
+# (`detached`: DevTools took it, or the debugger was detached). A run arms
+# first unless it is armed and nothing since has set pauses aside
+# (`skipping`).
+#
+# The buffer used to arm it: attached while it said `breakpoint` anywhere,
+# let go when it did not. Since pausing on errors main arms for every run
+# whatever the buffer says (Robert, 2026-10-05), so the buffer's verdict,
+# `armedFor`, can only ask for an arm main makes anyway. It is kept, and so
+# is the debounced watch on the keystrokes, until Robert decides whether
+# they go. Until 2026-10-06 it could also suppress one: a run skipped arming
+# whenever the buffer's verdict had not changed, so after DevTools let go
+# nothing ever attached again, and error stops and breakpoints stayed off
+# for good (found by a Claude review of main at 404fb07).
 BREAKPOINT = /\bbreakpoint\b/
 armedFor   = null
 armTimer   = null
+armed      = no
 skipping   = no          # a Stop set breakpoints aside; the next run wants them
 
 wantsDebug = (extra = '') -> BREAKPOINT.test(Editor.all()) or BREAKPOINT.test extra
@@ -1328,8 +1345,9 @@ syncDebug = (extra = '') ->
   armedFor = want
   skipping = no
   try
-    await beans.debug.arm want
+    armed = await beans.debug.arm want
   catch error
+    armed = no
     say "debugger: #{error.message ? error}", 'err'
 
 watchBuffer = ->
@@ -1374,6 +1392,8 @@ beans.debug.onEvent (event) ->
     # the next run takes it back however the two crossed.
     when 'skipping'
       skipping = yes
+    when 'detached'
+      armed = no
   undefined
 
 globalThis.Stepping =
@@ -1727,6 +1747,16 @@ stops     = 0
 
 underneath = -> if status is 'arming' then armedOver else status
 
+# What the worker is doing, as the run's own news sets it. Under a hold the
+# status line says `frame paused`, and the news goes to what the hold lets
+# go to instead: written over it, a hold pressed while the worker booted read
+# `running` with the sketch frozen at its first frame, and pressing the hold
+# again did nothing (found by a Claude review of main at 404fb07). And so the
+# question "is something running?" asks the same place: at a hold taken at
+# an idle worker, an Eval was refused as already running.
+runState  = (state) -> if paused then resumeTo = state else setStatus state
+underHold = -> if paused then resumeTo else underneath()
+
 # Once the worker says it is idle there is nothing left for a Stop to unwind.
 # Left raised, the flag makes every yield point reached from the prompt --
 # buffer.swap, sound -- throw 'stopped' until the next run.
@@ -1734,7 +1764,7 @@ standDown = -> Atomics.store i32, H.INTERRUPT, 0
 
 messages =
   ready: ->
-    setStatus 'ready'
+    runState 'ready'
     send pending if pending
     pending = null
     # A line typed while the worker was booting poked it before it had
@@ -1750,7 +1780,7 @@ messages =
     drainPrints()                     # what the sketch printed came first
     # Something an earlier run left behind, failing while the next is busy:
     # news, but that run is not over, and keeps its status and the keyboard.
-    return sayFailure data if data.stage is LATE and status in BUSY
+    return sayFailure data if data.stage is LATE and underneath() in BUSY
     sayFailure data unless errorSaid and data.stage is 'run'
     finished()
     setStatus 'error'
@@ -1762,9 +1792,9 @@ LATE = 'after the run'
 # The worker only speaks once it is running again, so a pause still showing
 # is over, whether or not the debugger has said so yet. So is a hold: the run
 # it held has ended without reaching a swap, and a hold outliving it would
-# hold the next run at its first frame under a status saying 'running'.
-# Only the end of a run lets a hold go -- the 'ready' that ends a boot keeps
-# a hold pressed during it for the run it was booting for.
+# hold the next run, which nobody asked to hold, at its first frame. Only
+# the end of a run lets a hold go -- the 'ready' that ends a boot keeps a
+# hold pressed during it for the run it was booting for.
 finished = ->
   standDown()
   paused    = no
@@ -1826,7 +1856,7 @@ answerLoad = (url) ->
 # A run being armed hides the status it was asked over, and a second run sent
 # in the meantime -- two evals in one tick -- must still find the worker busy.
 send = ({source, name, cut}) ->
-  if underneath() in BUSY
+  if underHold() in BUSY
     say '*** already running -- stop it first (Ctrl-.) ***', 'sys'
     return
   # The last failure's marks are stale the moment something else runs.
@@ -1834,7 +1864,7 @@ send = ({source, name, cut}) ->
   Editor.showError null
   hideVars()
   Atomics.store i32, H.INTERRUPT, 0   # a stop leaves the flag raised
-  setStatus 'running'
+  runState 'running'
   worker.postMessage {type: 'run', source, name}
 
 start = (thenRun = null) ->
@@ -1887,12 +1917,12 @@ stop = ->
   # status line back: left saying "paused", nothing that reads it -- the
   # buttons, a test, the next run -- can tell the pause is over.
   #
-  # Before the idle test only for a hold taken at an idle worker, so it reads
-  # as idle once let go. A hold over a busy worker is let go in the busy
-  # branch, as 'running'. The end of a run ends its hold (finished), but the
-  # 'ready' that ends a boot does not, so a hold can still sit under a status
-  # it did not set: pressed while the worker booted for a run, it remembers
-  # 'booting' under a run that reads 'running'.
+  # Before the idle test only for a hold taken at an idle worker, or at a
+  # booting one, so it reads as idle once let go. A hold over a busy worker
+  # is let go in the busy branch, as 'running'. The end of a run ends its
+  # hold (finished), but the 'ready' that ends a boot does not: a hold
+  # pressed while the worker booted for a run holds that run, and remembers
+  # 'running' for it (runState).
   goFrames() if status is 'frame paused' and resumeTo in IDLE
   # Nothing running is nothing to unwind, but a note with no length can
   # outlive the sketch that started it, and Stop is where anyone reaches to
@@ -1907,10 +1937,9 @@ stop = ->
     Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
   # A busy worker parked on the swap is released below, by clearing it. The
-  # hold is let go as 'running' whatever it remembers -- 'booting', for one
-  # pressed during the boot -- or the deadline below, which waits on
-  # 'running', would never start, and a sketch that catches its stop would
-  # spin on under a gray Stop.
+  # hold is let go as 'running' whatever it remembers, or the deadline below,
+  # which waits on 'running', would never start, and a sketch that catches
+  # its stop would spin on under a gray Stop.
   resumeTo = 'running'
   goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
@@ -1951,12 +1980,14 @@ stop = ->
 # straight through it would evaluate before `screen` exists. The latest
 # request wins, which is also what a held-down Ctrl-Enter means.
 # Arming has to finish before the run it is for, or the first breakpoint is
-# missed. It is the only wait in front of a run, so it is skipped when nothing
-# changes, and said on the status line when it happens -- which is also what
-# stops anything watching the status from mistaking the gap for a run that
-# has already finished.
+# missed and an error does not stop. It is the only wait in front of a run,
+# so it is skipped while main says the debugger is armed and no Stop has set
+# pauses aside since -- and, for now, the buffer's verdict has not changed
+# (see `armed`) -- and said on the status line when it happens, which is
+# also what stops anything watching the status from mistaking the gap for a
+# run that has already finished.
 armFirst = (source, run) ->
-  return run() if wantsDebug(source) is armedFor and not skipping
+  return run() if armed and not skipping and wantsDebug(source) is armedFor
   before    = status
   armedOver = before unless before is 'arming'   # a second arming keeps the first's
   asked     = stops

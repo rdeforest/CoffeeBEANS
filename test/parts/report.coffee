@@ -83,6 +83,9 @@ CASES = [
   # /home/alice off its front, `~bob` would be left.
   ['folder ~', ALICE, 'watch: /home/alice/projects/beans: EACCES, and /home/alicebob is someone else',
     ['/home/alice/', 'alicebob'], ['watch: ~/projects/beans: EACCES', 'and ~ is someone else']]
+  # A web address's path is the site's, even where it spells this home.
+  ['folder ~', LINKED, 'loaded https://example.com/var/home/alice/x.png into /var/home/alice/game',
+    ['/var/home/alice/game'], ['https://example.com/var/home/alice/x.png', 'into ~/game'], 'beside a web address that spells it']
   ['folder ~', WINDOWS, 'EPERM: rename \'C:\\Users\\alice\\Desktop\\x.png\' {"path":"C:\\\\Users\\\\alice\\\\Desktop"}',
     ['Users'], ["rename '~\\Desktop\\x.png'", '{"path":"~\\\\Desktop"}'], 'on Windows']
   ['home-shaped folder', SMITH, "ENOENT: open 'C:\\Users\\ROBERT~1\\AppData\\Local\\Temp\\beans\\x.png'",
@@ -206,8 +209,8 @@ CASES = [
     ['Alice here', 'when alice'], ['<user> here', 'when <user> pressed', 'malice']]
   ['user name', JOSE, 'jose\u0301 pressed space', ['jos\u00e9', 'jose\u0301'], ['<user> pressed space'], 'written decomposed']
   ['user name', JOSE_NFD, 'jos\u00e9 pressed space', ['jos\u00e9', 'jose\u0301'], ['<user> pressed space'], 'named decomposed']
-  ['user name', PI, 'Math.pi is 3.14159; saved to /media/pi/usb/beans',
-    ['/pi/'], ['Math.pi is 3.14159', '/media/<user>/usb'], 'shorter than 3, only as a folder']
+  ['user name', PI, 'Math.pi is 3.14159; saved to /srv/pi/usb/beans',
+    ['/pi/'], ['Math.pi is 3.14159', '/srv/<user>/usb'], 'shorter than 3, only as a folder']
 ]
 
 # Lines that look like something above and are not, each of which a report
@@ -237,6 +240,9 @@ KEPT = [
   ['a sketch path in mixed case', "ENOENT: open 'sketches/Level2/Boss3/ArenaFinal/x.coffee'"]
   ['a web address with /home/, /users/ or /media/ in it',
     'load https://example.com/users/42/sprite.png failed: 404; https://cdn.site.com/home/hero.png, https://cdn.site.com/media/intro.webm']
+  # The integration review, 2026-10-06: the player's own folders were taken
+  # out of a web address's path, which the home-shaped rules already spared.
+  ['a web address whose path spells the app\'s folder', 'see https://example.com/opt/CoffeeBEANS/releases/latest']
   # Each changes when composed: the report might be about exactly that.
   ['letters that composing would change',
     'Greek question mark \u037e, Kelvin \u212a, ohm \u2126, angstrom \u212b, CJK \uf900, Hangul \u1100\u1161']
@@ -274,16 +280,21 @@ module.exports = (t) ->
   check 'every redaction pattern has a realistic line below', bare.length is 0, "none for #{bare.join ', '}"
 
   # Gone and kept through the whole redactor, and changed by the named
-  # pattern on its own -- so no pattern is quietly covered by another.
+  # pattern where it sits, after every pattern ahead of it has run -- so no
+  # pattern is quietly covered by another. Applied to the raw line, as until
+  # the night of 2026-10-06, a pattern whose work an earlier one had already
+  # done still passed: `user name`'s /media/pi/ was the mounted drive's.
   for [name, who, line, gone, kept, note] in CASES
     out      = Redact.redactor(who) line
-    rule     = Redact.patterns(who).find (pattern) -> pattern.name is name
-    alone    = rule? and line.replace(rule.find, rule.put) isnt line
+    rules    = Redact.patterns who
+    at       = rules.findIndex (pattern) -> pattern.name is name
+    before   = rules[0...at].reduce ((text, {find, put}) -> text.replace find, put), line
+    took     = at >= 0 and before.replace(rules[at].find, rules[at].put) isnt before
     leaked   = (text for text in gone when out.includes text)
     lost     = (text for text in kept when not out.includes text)
     check "redaction: #{name}#{if note then ", #{note}" else ''}",
-      alone and leaked.length is 0 and lost.length is 0,
-      "pattern alone changed it=#{alone} leaked=#{JSON.stringify leaked} lost=#{JSON.stringify lost} -> #{JSON.stringify out}"
+      took and leaked.length is 0 and lost.length is 0,
+      "pattern changed it after those ahead of it=#{took} leaked=#{JSON.stringify leaked} lost=#{JSON.stringify lost} -> #{JSON.stringify out}"
 
   changed = ([line, Redact.redactor(ALICE) line] for line in KEEPS).filter ([line, out]) -> out isnt line
   check 'versions, line:col, clocks, prototypes and computed values come through whole',
@@ -331,16 +342,20 @@ module.exports = (t) ->
   MARK = 'report part sketch'
   await setDoc "# kept in #{me.home} by #{me.user}\nprint '#{MARK}'\n"
 
-  # Without these, the suite would open Robert's file manager and browser.
-  # main calls both on this same module object, at call time.
-  shown   = []
-  visited = []
+  # main opens nothing on the desktop in a test run (onDesktop in main): it
+  # says what it would have opened and keeps it in `paths.opened`, which is
+  # what these checks read. `shell` is still stood in for, now to count
+  # anything that gets past that to Robert's file manager and browser; main
+  # calls both on this same module object, at call time.
+  since    = paths.opened.length
+  meant    = (what) -> (detail for {what: kind, detail} in paths.opened[since..] when kind is what)
+  escaped  = []
   realShow = shell.showItemInFolder
   realSave = Report.save
   realDraft = Report.draft
   realOpen = shell.openExternal
-  shell.showItemInFolder = (file) -> shown.push file
-  shell.openExternal     = (url) -> visited.push url; Promise.resolve()
+  shell.showItemInFolder = (file) -> escaped.push file
+  shell.openExternal     = (url) -> escaped.push url; Promise.resolve()
   throw new Error 'could not stand in for shell' unless shell.showItemInFolder isnt realShow and shell.openExternal isnt realOpen
 
   KEYS = [['F8', {}], ['F10', {}], ['\\', {ctrlKey: true}], ['e', {ctrlKey: true}], ['.', {ctrlKey: true}]]
@@ -425,6 +440,7 @@ module.exports = (t) ->
     edited = plain + 'and the suite added this line\n'
     await js "document.getElementById('reportText').value = #{JSON.stringify edited}; return true"
     await press 'reportSave'
+    shown   = meant 'showItemInFolder'
     first   = shown[0]
     written = first? and await fsp.readFile first, 'utf8'
     told    = await js "return document.getElementById('reportSaved').textContent"
@@ -435,6 +451,7 @@ module.exports = (t) ->
       told.includes(Report.ISSUES) and told.includes(first) and /attach/.test(told), JSON.stringify told
 
     await press 'reportIssues'
+    visited = meant 'openExternal'
     check 'Open the issues page opens it', visited.length is 1 and visited[0] is Report.ISSUES, JSON.stringify visited
     await click 'reportClose'
 
@@ -463,7 +480,7 @@ module.exports = (t) ->
       "step check #{await step 'reportCheck'}, text kept #{still is retouched}, said #{JSON.stringify said}"
     check 'Save waits for the save in flight: two clicks, one save', saves is 1, "#{saves} saves"
     await press 'reportSave'
-    second = shown[1]
+    second = meant('showItemInFolder')[1]
     await click 'reportClose'
     await waitFor "return !document.getElementById('report').open"
 
@@ -548,6 +565,12 @@ module.exports = (t) ->
     shell.showItemInFolder = realShow
     shell.openExternal     = realOpen
     await js "document.getElementById('report').close(); return true"
+
+  # Before 2026-10-06 only the stand-in above kept these two off the desktop
+  # in a test run; any other part reaching them would have opened them.
+  check 'in a test run the report opens nothing on the desktop, and main says what it would have opened',
+    escaped.length is 0 and meant('showItemInFolder').length > 0 and meant('openExternal').join() is Report.ISSUES,
+    JSON.stringify {escaped, opened: paths.opened[since..]}
 
   texts = []
   texts.push await fsp.readFile file, 'utf8' for file in [first, second] when file

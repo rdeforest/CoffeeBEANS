@@ -1,6 +1,8 @@
-# Line stepping. Everything that speaks V8's inspector protocol is in this
-# file; the renderer asks for a pause, a step, a resume or a value, in the
-# app's words, and hears back where the sketch stopped and what it holds.
+# Line stepping, and stopping on a run's uncaught error. Everything that
+# speaks V8's inspector protocol is in this file; the renderer asks for a
+# pause, a step, a resume or a value, in the app's words, and hears back
+# where the sketch stopped and what it holds. The debugger is armed for every
+# run (ALWAYS, below), not on demand as it was before pausing on errors.
 # Nothing raw crosses the bridge -- a renderer that could send arbitrary
 # protocol commands could read and write anything in any process we debug.
 #
@@ -245,8 +247,10 @@ module.exports = (win) ->
   contents = win.webContents
   cdp      = contents.debugger
 
+  # Neither decides anything while ALWAYS holds; kept until Robert decides
+  # whether arming on demand goes for good (see ALWAYS).
   wanted   = no          # the buffer holds a breakpoint
-  forced   = no          # armed only for a line pause asked for by key
+  forced   = no          # a line pause was asked for by key
   session  = null        # the sketch worker's flattened session
   enabled  = no          # the Debugger domain is on in that session
   ready    = null        # resolves once it is
@@ -434,6 +438,7 @@ module.exports = (win) ->
   setUp = (id, waiting) ->
     sessionGone()
     session = id
+    talk    = speaker()
     scripts.clear()
     maps.clear()
     halted  = null
@@ -445,9 +450,12 @@ module.exports = (win) ->
       await enable() if armWanted()
     finally
       # Without this the worker waits for us forever and the app sits on
-      # `booting` with nothing said anywhere.
+      # `booting`. If it fails, that is said: until 2026-10-06 the failure
+      # was dropped, and the app sat on `booting` with nothing said anywhere
+      # (found by a Claude review of main at 404fb07). Sent to the worker
+      # whether or not it is still current; said only if it is.
       if waiting
-        command('Runtime.runIfWaitingForDebugger', {}, id).catch ->
+        command('Runtime.runIfWaitingForDebugger', {}, id).catch sayUnlessGone talk
 
   attach = ->
     return true if cdp.isAttached()
@@ -709,20 +717,27 @@ module.exports = (win) ->
           if sessionId is session and stopped
             stopped = null
             tell type: 'resumed'
-            # A pause asked for by key armed us for itself alone.
+            # Once let a pause asked for by key disarm again; under ALWAYS,
+            # settle finds the debugger armed and leaves it so.
             forced = no unless chase
             settle()
     catch error
       tell type: 'problem', text: "debugger: #{error.message}"
 
-  # Detaching resumes a paused target, so the renderer must hear that too.
+  # Detaching resumes a paused target, so the renderer must hear that too,
+  # and that the debugger is not armed any more, so its next run arms first
+  # (armFirst in the renderer).
   cdp.on 'detach', (event, reason) ->
     resetSession()
+    tell type: 'detached'
     tell type: 'problem', text: "debugger detached: #{reason}" unless devtools or reason is 'target closed'
 
-  # The two cannot both hold the page. DevTools wins, and says so.
+  # The two cannot both hold the page. DevTools wins, and says so. The
+  # renderer hears it is disarmed, so the next Run arms again, and the one
+  # after DevTools closes attaches.
   contents.on 'devtools-opened', ->
     devtools = yes
+    tell type: 'detached'
     if cdp.isAttached()
       cdp.detach()
       resetSession()          # which says `resumed` if we were paused
@@ -749,18 +764,24 @@ module.exports = (win) ->
       await whenFree(-> talk 'Debugger.setSkipAllPauses', skip: no).catch sayUnlessGone talk
     armed
 
-  # Suspend now, wherever the sketch is. Arms on demand, since this is the
-  # one way in that does not need `breakpoint` in the source.
+  # Suspend now, wherever the sketch is. The debugger is armed already for
+  # every run; settle only says whether it is (not while DevTools has it).
+  #
+  # In the session current when asked, or not at all: a pause still being
+  # set up can hold the turn for seconds, and a Run in that time used to have
+  # this pause the new worker at its first line, or leave `chase` set for
+  # whatever paused next (found by a Claude review of main at 404fb07).
   pause = ->
     return true if stopped
+    talk   = speaker()
     forced = yes
     return false unless await settle()
     # A pause still being set up can be running JS of ours in the worker.
     await whenFree ->
-      return if stopped
+      return true if stopped
+      return false unless talk.live()
       chase = {method: 'Debugger.stepInto', count: 0}
-      send 'Debugger.pause'
-    true
+      talk('Debugger.pause').then -> true
 
   # To the next line that runs, wherever it is: into a sketch function, back
   # out to its caller, round a loop. The runtime is ignore-listed, so `print`

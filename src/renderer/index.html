@@ -26,8 +26,9 @@
      which reads as two controls. The header would rather run out of room. */
   header button, header span { white-space: nowrap; }
   header button { flex: none; }
-  /* Five buttons is more than the bar comfortably holds, so the two that
-     only matter while a sketch is running wear their glyph alone. */
+  /* Nine buttons is more than the bar comfortably holds, so the five whose
+     glyph says enough -- the report, Open, and the three that only matter
+     while a sketch is running -- wear it alone. */
   header button.icon { padding: .25rem .5rem; }
   /* If it still does not fit, the meter is what gives -- the status is the
      one thing on this bar you cannot guess from looking at the window. */
@@ -39,7 +40,11 @@
      and a prompt line at an idle worker is out for a millisecond or two:
      eased, so a tick that catches one does not flash the button. */
   #stop { transition: opacity .15s; }
-  #status { opacity: .7; min-width: 6rem; text-align: right; }
+  /* Wider than the widest status word, `frame paused` and `error paused`, in
+     whatever monospace font this is, so the bar does not shift as the status
+     changes. 13ch, not 12: twelve letters measured a 64th of a pixel over
+     12ch in Electron 44 on Linux (Claude, 2026-10-06). */
+  #status { opacity: .7; min-width: 13ch; text-align: right; }
   #meter  { opacity: .45; font-variant-numeric: tabular-nums; }
   #lines  { opacity: .6; font-variant-numeric: tabular-nums; }
   #lines.over { color: #ff6b6b; opacity: 1; }
