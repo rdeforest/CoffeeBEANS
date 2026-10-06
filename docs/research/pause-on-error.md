@@ -1,7 +1,7 @@
 # Pausing on uncaught errors -- research
 
 *Written by Claude (Opus 5.5) on the night of 2026-10-04/05, track X1 of
-`docs/overnight/2026-10-05.md`, branch `research/pause-on-error`. Every
+`docs/overnight/done/2026-10-05.md`, branch `research/pause-on-error`. Every
 number here was measured that night on Robert's Linux machine (the one
 described in AGENTS.md, Platform facts), in Electron 44.3.0 / Chrome
 152.0.7977.78 / V8 15.2.124.19, one Electron at a time under the suite
