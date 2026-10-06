@@ -18,7 +18,7 @@ path = require 'path'
 # Order matters only for reading the output: the cheap, foundational parts
 # first, the slow ones last.
 PARTS = [
-  'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
+  'startup', 'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'about', 'input', 'random', 'names', 'sound', 'perf'
 ]
 

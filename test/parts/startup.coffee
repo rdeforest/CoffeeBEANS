@@ -1,0 +1,131 @@
+# Getting the data folder ready before there is a window. What a launch does
+# with each kind of folder is checked through data.prepare in this process;
+# what the player is shown when that fails is checked by launching a second
+# CoffeeBEANS, since this one is already past it.
+
+fsp       = require 'fs/promises'
+path      = require 'path'
+{spawn}   = require 'child_process'
+dataHome  = require '../../src/main/data'
+
+# A link to a folder. A junction on Windows, which needs no privilege there;
+# elsewhere the type is ignored. A junction's target must be absolute.
+linkTo = (target, link) -> fsp.symlink path.resolve(target), link, 'junction'
+
+exists = (place) -> fsp.stat(place).then (-> yes), (-> no)
+
+# A second app, on its own data folder, until it exits or `limit` runs out.
+# BEANS_TEST keeps it off the screen and answering its startup box from
+# BEANS_STARTUP_ANSWERS. Should it ever get as far as a window, it runs the
+# suite, and BEANS_TESTS naming a part that is not there has the suite print
+# "no such part" and exit 1 at once rather than start a second full run --
+# the same exit as Quit, so the checks count boxes as well.
+launch = (paths, home, answers, limit = 20000) -> new Promise (resolve) ->
+  env = {process.env..., BEANS_TEST: '1', BEANS_DATA_HOME: home, BEANS_STARTUP_ANSWERS: answers, BEANS_TESTS: 'startup-child'}
+  child  = spawn process.execPath, [paths.root], {cwd: paths.root, env}
+  output = ''
+  child.stdout.on 'data', (chunk) -> output += chunk
+  child.stderr.on 'data', (chunk) -> output += chunk
+  timer = setTimeout (-> child.kill 'SIGKILL'), limit
+  # 'close', not 'exit': the child can be gone with its last lines still in
+  # the pipe, and those are the boxes being counted.
+  child.on 'close', (code, signal) ->
+    clearTimeout timer
+    resolve {code, signal, output}
+
+# What it printed after `label`, a line each.
+printed = (output, label) ->
+  line[label.length..] for line in output.split('\n') when line.startsWith label
+
+# The boxes it would have shown, and the folders it would have opened.
+boxesIn  = (output) -> JSON.parse box for box in printed output, 'startup box: '
+openedIn = (output) -> printed output, 'openPath: '
+
+module.exports = (t) ->
+  {check, paths} = t
+  sandbox  = path.join paths.data, 'startup'
+  examples = path.join paths.root, 'examples'
+  await fsp.mkdir sandbox, recursive: yes
+
+  # A data folder that is not there yet is made, as on a first launch.
+  fresh = path.join sandbox, 'fresh'
+  made  = await dataHome.prepare fresh, examples
+  check 'a missing data folder is created and seeded',
+    (await exists path.join fresh, 'sketches', 'hello.coffee') and made.added.length > 0,
+    "added #{made.added.length}"
+
+  # sketches/ a link to a folder that is there: used as it is.
+  drive  = path.join sandbox, 'drive'
+  linked = path.join sandbox, 'linked'
+  await fsp.mkdir path.join(drive, 'sketches'), recursive: yes
+  await fsp.mkdir linked
+  await linkTo path.join(drive, 'sketches'), path.join(linked, 'sketches')
+  through = await dataHome.prepare linked, examples
+  check 'a sketches link to a real folder is used',
+    (await exists path.join drive, 'sketches', 'hello.coffee'),
+    "added #{through.added.length} through the link"
+
+  # sketches/ a link to a folder that is not there, on a "drive" that is: an
+  # unmounted mount point. Refused, naming both ends, and nothing made.
+  gone     = path.join sandbox, 'unmounted', 'sketches'
+  dangling = path.join sandbox, 'dangling'
+  link     = path.join dangling, 'sketches'
+  await fsp.mkdir path.dirname(gone), recursive: yes
+  await fsp.mkdir dangling
+  await linkTo gone, link
+  refused = await dataHome.prepare(dangling, examples).then (-> null), (error) -> error
+  check 'a dangling sketches link is refused, naming the link and its target',
+    refused?.code is 'EDANGLING' and refused.link is link and refused.target is path.resolve(gone),
+    "#{refused?.code}: #{refused?.message}"
+  check 'a dangling sketches link is not repaired by creating its target',
+    not await exists gone
+
+  # The same folder, launched: a box saying so, Try Again looks again, Quit
+  # leaves -- and no unhandled rejection on the way. Before 2026-10-05 this
+  # launch sat with no window until the limit killed it.
+  {code, signal, output} = await launch paths, dangling, 'Try Again,Quit'
+  boxes = boxesIn output
+  check 'a dangling sketches link stops the launch with a box, and Quit exits',
+    code is 1 and boxes.length is 2 and boxes.every((box) -> box.folder is dangling),
+    "exit #{code ? signal}, #{boxes.length} boxes#{if boxes.length then '' else ": #{JSON.stringify output[-400..]}"}"
+  check 'the box names where the link points',
+    boxes[0]?.message.includes(link) and boxes[0]?.detail.includes(path.resolve gone),
+    JSON.stringify boxes[0]?.message
+  check 'a launch on a dangling link has no unhandled rejection',
+    not /Unhandled/i.test(output), output.match(/.*Unhandled.*/i)?[0] ? ''
+  check 'a launch on a dangling link does not create its target',
+    not await exists gone
+
+  # Open Folder opens the folder the link is in, and asks again.
+  opened = await launch paths, dangling, 'Open Folder,Try Again,Quit'
+  asked  = boxesIn opened.output
+  check 'Open Folder opens the folder holding the link, then the box comes back',
+    opened.code is 1 and asked.length is 3 and openedIn(opened.output).join() is dangling,
+    "exit #{opened.code ? opened.signal}, #{asked.length} boxes, opened #{JSON.stringify openedIn opened.output}"
+
+  # A link whose target is relative, below a link: followed from where the
+  # link really is, as the system follows it, not from the path as written.
+  # Here that is real/sketches; read off the path, home/.local/sketches.
+  layout = path.join sandbox, 'relative'
+  real   = path.join layout, 'real'
+  await fsp.mkdir path.join(real, 'share', 'coffeebeans'), recursive: yes
+  await fsp.mkdir path.join(layout, 'home', '.local'), recursive: yes
+  await linkTo path.join(real, 'share'), path.join(layout, 'home', '.local', 'share')
+  home = path.join layout, 'home', '.local', 'share', 'coffeebeans'
+  await fsp.symlink path.join('..', '..', 'sketches'), path.join(home, 'sketches'), 'dir'
+  meant = path.join (await fsp.realpath real), 'sketches'
+  relative = await launch paths, home, 'Quit'
+  named    = boxesIn(relative.output)[0]?.detail ? relative.output[-400..]
+  check 'a relative link below another link is named where it really points',
+    named.includes("a link to #{meant}."), JSON.stringify named
+
+  # Any other reason the folder cannot be made gets the same box, saying what
+  # failed: here sketches is a file.
+  blocked = path.join sandbox, 'blocked'
+  await fsp.mkdir blocked
+  await fsp.writeFile path.join(blocked, 'sketches'), 'not a folder\n', 'utf8'
+  other = await launch paths, blocked, 'Quit'
+  shown = boxesIn other.output
+  check 'any other data folder failure stops the launch with a box saying why',
+    other.code is 1 and shown.length is 1 and shown[0].folder is blocked and shown[0].detail.includes(path.join blocked, 'sketches'),
+    "exit #{other.code ? other.signal}, #{shown.length} boxes: #{JSON.stringify shown[0]?.detail ? other.output[-400..]}"

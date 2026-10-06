@@ -149,6 +149,13 @@ never again -- an existing data directory belongs to you, including an empty
 one. `BEANS_DATA_HOME` overrides the location; that is how `npm test` gets
 its own throwaway copy.
 
+`sketches/` (or any folder above it) can be a link to somewhere else,
+another drive say. If the link points at nothing -- the drive is not
+mounted -- CoffeeBEANS says so at launch, naming both ends, and offers Try
+Again (once the drive is back), Open Folder (the folder the link is in) and
+Quit. It never creates the missing folder itself, which would quietly
+collect new sketches somewhere other than the drive.
+
 Each example is offered exactly once, recorded in `.seeded`, so a new
 example added in an update arrives on your next launch while an example you
 edited keeps your edit and one you deleted stays deleted.
