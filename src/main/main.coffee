@@ -147,6 +147,23 @@ ipcMain.handle 'app:about', ->
   {version: version.text, note: version.note, text: Version.about version}
 ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
 
+# Whatever would open something on the desktop of whoever runs the app -- a
+# box, a file picker, a file manager, a browser -- goes through here, so no
+# test can ever open one: the suite runs on Robert's own desktop. Before
+# 2026-10-06 two of these checked BEANS_TEST themselves and two did not, and
+# only the report part, by standing in for `shell` around its own checks,
+# kept the file manager and the browser shut (found by a Claude review of
+# main at 404fb07). Under BEANS_TEST it prints what it would have opened, as
+# `<what>: <detail>` -- the startup part reads those lines from a second app
+# -- keeps it in `opened` for the suite, and answers undefined; each caller
+# says what that means for it.
+opened = []
+onDesktop = (what, detail, act) ->
+  return act() unless process.env.BEANS_TEST
+  console.log "#{what}: #{if typeof detail is 'string' then detail else JSON.stringify detail}"
+  opened.push {what, detail}
+  undefined
+
 # The 📣🐞 button. The draft is redacted here, where the folders and the
 # machine's names are known; what is saved is the text the player was shown,
 # edits and all, so a save is never redacted again behind their back.
@@ -158,9 +175,9 @@ ipcMain.handle 'report:draft', (event, ask) ->
   Report.draft {ask..., about}, {data: DATA, app: ROOT}
 ipcMain.handle 'report:save', (event, text) ->
   file = await Report.save REPORTS, text
-  shell.showItemInFolder file
+  onDesktop 'showItemInFolder', file, -> shell.showItemInFolder file
   {file, issues: Report.ISSUES}
-ipcMain.handle 'report:issues', -> shell.openExternal Report.ISSUES
+ipcMain.handle 'report:issues', -> onDesktop 'openExternal', Report.ISSUES, -> shell.openExternal Report.ISSUES
 
 # Edit > Undo and Redo in a text field: the page's native step, run from here
 # because document.execCommand, run in the page, edits CodeMirror's DOM
@@ -362,11 +379,14 @@ CALLED    = {'\r\n': 'CRLF', '\n': 'LF', '\r': 'CR'}
 # tell the author when its lines did not agree. A file that will not be read
 # has endings nobody knows, so it is saved with the platform's and the rename
 # decides: it needs only the folder, and a save that gave up on the read
-# would fail every autosave of a file left mode 000.
+# would fail every autosave of a file left mode 000. The console says so:
+# told only to the terminal, the player saw the watcher's "could not read"
+# and took it that nothing was saved (the integration review, 2026-10-06).
 endingOf = (file) ->
   old = await retried('reading', file, -> readOld file).catch (error) ->
     return '' if error.code is 'ENOENT'
-    console.log "sketch:write: could not read #{file} for its line endings (#{error.code}), saving with the platform's"
+    said = "could not read #{sketchName file}.coffee for its line endings (#{error.code}); saving it with #{CALLED[newEnding()]}"
+    sayProblem said, "sketch:write: #{said}"
     ''
   counts = {}
   counts[ending] = (counts[ending] ? 0) + 1 for ending in old.match(ENDINGS) ? []
@@ -543,11 +563,12 @@ ipcMain.handle 'sketch:list',  ->
 # other path a name travels -- read, write, the watcher -- is confined there.
 ipcMain.handle 'sketch:pick', (event) ->
   win = BrowserWindow.fromWebContents event.sender
-  {canceled, filePaths} = await dialog.showOpenDialog win,
+  picked = onDesktop 'showOpenDialog', SKETCHES, -> dialog.showOpenDialog win,
     title:       'Open a sketch'
     defaultPath: SKETCHES
     properties:  ['openFile']
     filters:     [{name: 'CoffeeScript', extensions: ['coffee']}]
+  {canceled, filePaths} = (await picked) ? {canceled: yes}
   return {canceled: yes} if canceled or not filePaths.length
   # Compared as real paths: the dialog may hand back /private/tmp for /tmp.
   # Spelled as the disk spells it, as :e's names are, in case a dialog hands
@@ -734,11 +755,12 @@ refuseNavigation = (contents) ->
   contents.setWindowOpenHandler -> action: 'deny'
 
 createWindow = ->
-  # A test run has no business taking the screen while you are working in
-  # another window. Never shown is also the strongest form of background there
-  # is, so a suite that passes this way is one that proves a sketch keeps
-  # running when you alt-tab away from it. BEANS_CAPTURE needs a composited
-  # window to photograph, and BEANS_SHOW is for watching a run go by.
+  # A test run has no business taking the screen while whoever started it is
+  # working in another window. Never shown is also the strongest form of
+  # background there is, so a suite that passes this way is one that proves
+  # a sketch keeps running when the player alt-tabs away from it.
+  # BEANS_CAPTURE needs a composited window to photograph, and BEANS_SHOW is
+  # for watching a run go by.
   hidden = process.env.BEANS_TEST and not (process.env.BEANS_CAPTURE or process.env.BEANS_SHOW)
 
   win = new BrowserWindow
@@ -754,14 +776,15 @@ createWindow = ->
       # behind another window, minimised, on another Space. The present loop
       # is the only thing that clears the swap flag, so without this a sketch
       # parked in buffer.swap never wakes up and the app looks wedged until
-      # you Stop it. Alt-tabbing away from a running sketch must not do that.
+      # the player Stops it. Alt-tabbing away from a running sketch must not do
+      # that.
       backgroundThrottling: no
       # Sound starts with the app, not with a click: a sketch that beeps on
       # its first line should be heard.
       autoplayPolicy: 'no-user-gesture-required'
   # Nor any business making noise. The audio thread still runs -- the sound
   # tests read what it reports, not what reaches the speakers -- but nothing
-  # comes out unless you asked to watch the run, when hearing it helps.
+  # comes out unless BEANS_SHOW asked to watch the run, when hearing it helps.
   win.webContents.setAudioMuted yes if process.env.BEANS_TEST and not process.env.BEANS_SHOW
   query = process.env.BEANS_QUERY ? ''
   loadPage win, query
@@ -816,7 +839,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation, opened})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
@@ -915,8 +938,9 @@ startupBox = (error) ->
   """}
 
 # Shows the box until the answer is Try Again (yes) or Quit (no). A test run
-# has nobody to click, so it prints the box and takes its answers from
-# BEANS_STARTUP_ANSWERS, then Quit -- never a box on the screen, never a hang.
+# has nobody to click, so onDesktop prints the box instead, and the answers
+# come from BEANS_STARTUP_ANSWERS, then Quit -- never a box on the screen,
+# never a hang.
 #
 # The synchronous box, not showMessageBox: with no window yet, on Linux, that
 # one's promise never settles -- clicked or closed, the box goes and the app
@@ -925,8 +949,9 @@ startupBox = (error) ->
 startupAnswers = (process.env.BEANS_STARTUP_ANSWERS ? '').split(',').filter Boolean
 
 ask = (box) ->
-  return dialog.showMessageBoxSync box unless process.env.BEANS_TEST
-  console.log "startup box: #{JSON.stringify box}"
+  onDesktop('startup box', box, -> dialog.showMessageBoxSync box) ? answerAsTold box
+
+answerAsTold = (box) ->
   answer = box.buttons.indexOf startupAnswers.shift() ? 'Quit'
   if answer < 0 then box.cancelId else answer
 
@@ -939,8 +964,7 @@ ask = (box) ->
 # Folder comes here too, so a file manager that will not start is said in
 # the console rather than being nothing happening.
 openFolder = (folder) ->
-  return console.log "openPath: #{folder}" if process.env.BEANS_TEST
-  shell.openPath(folder).then (why) -> sayProblem "could not open #{folder}: #{why}" if why
+  onDesktop 'openPath', folder, -> shell.openPath(folder).then (why) -> sayProblem "could not open #{folder}: #{why}" if why
 
 tryAgain = (box) ->
   loop

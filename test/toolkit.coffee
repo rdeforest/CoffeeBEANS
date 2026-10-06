@@ -15,6 +15,10 @@ module.exports = (win, paths) ->
 
   t.js = (code) -> win.webContents.executeJavaScript "(async () => { #{code} })()", yes
 
+  # The window's own, for a check that has to act as Electron would: emit
+  # DevTools opening, or stand in for a debugger command.
+  t.webContents = win.webContents
+
   t.check = (name, ok, detail = '') ->
     t.failures += 1 unless ok
     console.log "#{if ok then 'PASS' else 'FAIL'}  #{name}#{if detail then "   #{detail}" else ''}"

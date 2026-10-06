@@ -48,9 +48,13 @@ whole = (names) ->
 
 # Folders end where a path segment ends: /home/al must not eat the front of
 # /home/alice, nor /home/bob the front of /home/bob.smith. A dot that ends a
-# sentence still ends the folder.
+# sentence still ends the folder. A web address's path is left alone, as
+# the home-shaped rules leave it (IN_URL, below); for a player whose home is
+# /home/alice, `https://example.com/home/alice/x.png` became
+# `https://example.com~/x.png` (the integration review, 2026-10-06). The
+# user name is still taken out of an address by its own rule.
 folder = (where) ->
-  new RegExp "(?:#{spellings(where).map(escape).join '|'})(?![\\p{L}\\p{M}\\p{N}_-]|\\.[\\p{L}\\p{N}])", 'giu'
+  new RegExp "#{IN_URL}(?:#{spellings(where).map(escape).join '|'})(?![\\p{L}\\p{M}\\p{N}_-]|\\.[\\p{L}\\p{N}])", 'giu'
 
 # Anyone's home folder, not only this account's: the same folder reached by
 # another spelling -- Windows's 8.3 `ROBERT~1`, a file URL's `Robert%20Smith`
@@ -76,7 +80,8 @@ NAME = "#{NAME_PART}(?:(?: #{NAME_PART})+(?=#{SEPARATOR}|#{QUOTE_CLOSES}))?"
 # address is matched and put back rather than looked behind for: a
 # lookbehind that ran back over the line made every position cost the
 # line's length, and one 100k-character line took seconds in main (V2's
-# third review, 2026-10-06). So the rules below put back group 1 when set.
+# third review, 2026-10-06). So the rules that use it put back group 1 when
+# set.
 # JSON's escaped `https:\/\/` is an address too.
 IN_URL = "(\\bhttps?:\\\\?/\\\\?/[^\\s'\"<>`?#]*)|"
 # A home or media folder anywhere but inside the player's own folders,
@@ -191,7 +196,7 @@ patterns = ({home, user, host, data, app}) ->
     # end of the text from every BEGIN after it.
     {name: 'private key', find: /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?!-----BEGIN )[\s\S])*?-----END [A-Z ]*PRIVATE KEY-----/g, put: SECRET}
     (for [where, put] in folders
-      {name: "folder #{put}", find: folder(where), put: put})...
+      {name: "folder #{put}", find: folder(where), put: do (put) -> (match, url) -> url ? put})...
     # \\server\share names a machine and, often, whose folder it is:
     # \\fs\home$\frank, \\server\Users\erin. Not \\?\C:\, which is a long
     # local path. Group 1 is one backslash, or two where JSON doubled them.

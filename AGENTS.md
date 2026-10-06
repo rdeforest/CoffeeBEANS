@@ -283,6 +283,17 @@ Verified in Electron 44 while building it; do not re-derive.
   and arm/disarm is `Debugger.enable`/`disable` on the live session, which
   re-enables fine. DevTools forces a detach, so after it closes breakpoints
   work from the next Run (a fresh worker), and the app says so.
+  Narrowed by a Claude reviewer of I1, 2026-10-06 (Electron 44, Linux,
+  DevTools simulated by emitting its events, so the detach was a real
+  `cdp.detach()`): re-enabling the old worker answered in 3ms when it was
+  idle (1 of 1), and hung to the 2s `SETUP_LIMIT` when it was busy in a
+  sketch loop (2 of 2). Auto-attach re-attaches it with the next attach
+  anyway, so main remembers its `targetId` and never enables it again
+  (`stale` in `src/main/debugger.coffee`); Ctrl-\ at it says pausing works
+  from the next Run. A worker born while DevTools was open is enabled as
+  any other: with the events simulated nobody had attached it, but a real
+  DevTools does, and whether enabling it then hangs is untested -- as is a
+  real DevTools session for all of the above.
 - **`Debugger.pause` stops inside ignore-listed code** -- `doSwap`, for a
   sketch parked on a frame -- and a `stepInto` from there never stops on the
   way back to the sketch; V8 only stops a step-in at a call. `stepOut`

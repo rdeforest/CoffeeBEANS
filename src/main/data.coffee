@@ -1,6 +1,6 @@
 # The user's data directory. Every example is offered exactly once: deleting
-# one keeps it deleted, and editing one keeps your edit, because the manifest
-# records what was offered rather than comparing contents.
+# one keeps it deleted, and editing one keeps the player's edit, because the
+# manifest records what was offered rather than comparing contents.
 fsp  = require 'fs/promises'
 os   = require 'os'
 path = require 'path'

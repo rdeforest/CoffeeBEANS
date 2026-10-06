@@ -698,6 +698,12 @@ module.exports = (t) ->
       check 'a sketch that cannot be read is still saved, with the platform\'s endings',
         disk is "print 'ONE'\nprint 'LOCKED'\n" and not dirty and not said.includes('could not save'),
         JSON.stringify {disk, dirty, said}
+      # Told only to the terminal until the integration review of
+      # 2026-10-06: the player saw the watcher's "could not read" and took
+      # it that nothing was saved.
+      check 'and the console says the endings could not be read, and which it saved with',
+        said.includes("could not read #{endsName}.coffee for its line endings (EACCES); saving it with LF"),
+        JSON.stringify said
   finally
     newline.forced    = null
     faults.windows    = no

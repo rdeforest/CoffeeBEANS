@@ -259,28 +259,31 @@ module.exports = (t) ->
     held is 'frame paused' and ended and not shot and /42$/.test(kept),
     JSON.stringify {held, ended, shot, kept}
 
-  # 15. A hold pressed while the worker boots. 'ready', and the run it sends,
-  # set the status under the hold, so the sketch reads 'running' held at its
-  # first frame with `resumeTo` still 'booting'. Stop from there ends it. The
-  # first Run is only there so the second neither arms nor finds a hold. 19
-  # is the same with a sketch that catches its stop.
+  # 15. A hold pressed while the worker boots holds the run it boots for, at
+  # its first frame, and says so. Until 2026-10-06 'ready', and the run it
+  # sends, wrote over the hold: the sketch read 'running' held at its first
+  # frame with `resumeTo` still 'booting' (23 checks that). Stop from there
+  # ends it. The first Run is only there so the second neither arms nor finds
+  # a hold. 19 is the same with a sketch that catches its stop.
   await t.clearConsole()
   await load "screen 320, 200\nprint 'warm'\nloop\n  buffer.swap\n"
   await click 'runFresh'
   await becomes 'running'
+  await t.waitFor "return /warm/.test(document.getElementById('console').textContent)"
+  await t.clearConsole()             # so the 'warm' waited for below is the second run's
   boot = await js """
     document.getElementById('runFresh').click()
     const before = document.getElementById('status').textContent
     document.getElementById('pauseFrame').click()
     return [before, document.getElementById('status').textContent]
   """
-  running = await becomes 'running', 10000
-  warm    = await t.waitFor "return /warm/.test(document.getElementById('console').textContent)"
+  warm    = await t.waitFor "return /warm/.test(document.getElementById('console').textContent)", 10000
+  held    = await status()
   await click 'stop'
   ended   = await becomes 'ready', 10000
   check 'Stop ends a sketch held from its boot',
-    boot[0] is 'booting' and boot[1] is 'frame paused' and running and warm and ended,
-    JSON.stringify {boot, running, warm, ended, status: await status()}
+    boot[0] is 'booting' and boot[1] is 'frame paused' and warm and held is 'frame paused' and ended,
+    JSON.stringify {boot, warm, held, ended, status: await status()}
 
   # 16. Stop while a run waits on arming the debugger cancels that run: it is
   # not a run yet, and once armed nothing would stop it going ahead. 15's
@@ -358,24 +361,29 @@ module.exports = (t) ->
   # 19. 15 again, with a sketch that catches its stop, so only the 250ms
   # deadline ends it. The deadline waits on 'running'; Stop let the hold go
   # as the 'booting' it remembered, the deadline gave up at once, and the
-  # worker spun on with the status reading booting and Stop gray.
+  # worker spun on with the status reading booting and Stop gray. The hold
+  # remembers 'running' for its run now (runState), and Stop lets it go as
+  # 'running' whatever it remembers.
   await t.clearConsole()
   await load "screen 320, 200\nprint 'warm'\nspins = 0\nloop\n  try\n    buffer.swap\n  catch e\n    spins += 1\n"
   await click 'runFresh'
   await becomes 'running'
+  await saw '/warm/'
+  await t.clearConsole()
   boot = await js """
     document.getElementById('runFresh').click()
     const before = document.getElementById('status').textContent
     document.getElementById('pauseFrame').click()
     return [before, document.getElementById('status').textContent]
   """
-  running = await becomes 'running', 10000
+  warm  = await saw '/warm/', 10000
+  held  = await status()
   await click 'stop'
   ended = await becomes 'ready', 10000
   shot  = await saw '/no yield point/'
   check 'Stop ends a sketch held from its boot that catches its stop',
-    boot[0] is 'booting' and boot[1] is 'frame paused' and running and ended and shot,
-    JSON.stringify {boot, running, ended, shot, status: await status()}
+    boot[0] is 'booting' and boot[1] is 'frame paused' and warm and held is 'frame paused' and ended and shot,
+    JSON.stringify {boot, warm, held, ended, shot, status: await status()}
 
   # 20. Two evals in one tick over a running sketch, `breakpoint` new in the
   # buffer, so the first arms. The second meets the arming and must still
@@ -466,3 +474,83 @@ module.exports = (t) ->
   check 'a hold pressed while a run is armed is let go to running',
     pressed[0] is 'arming' and pressed[1] is 'frame paused' and refused and held is 'frame paused' and going and n > from and ended,
     JSON.stringify {pressed, refused, held, going, from, n, ended}
+
+  # 23. A hold pressed while the worker boots, for the run it boots for. The
+  # 'ready' that ends the boot and the run it sends wrote their status over
+  # the hold: the sketch sat at its first frame under 'running', and the
+  # hold button, which reads the status, held again rather than let go --
+  # nothing moved (found by a Claude review of main at 404fb07). The first
+  # Run is only there so the second neither arms nor finds a hold.
+  WARMS = "screen 320, 200\nn = 0\nprint 'warm'\nloop\n  n += 1\n  buffer.swap\n"
+  await t.clearConsole()
+  await load WARMS
+  await click 'runFresh'
+  await becomes 'running'
+  await saw '/warm/'
+  await t.clearConsole()
+  boot = await js """
+    document.getElementById('runFresh').click()
+    const before = document.getElementById('status').textContent
+    document.getElementById('pauseFrame').click()
+    return [before, document.getElementById('status').textContent]
+  """
+  warm  = await saw '/warm/', 10000
+  held  = await status()
+  first = await reads()
+  await click 'pauseFrame'
+  going = await becomes 'running'
+  n     = await counted first
+  await click 'stop'
+  ended = await becomes 'ready'
+  check 'a hold pressed while the worker boots reads as a hold once its run starts, and one press lets it go',
+    boot[0] is 'booting' and boot[1] is 'frame paused' and warm and held is 'frame paused' and first is 1 and
+      going and n > first and ended,
+    JSON.stringify {boot, warm, held, first, going, n, ended}
+
+  # 24. The same at an idle worker: a hold taken at 'ready' holds the next
+  # run. An Eval asked whether the worker was busy of the status line, which
+  # said 'frame paused', and was refused as already running.
+  await t.clearConsole()
+  await load WARMS
+  await click 'pauseFrame'
+  idle  = await status()
+  await t.evalAll()
+  warm  = await saw '/warm/', 10000
+  held  = await status()
+  first = await reads()
+  await click 'pauseFrame'
+  going = await becomes 'running'
+  n     = await counted first
+  text  = await t.consoleText()
+  await click 'stop'
+  ended = await becomes 'ready'
+  check 'an Eval after a hold at an idle worker runs, held at its first frame, and one press lets it go',
+    idle is 'frame paused' and warm and held is 'frame paused' and first is 1 and going and n > first and ended and
+      not /already running/.test(text),
+    JSON.stringify {idle, warm, held, first, going, n, ended, text}
+
+  # 25. The status line is as wide as its widest word, so the header does not
+  # shift as it changes -- in whatever monospace font the platform gives it.
+  # In this machine's, 6rem held `error paused` with 2px to spare (measured
+  # by Claude, 2026-10-06), so the check stands in a wider font by setting a
+  # larger size on the line alone, which a width in rem does not follow.
+  # Each word is measured in place and the line put back in the same turn,
+  # before anything can draw it.
+  widths = await js """
+    const line = document.getElementById('status')
+    const was  = line.textContent
+    const seen = {}
+    for (const size of ['', '20px']) {
+      line.style.fontSize = size
+      for (const word of ['ready', 'booting', 'arming', 'running', 'error', 'frame paused', 'line paused', 'error paused']) {
+        line.textContent = word
+        seen[`${word} ${size || 'as set'}`] = line.getBoundingClientRect().width
+      }
+    }
+    line.style.fontSize = ''
+    line.textContent = was
+    return seen
+  """
+  sizes = (size) -> new Set(width for name, width of widths when name.endsWith size).size
+  check 'the status line is as wide for every word it shows, in a wider font too, so the header does not shift',
+    sizes('as set') is 1 and sizes('20px') is 1, JSON.stringify widths

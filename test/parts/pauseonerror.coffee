@@ -824,3 +824,172 @@ loop
   check '/help error paused says what it is and how it ends, and /help stop on errors how to turn it off',
     helped.paused.includes('Continue') and helped.paused.includes('refused') and helped.off.includes('Edit > Stop on Errors'),
     JSON.stringify helped
+
+  # 25-27, from a Claude review of main at 404fb07 (2026-10-06): the seams
+  # between attaching, releasing and pausing a worker.
+  await t.stopOnErrors yes
+  # Electron's debugger carries its methods on the object itself, not on a
+  # prototype, and the window hands back the same one each time.
+  cdp      = t.webContents.debugger
+  realSend = cdp.sendCommand
+  laterRun = (source) ->
+    await setDoc source
+    await wait 500
+    await clearConsole()
+    await click 'runFresh'
+
+  # 25. A new worker waits for the debugger before it runs anything, and is
+  # released with Runtime.runIfWaitingForDebugger. That failing was dropped:
+  # the worker sat at `booting` for good with nothing said anywhere. Refused
+  # here by standing in for the command, once.
+  refusals = 0
+  cdp.sendCommand = (method, params, id) ->
+    if method is 'Runtime.runIfWaitingForDebugger' and refusals is 0
+      refusals += 1
+      return Promise.reject new Error 'runIfWaitingForDebugger refused by the suite'
+    realSend.call cdp, method, params, id
+  try
+    await laterRun "print 'released'\n"
+    said  = await t.waitFor "return /refused by the suite/.test(document.getElementById('console').textContent)", 5000
+    stuck = await status()
+  finally
+    cdp.sendCommand = realSend
+  await laterRun "print 'released'\n"
+  freed = await statusBecomes 'ready', 10000
+  check 'a new worker that could not be released says so, and the next Run is not held up by it',
+    refusals is 1 and said and stuck is 'booting' and freed,
+    JSON.stringify {refusals, said, stuck, freed, console: await consoleText()}
+
+  # 26. Ctrl-\ while an error pause is still being set up, then Run. The
+  # pause waits for the setup's turn -- here held by a thrown value whose
+  # message never finishes reading -- and once the Run had replaced the
+  # session it was sent to the new worker, which stopped at its first line
+  # though nobody asked it to.
+  await setDoc """
+slow = {}
+Object.defineProperty slow, 'message', get: ->
+  print 'reading the message'
+  null while yes
+throw slow
+"""
+  await wait 500
+  await clearConsole()
+  await click 'runFresh'
+  reading = await t.waitFor "return /reading the message/.test(document.getElementById('console').textContent)", 5000
+  pressed = await status()
+  await js "Stepping.suspend(); return true"
+  before = (await pauseNumber()) ? 0
+  await laterRun "print 'fresh'\n"
+  ended  = await until_ (-> s = await status(); s if s in ['ready', 'line paused', 'error paused', 'error']), 10000
+  await t.quiet()
+  text   = await consoleText()
+  check 'Ctrl-\\ while an error pause is set up, then Run: the new worker runs, unpaused',
+    reading and pressed is 'running' and ended is 'ready' and text.includes('fresh') and
+      ((await pauseNumber()) ? 0) is before,
+    JSON.stringify {reading, pressed, ended, pause: await pauseNumber(), before, text}
+  await click 'stop' if ended in ['line paused', 'error paused']
+  await t.settle()
+
+  # 27. DevTools takes the session, and gives it back. Nothing told the
+  # renderer, which went on skipping the arm a Run makes first because the
+  # buffer's verdict had not changed, so the debugger never attached again:
+  # every error after ended the run plainly, and breakpoints did nothing,
+  # though main said they would work from the next Run. Simulated: the
+  # events are emitted, so no DevTools window opens; the detach is real.
+  failing = "ball = null\nball.x\n"
+  stopsAt = ->
+    since = (await pauseNumber()) ? 0
+    await laterRun failing
+    how = await until_ (-> s = await status(); s if s in ['error', 'error paused']), 10000
+    if how is 'error paused'
+      await js "Stepping.resume(); return true"
+      await statusBecomes 'error'
+    how
+  before = await stopsAt()
+  await clearConsole()
+  t.webContents.emit 'devtools-opened'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+  told  = await consoleText()
+  after = for run in [1, 2]
+    how = await stopsAt()
+    await t.quiet()
+    {how, said: (await consoleText()).trim()}
+  check 'after DevTools has been opened and closed, the next Run stops on its error again, and so does the one after',
+    before is 'error paused' and told.includes('work again from the next Run') and
+      after.every(({how, said}) -> how is 'error paused' and not said.includes 'debugger:'),
+    JSON.stringify {before, told, after}
+
+  # 28-30, from a Claude review of I1 (2026-10-06): a worker that was running
+  # when DevTools took the session. Enabling it again once DevTools let go
+  # hung for as long as it was busy (AGENTS.md, "Never re-attach"), so main
+  # never enables it again; breakpoints and error stops come back with the
+  # next Run, as the app says when DevTools closes.
+  LOOPING = "screen 320, 200\nn = 0\nloop\n  n += 1\n  buffer.swap\n"
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-opened'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+
+  # 28. A Run over it arms first, and the arm attached it again and waited on
+  # it: the Run sat at `arming` for two seconds and said the debugger had
+  # timed out.
+  await setDoc failing
+  await wait 500
+  await clearConsole()
+  asked  = Date.now()
+  await click 'runFresh'
+  await until_ (-> s = await status(); s if s isnt 'arming'), 10000
+  arming = Date.now() - asked
+  how    = await until_ (-> s = await status(); s if s in ['error', 'error paused']), 10000
+  if how is 'error paused'
+    await js "Stepping.resume(); return true"
+    await statusBecomes 'error'
+  await t.quiet()
+  said = await consoleText()
+  check 'a Run over a sketch that was running when DevTools opened and closed goes at once, and stops on its error',
+    arming < 500 and how is 'error paused' and not said.includes('debugger:'),
+    JSON.stringify {arming, how, said}
+
+  # 29. A worker born while DevTools held the page was never ours to let go
+  # of. The first Ctrl-\ after DevTools closed took its speaker before there
+  # was a session to speak to, and said "could not pause -- is DevTools
+  # open?"; only the second paused.
+  t.webContents.emit 'devtools-opened'
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+  await clearConsole()
+  since = (await pauseNumber()) ? 0
+  await js "Stepping.suspend(); return true"
+  seq   = await nextPause since, 5000
+  now   = await status()
+  said  = await consoleText()
+  check 'a sketch run while DevTools was open pauses at the first Ctrl-\\ after it closes',
+    seq and now is 'line paused' and not said.includes('could not pause'),
+    JSON.stringify {seq, now, said}
+  await click 'stop'
+  await t.settle()
+
+  # 30. Ctrl-\ at a worker that was running when DevTools opened: the same
+  # wait as 28, then "is DevTools open?". It says what is true, at once.
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  t.webContents.emit 'devtools-opened'
+  t.webContents.emit 'devtools-closed'
+  await t.quiet()
+  await clearConsole()
+  asked = Date.now()
+  await js "await Stepping.suspend(); return true"
+  took  = Date.now() - asked
+  await t.quiet()
+  now   = await status()
+  said  = await consoleText()
+  check 'Ctrl-\\ at a sketch that was running when DevTools opened says, at once, that pausing works again from the next Run',
+    took < 500 and now is 'running' and said.includes('pausing works again from the next Run') and
+      not said.includes('debugger:') and not said.includes('is DevTools open'),
+    JSON.stringify {took, now, said}
+  await click 'stop'
+  await t.settle()
