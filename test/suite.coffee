@@ -20,6 +20,7 @@ path = require 'path'
 PARTS = [
   'startup', 'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'about', 'input', 'random', 'names', 'sound', 'perf'
+  'pauseonerror'
 ]
 
 module.exports = (win, paths) ->

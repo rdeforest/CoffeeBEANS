@@ -86,12 +86,20 @@ loop
     idle is 'ready' and after.includes('AFTER') and not after.includes('no yield point'),
     "status=#{idle} #{JSON.stringify after.trim()}"
 
-  # 7. `breakpoint` costs nothing when nobody is watching. A debugger statement
-  # with no debugger attached is a no-op, which is the whole reason the command
-  # can be spelled in the source rather than kept in a list of line numbers --
-  # but if that were ever not true, every sketch carrying one would hang (with
-  # DevTools open, say, which keeps our debugger out). Spelled in pieces here,
-  # because a buffer that says the word arms the debugger.
+  # 7. A `breakpoint` left in a sketch always stops it. Until pausing on
+  # errors this check said the opposite -- that the command cost nothing with
+  # no debugger attached -- but the debugger is now armed for every run
+  # (Robert, 2026-10-05; AGENTS.md, Decisions), so a debugger is always
+  # attached. With DevTools open, which keeps ours out, it is still a no-op;
+  # that is not tested here. Spelled in pieces so the buffer never says the
+  # word: what stops it is the run's arming, not the buffer's.
+  linePaused = -> t.js "return Stepping.linePaused()"
+  pausedAfter = (since) ->
+    deadline = Date.now() + 10000
+    loop
+      seq = await linePaused()
+      return seq if seq and seq > since or Date.now() > deadline
+      await wait 25
   await setDoc """
 screen 320, 200
 word = 'break' + 'point'
@@ -106,10 +114,20 @@ print 'inAFunction=' + each 21
   await wait 500
   await clearConsole()
   await evalAll()
-  text = await settled()
-  check 'breakpoint is free when no debugger is attached',
-    text.includes('kind=function') and text.includes('ranOn=true') and text.includes('inAFunction=42'),
-    JSON.stringify text.trim()
+  atTop = await pausedAfter 0
+  topStatus = await status()
+  await t.js "Stepping.resume(); return true"
+  inFunction = await pausedAfter atTop ? 0
+  await t.js "Stepping.resume(); return true"
+  # Not settled(): a line pause counts as settled, and the resume may not
+  # have reached the status line yet.
+  ended = await t.waitFor "return document.getElementById('status').textContent === 'ready'", 10000
+  await t.quiet()
+  text = await consoleText()
+  check 'breakpoint always stops: the debugger is armed for every run',
+    atTop and topStatus is 'line paused' and inFunction > atTop and ended and
+      text.includes('kind=function') and text.includes('ranOn=true') and text.includes('inAFunction=42'),
+    "pauses #{atTop} then #{inFunction} status=#{topStatus} console=#{JSON.stringify text.trim()}"
 
   # 8. the runtime modules are named, so a debugger can be told to ignore them
   # in one pattern -- and so that breakpoint.coffee can be left out of it.

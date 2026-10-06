@@ -22,11 +22,19 @@ status = ''
 # whole image in mid-flight. Anything that refuses to run while a sketch is
 # running has to refuse while one is paused too.
 #
-# Two kinds of pause, named apart: `frame paused` holds at a buffer.swap and
+# Three kinds of pause, named apart: `frame paused` holds at a buffer.swap and
 # still answers the prompt through the worker; `line paused` is stopped in V8
-# on a line the author wrote, and everything goes through the debugger.
-PAUSED = ['frame paused', 'line paused']
+# on a line the author wrote, and everything goes through the debugger;
+# `error paused` is a line pause at an uncaught error, which can only end.
+PAUSED = ['frame paused', 'line paused', 'error paused']
 BUSY   = ['running', PAUSED...]
+
+# What the hold button does from each pause; anywhere else, it holds.
+RUN_ON      = 'Let the sketch run on (F8)'
+HOLD_TITLES =
+  'frame paused': RUN_ON
+  'line paused':  RUN_ON
+  'error paused': 'Let the error end the run (F8)'
 
 setStatus = (text) ->
   status = text
@@ -34,15 +42,16 @@ setStatus = (text) ->
   # Eval means "evaluate into the live worker", which a busy worker cannot
   # do, so the button says so. Run replaces the worker and always works.
   document.getElementById('evalRegion').disabled = text in BUSY
-  document.getElementById('stepFrame').disabled  = text not in PAUSED
-  document.getElementById('stepLine').disabled   = text not in BUSY
+  # Neither step goes anywhere from an error: the run can only unwind.
+  document.getElementById('stepFrame').disabled  = text not in PAUSED or text is 'error paused'
+  document.getElementById('stepLine').disabled   = text not in BUSY or text is 'error paused'
   holding = text in PAUSED
   # The audio clock stands still with the frame clock, so stepping does not
   # leave the music running on ahead of the picture.
   Atomics.store i32, H.SOUND_HOLD, if holding then 1 else 0
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
-  hold.title       = if holding then 'Let the sketch run on (F8)' else 'Hold the sketch at its next frame'
+  hold.title       = HOLD_TITLES[text] ? 'Hold the sketch at its next frame'
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -874,6 +883,7 @@ goFrames = ->
 # From a line pause, a frame step runs on to the next frame boundary and holds
 # there: the swap it reaches is simply not served.
 stepFrame = ->
+  return cannotStep() if status is 'error paused'
   if linePaused
     seq = linePaused
     return stillAsking() unless await frameFree()
@@ -890,6 +900,10 @@ stepFrame = ->
 linePaused  = null
 pausedNames = []          # every name the paused frame's scopes hold, for Tab
 
+# The error an error pause has already reported, so the run that ends with it
+# does not report it again.
+errorSaid = no
+
 # Suspend now, on whatever line is running. From a frame pause the swap has to
 # be let go, or the sketch never reaches a line to stop on.
 linePause = ->
@@ -903,10 +917,14 @@ linePause = ->
 # is the saying so).
 stillAsking = -> say '*** still evaluating in the paused frame ***', 'sys'
 
+# An error pause can only end the run (see step in src/main/debugger.coffee).
+cannotStep = -> say '*** stopped at an error -- Continue (F8) ends the run ***', 'sys'
+
 # Each waits for the frame to be free, and the pause may be gone by then --
 # Stop, or a Run -- with nothing left to step or continue.
 stepLine = ->
   return linePause() unless linePaused
+  return cannotStep() if status is 'error paused'
   seq = linePaused
   return stillAsking() unless await frameFree()
   return unless linePaused is seq
@@ -950,6 +968,11 @@ watchBuffer = ->
     syncDebug() unless BREAKPOINT.test(Editor.all()) is armedFor
   ), 300
 
+endLinePause = ->
+  linePaused = null
+  Editor.showLine null
+  hideVars()
+
 lineOnScreen = (where) ->
   return null unless where?.line? and where.name
   if where.name.replace(/ \(region\)$/, '') is Editor.name() then where.line else null
@@ -957,16 +980,22 @@ lineOnScreen = (where) ->
 beans.debug.onEvent (event) ->
   switch event.type
     when 'paused'
+      # The worker Run just threw away, reporting an error it stopped on as
+      # the Run landed. Applied, it would put the old error in the new run's
+      # console and its pause over the new run's status.
+      return if status is 'booting'
       linePaused  = event.seq
       pausedNames = (entry.name for entry in scope.vars for scope in event.scopes).flat()
-      setStatus 'line paused'
+      setStatus if event.error then 'error paused' else 'line paused'
       Editor.showLine lineOnScreen event.where
       showVars event
+      showErrorPause event if event.error
+    # The worker may have said the run is over before this arrives; then the
+    # pause is already gone, and the stack a failed run shows must stay.
     when 'resumed'
-      linePaused = null
-      Editor.showLine null
-      hideVars()
-      setStatus (if paused then 'frame paused' else 'running') if status is 'line paused'
+      return unless linePaused
+      endLinePause()
+      setStatus (if paused then 'frame paused' else 'running') if status in ['line paused', 'error paused']
     when 'problem'
       say event.text, 'err'
   undefined
@@ -1192,6 +1221,19 @@ showFailure = ({kind, line, column, frames, message}) ->
   promptLine.focus()
   undefined
 
+# An uncaught error, stopped where it was thrown: said the way a failed run
+# says it, once, and marked as one, with the paused frame in the pane and
+# the prompt to ask it questions. The canvas focus a Run left pending would
+# otherwise take the keyboard back.
+showErrorPause = (event) ->
+  clearTimeout canvasTimer
+  sayFailure event.error
+  errorSaid = yes
+  say '    stopped where it happened -- ask the prompt, then Continue (F8) to end the run', 'sys'
+  Editor.showError lineOnScreen event.where
+  promptLine.focus()
+  undefined
+
 # buffer.fps paces swaps, so the gate belongs on the branch that serves one.
 # The worker stays parked until its frame is due, which is the whole point:
 # a sketch asking for 30fps should spend the rest of the time asleep.
@@ -1316,25 +1358,43 @@ messages =
     # the end of boot instead, it would be answered from an empty image.
     worker.postMessage type: 'ask'
   load:    (data) -> answerLoad data.url
-  done:    -> standDown(); setStatus 'ready'
-  stopped: -> standDown(); say '*** stopped ***', 'sys'; setStatus 'ready'
+  done:    -> finished(); setStatus 'ready'
+  stopped: -> finished(); say '*** stopped ***', 'sys'; setStatus 'ready'
   error:   (data) ->
-    standDown()
-    where = if data.line? then " (line #{data.line})" else ''
-    say "#{data.stage}#{where}: #{data.message}", 'err'
-    # The frames span more than one sketch only when a region defined a helper
-    # another region calls; then say which sketch each frame belongs to.
-    frames = data.frames ? []
-    multi  = (new Set(step.name for step in frames)).size > 1
-    # Not `for frame in frames`: at this scope that is the present loop, and
-    # a comprehension variable would quietly reassign it. See NOTES.md.
-    for step in frames
-      site = step.fn ? 'top level'
-      site = "#{site} in #{step.name}" if multi and step.name
-      code = if step.text then ":  #{step.text}" else ''
-      say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
+    drainPrints()                     # what the sketch printed came first
+    # Something an earlier run left behind, failing while the next is busy:
+    # news, but that run is not over, and keeps its status and the keyboard.
+    return sayFailure data if data.stage is LATE and status in BUSY
+    sayFailure data unless errorSaid and data.stage is 'run'
+    finished()
     setStatus 'error'
     showFailure data
+
+# The stage worker-boot.js gives an error thrown once its run had ended.
+LATE = 'after the run'
+
+# The worker only speaks once it is running again, so a pause still showing
+# is over, whether or not the debugger has said so yet.
+finished = ->
+  standDown()
+  errorSaid = no
+  endLinePause() if linePaused
+
+sayFailure = (data) ->
+  where = if data.line? then " (line #{data.line})" else ''
+  say "#{data.stage}#{where}: #{data.message}", 'err'
+  # The frames span more than one sketch only when a region defined a helper
+  # another region calls; then say which sketch each frame belongs to.
+  frames = data.frames ? []
+  multi  = (new Set(step.name for step in frames)).size > 1
+  # Not `for frame in frames`: at this scope that is the present loop, and
+  # a comprehension variable would quietly reassign it. See NOTES.md.
+  for step in frames
+    site = step.fn ? 'top level'
+    site = "#{site} in #{step.name}" if multi and step.name
+    code = if step.text then ":  #{step.text}" else ''
+    say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
+  undefined
 
 # nativeImage hands back BGRA; the framebuffer wants RGBA. One swizzle here
 # beats one per pixel at draw time.
@@ -1389,6 +1449,10 @@ start = (thenRun = null) ->
   # own, and woken if it is parked on a frame, before anything is reset.
   Atomics.add    i32, H.OWNER, 1
   Atomics.notify i32, H.SWAP
+  # A worker terminated while stopped at an error reports that error to its
+  # Worker object on the way out, and its onerror would set 'error' over the
+  # new worker's status (found by the pause-on-error prototype, 2026-10-05).
+  worker?.onerror = (event) -> event.preventDefault()
   worker?.terminate()
   drainPrints()                       # anything the old worker already wrote
   Atomics.store i32, H.PRINT_HEAD, 0
@@ -1403,9 +1467,8 @@ start = (thenRun = null) ->
   clearInput()
   paused   = no                       # a new sketch does not inherit a pause
   stepOnce = no
-  linePaused = null                   # nor a line pause: the old worker is gone
-  Editor.showLine null
-  hideVars()
+  endLinePause()                      # nor a line pause: the old worker is gone
+  errorSaid = no
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
@@ -1440,15 +1503,13 @@ stop = ->
   # the deadline only starts once it is actually running. Timed from the
   # press instead, it would always miss, destroy the live image, and blame
   # "no yield point", which would be a lie.
+  # The debugger is armed for every run, so a Stop always sets pauses aside.
+  skipping = yes
   if linePaused
-    linePaused = null
-    skipping = yes
+    endLinePause()
     await beans.debug.resume yes
-    Editor.showLine null
-    hideVars()
-    setStatus 'running' if status is 'line paused'
-  else if armedFor
-    skipping = yes
+    setStatus 'running' if status in ['line paused', 'error paused']
+  else
     beans.debug.resume yes
   # The deadline belongs to this worker. A restart before it passes replaces
   # the worker, and this check must not shoot the new one.

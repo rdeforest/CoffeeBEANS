@@ -359,8 +359,10 @@ The `>` prompt then asks about the stopped call, and can change it.
     /step              run on to the next frame and hold there
     /continue          carry on, from either kind of pause
 
-A sketch that says `breakpoint` nowhere runs with no debugger at all. With
-DevTools open, `breakpoint` does nothing: the two cannot share the page.
+The debugger is on for every run, so an uncaught error stops on the line
+that threw, with its frame in the pane and the prompt, until Continue (F8)
+ends the run. With DevTools open neither happens, and `breakpoint` does
+nothing: the two cannot share the page.
 
 ## Panels
 

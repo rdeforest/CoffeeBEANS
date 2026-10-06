@@ -14,6 +14,23 @@ CoffeeScript = require 'coffeescript'
 
 SKETCH     = /^beans-run-\d+\.coffee$/
 BREAKPOINT = 'beans-breakpoint.js'
+BOOT       = '/src/renderer/worker-boot.js'
+
+# Armed for every run, decided by Robert on 2026-10-05 (AGENTS.md, Decisions):
+# an error can only be stopped on if the Debugger domain is already on when
+# it is thrown. What the buffer says (`wanted`) and a pause asked for by key
+# (`forced`) no longer decide whether it is on; they and the renderer's
+# arm-from-the-buffer code are kept until Robert decides whether they go.
+ALWAYS = yes
+
+# Whether a run's uncaught error stops where it was thrown. One switch for the
+# app: the Stop on Errors preference sets it (track E2), and so does the
+# suite, which turns it off for every part but the one that tests it.
+errorStops = yes
+pauseState = -> if errorStops then 'uncaught' else 'none'
+
+# The two reasons V8 gives for stopping on something thrown.
+THROWN = ['exception', 'promiseRejection']
 
 # Only pause in the author's code. The runtime is one family by design; the
 # worker bootstrap and the vendored compiler live under src/renderer/.
@@ -38,6 +55,15 @@ HELPERS = ['modulo', 'boundMethodCheck']
 CHASE_LIMIT = 200
 
 SETUP_LIMIT = 2000
+
+# The debugger is on for every run, so what it keeps per script has to stay
+# bounded for the life of a worker. Sketch scripts are kept as many as the
+# worker keeps of them for its tracebacks (RUNS_KEPT in worker-boot.js).
+# V8's own cache of scripts the heap has let go of is unbounded unless told;
+# each run carries an inline source map of tens of kilobytes. The size is a
+# choice, not a measurement.
+SKETCHES_KEPT = 32
+SCRIPT_CACHE  = 8 * 1024 * 1024
 
 # How long the prompt may run against a paused frame before V8 is told to
 # give up. `Array.from forever()` never returns, and while it runs nothing
@@ -213,6 +239,17 @@ module.exports = (win) ->
 
   scriptOf = (frame) -> scripts.get frame.location.scriptId
 
+  # Only scripts with a name. The prompt's lines and our own evaluations have
+  # none and come several to a line typed; unknown reads as ours everywhere,
+  # which is what they are. A pause in a sketch older than the ones kept
+  # reads as ours too, as its frames drop out of the worker's traceback.
+  remember = ({scriptId, url, sourceMapURL}) ->
+    return unless url
+    scripts.set scriptId, {url, mapUrl: sourceMapURL}
+    return unless SKETCH.test url
+    sketches = (id for [id, script] from scripts when SKETCH.test script.url)
+    scripts.delete id for id in sketches[...-SKETCHES_KEPT]
+
   mapOf = (script) ->
     script.map ?= mapFromUrl script.mapUrl
     script.map
@@ -268,12 +305,21 @@ module.exports = (win) ->
     ready = do ->
       try
         await within SETUP_LIMIT, do ->
-          await cdp.sendCommand 'Debugger.enable', {}, id
+          await cdp.sendCommand 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, id
           await cdp.sendCommand 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, id
+          await cdp.sendCommand 'Debugger.setPauseOnExceptions', {state: pauseState()}, id
       catch error
         enabled = no if session is id
         tell type: 'problem', text: "debugger: #{error.message}"
       undefined
+
+  # The switch, flipped while this session is live.
+  exceptions = ->
+    return unless enabled and session
+    await ready
+    await asking?.catch(->)             # nothing reaches V8 while one is out
+    await send('Debugger.setPauseOnExceptions', state: pauseState()).catch (error) ->
+      tell type: 'problem', text: "debugger: #{error.message}"
 
   disable = ->
     return if stopped or chase or not enabled or not session
@@ -289,7 +335,7 @@ module.exports = (win) ->
     enabled = no
     ready   = null
     try
-      await enable() if wanted or forced
+      await enable() if armWanted()
     finally
       # Without this the worker waits for us forever and the app sits on
       # `booting` with nothing said anywhere.
@@ -299,7 +345,7 @@ module.exports = (win) ->
   attach = ->
     return true if cdp.isAttached()
     if devtools
-      tell type: 'problem', text: 'breakpoints are off while DevTools is open'
+      tell type: 'problem', text: 'breakpoints and error stops are off while DevTools is open'
       return false
     try
       cdp.attach '1.3'
@@ -312,8 +358,10 @@ module.exports = (win) ->
       tell type: 'problem', text: "debugger: #{error.message}"
       false
 
+  armWanted = -> ALWAYS or wanted or forced
+
   settle = ->
-    if wanted or forced
+    if armWanted()
       return false unless await attach()
       await enable()
       enabled
@@ -350,16 +398,77 @@ module.exports = (win) ->
       shown.push {title, vars} if vars.length or scope.type is 'local'
     shown
 
-  report = (frames) ->
-    top   = frames[0]
+  # `at` is the frame to show: the top one, except at an error thrown inside
+  # the runtime, where it is the first one the author wrote. `error` is the
+  # report the run would have made, for an error pause.
+  report = (frames, at = 0, error = null) ->
+    top   = frames[at]
     where = locate top
-    stopped = {frames, where, seq: ++seq}
-    tell {type: 'paused', seq, where, scopes: await scopesOf top}
+    stopped = {frames, at, where, error, seq: ++seq}
+    tell {type: 'paused', seq, where, error, scopes: await scopesOf top}
+
+  # The frame a pause shows, and the one the prompt and the pane work in.
+  pausedFrame = -> stopped.frames[stopped.at]
+
+  # A run's own error comes up through the worker's dispatch of it; one thrown
+  # once the run is over -- a timer, a promise callback, after an await -- has
+  # nothing of the bootstrap beneath it. See dispatchRun in worker-boot.js.
+  inRun = (frames) ->
+    frames.some (frame) -> frame.functionName is 'dispatchRun' and scriptOf(frame)?.url?.endsWith BOOT
+
+  # A thrown value as an argument: by reference if it is an object, by value
+  # if not -- `throw 'oops'` comes back as a primitive with no objectId.
+  argumentFor = (thrown) ->
+    return {objectId: thrown.objectId} if thrown.objectId
+    return {unserializableValue: thrown.unserializableValue} if thrown.unserializableValue
+    {value: thrown.value}
+
+  # The report the run would have made, asked of the worker, so an error that
+  # stops and one that just ends the run say the same thing.
+  failureOf = (thrown, frame) ->
+    global = frame.scopeChain.find (scope) -> scope.type is 'global'
+    {result, exceptionDetails} = await send 'Runtime.callFunctionOn',
+      objectId: global.object.objectId, returnByValue: yes, arguments: [argumentFor thrown]
+      functionDeclaration: 'function (error) { return REPL.failure(error) }'
+    throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
+    result.value
+
+  # Where a run's uncaught error stops, frame live. Everything else V8 stops
+  # on for a throw goes straight on, the renderer never hearing of it, to be
+  # reported the ordinary way: a Stop's Interrupted, which is the sketch
+  # being let go; a rejection, which never ends a run; an error thrown after
+  # the run ended, which Robert decided is reported and never stopped on
+  # (2026-10-05); and one with nothing of the author's on the stack, ours.
+  onException = (params) ->
+    frames = params.callFrames
+    at     = frames.findIndex (frame) -> locate(frame) and not ours frame
+    goOn   = not errorStops or params.reason isnt 'exception' or
+      params.data?.className is 'Interrupted' or at < 0 or not inRun frames
+    return onward (chase?.method ? 'Debugger.resume') if goOn
+    chase = null
+    # A Run while the worker is asked replaces the session; the old pause is
+    # then nobody's, and reported it would land in the new run's console.
+    id = session
+    try
+      failure = await failureOf params.data, frames[at]
+      return unless session is id
+      # A thrown string or number has no stack to find its line in; the
+      # pause knows it.
+      failure.line ?= locate(frames[at]).line
+      await report frames, at, failure
+    catch error
+      return unless session is id
+      # Left paused, the run would never end and Stop could not reach it: it
+      # ends the ordinary way instead, reported by the worker as it would
+      # have been with error stops off.
+      tell type: 'problem', text: "debugger: could not stop at the error -- #{error.message.split('\n')[0]}"
+      onward 'Debugger.resume'
 
   # Every pause comes through here, wanted or not, and most are not the one to
   # show: the breakpoint's own frame, a helper, our plumbing, or the same line
   # a step started on. Those are stepped past without the renderer hearing.
   onPaused = (params) ->
+    return onException params if params.reason in THROWN
     frames = params.callFrames
     top    = frames[0]
     script = scriptOf top
@@ -391,8 +500,7 @@ module.exports = (win) ->
         when 'Target.detachedFromTarget'
           resetSession() if params.sessionId is session
         when 'Debugger.scriptParsed'
-          if sessionId is session
-            scripts.set params.scriptId, {url: params.url, mapUrl: params.sourceMapURL}
+          remember params if sessionId is session
         when 'Debugger.paused'
           await onPaused params if sessionId is session
         when 'Debugger.resumed'
@@ -416,12 +524,12 @@ module.exports = (win) ->
     if cdp.isAttached()
       cdp.detach()
       resetSession()          # which says `resumed` if we were paused
-      tell type: 'problem', text: 'breakpoints are off while DevTools is open'
+      tell type: 'problem', text: 'breakpoints and error stops are off while DevTools is open'
   # The worker we had cannot be attached again (see enable), so breakpoints
   # come back with the next worker, which Run makes.
   contents.on 'devtools-closed', ->
     devtools = no
-    tell type: 'problem', text: 'DevTools closed -- breakpoints work again from the next Run' if wanted
+    tell type: 'problem', text: 'DevTools closed -- breakpoints and error stops work again from the next Run' if armWanted()
 
   # The renderer's whole vocabulary.
   arm = (want) ->
@@ -446,9 +554,16 @@ module.exports = (win) ->
   # To the next line that runs, wherever it is: into a sketch function, back
   # out to its caller, round a loop. The runtime is ignore-listed, so `print`
   # and `buffer.swap` are one step, not a walk through their insides.
+  #
+  # Not from an error, decided by Claude for Robert to overrule (2026-10-05):
+  # nothing catches it, so the next line that runs is never the author's --
+  # the run can only unwind and end. The prototype made Step a Continue
+  # there, which ends the run under a key that means "one line"; refused,
+  # the renderer says why and Continue does it on purpose.
   step = ->
     return false unless stopped
     return 'evaluating' if asking
+    return 'error' if stopped.error
     top   = stopped.frames[0]
     where = locate top
     chase =
@@ -495,7 +610,7 @@ module.exports = (win) ->
     # which inside an evaluation would make a new variable and leave the
     # frame's own untouched -- `angle = 0` would change nothing.
     js = js.replace /^\s*var [^;]*;\s*/, ''
-    top = stopped.frames[0]
+    top = pausedFrame()
     try
       {result, exceptionDetails} = await send 'Debugger.evaluateOnCallFrame',
         callFrameId: top.callFrameId, expression: js, generatePreview: yes, timeout: EVAL_LIMIT
@@ -563,7 +678,7 @@ module.exports = (win) ->
   runGetter = (owner, name) ->
     await send 'Runtime.callFunctionOn',
       objectId: owner, functionDeclaration: "function () { globalThis.#{STASH} = this }"
-    top   = stopped.frames[0]
+    top   = pausedFrame()
     reply = await getterValue top, name
     reply.pane = {seq: stopped.seq, where: stopped.where, scopes: await scopesOf top, yes}
     reply
@@ -584,6 +699,16 @@ module.exports = (win) ->
     {text: remoteText(result), kind: 'value'}
 
   id = contents.id
-  controllers.set id, {arm, pause, step, resume, evaluate, members, getter}
+  controllers.set id, {arm, pause, step, resume, evaluate, members, getter, exceptions, scriptsKept: -> scripts.size}
   win.on 'closed', -> controllers.delete id
   undefined
+
+# Not a channel: the renderer cannot reach it, only main (the preference) and
+# the suite. Resolves once every live session has it.
+module.exports.stopOnErrors = (stop) ->
+  errorStops = Boolean stop
+  await Promise.all (controller.exceptions() for controller from controllers.values())
+  errorStops
+
+# For the suite: how many scripts each live session is keeping.
+module.exports.scriptsKept = -> (controller.scriptsKept() for controller from controllers.values())

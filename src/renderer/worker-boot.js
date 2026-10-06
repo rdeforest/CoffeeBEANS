@@ -114,7 +114,11 @@
     return `//# sourceMappingURL=data:application/json;charset=utf-8;base64,${base64(JSON.stringify(map))}`
   }
 
-  const runSketch = (source, name) => {
+  // Compiled, wrapped and evaluated into a function here, and only called once
+  // it is dispatched (see dispatchRun): a syntax error is reported from here,
+  // under the run handler's catch, and never reaches V8 as an uncaught error
+  // of the author's.
+  const prepareSketch = (source, name) => {
     const id = `beans-run-${++runSeq}.coffee`
     const compiled = CoffeeScript.compile(source, { bare: true, filename: name, sourceMap: true })
 
@@ -153,8 +157,62 @@
       offset: PROLOGUE_LINES,
     })
     for (const stale of [...runs.keys()].slice(0, -RUNS_KEPT)) runs.delete(stale)
-    ;(0, eval)(wrapped)(image, frames)
+    const sketch = (0, eval)(wrapped)
+    return () => sketch(image, frames)
   }
+
+  // A run is the listener of an event the worker dispatches to itself, with no
+  // catch anywhere above it, so that V8 predicts a sketch's error as uncaught
+  // and the debugger's pauseOnExceptions 'uncaught' stops at the throw with the
+  // frame live -- while an error the sketch catches, the prompt's (serveAsk
+  // catches) and a syntax error (prepareSketch) still are not stopped on.
+  // dispatchEvent reports a listener's exception as the worker's `error` event
+  // instead of throwing it to its caller, and fires that event before it
+  // returns, so the run still reports synchronously, in the order it always
+  // has. docs/research/pause-on-error.md has the measurements.
+  //
+  // A catch above the dispatch -- around dispatchRun, in the message listener,
+  // anywhere on the stack -- would never see the error and still turns the
+  // whole feature off without a word: V8's prediction walks straight past the
+  // native boundary (measured, the probe's dispatchInCatch). The pauseonerror
+  // part's first check is the guard. The debugger knows a run's errors from
+  // everything else's by this function's name on the stack (inRun in
+  // src/main/debugger.coffee).
+  let dispatched = null
+  const dispatchRun = (body) => {
+    const outcome = (dispatched = { threw: false, error: undefined })
+    self.addEventListener('beans-run', body, { once: true })
+    self.dispatchEvent(new Event('beans-run'))
+    dispatched = null
+    return outcome
+  }
+
+  // A run's error is the run's to report. Anything else that reaches here was
+  // thrown once the run had ended -- a timer, a callback -- and is reported as
+  // that, once: left to bubble, the renderer heard it twice, as `worker:` and
+  // again as `renderer:` (measured by Claude, 2026-10-05, on main before E1).
+  //
+  // An Interrupted out here is a Stop reaching code the run left behind -- an
+  // async function resumed after the run unwound, at a yield point that still
+  // sees the flag up -- and the Stop is already reported as one.
+  const LATE = 'after the run'
+  self.addEventListener('error', (event) => {
+    event.preventDefault()
+    if (dispatched) {
+      dispatched.threw = true
+      dispatched.error = event.error
+      return
+    }
+    if (event.error instanceof Interrupted) return
+    fail(LATE, event.error)
+  })
+  // A rejection nobody handles -- a promise callback that threw, an async
+  // function after its first await -- was never reported at all before E1.
+  self.addEventListener('unhandledrejection', (event) => {
+    event.preventDefault()
+    if (event.reason instanceof Interrupted) return
+    fail(LATE, event.reason)
+  })
 
   // --- the console prompt ---------------------------------------------------
 
@@ -416,22 +474,51 @@
     return frames
   }
 
-  const fail = (stage, error) => {
+  // Anything can be thrown, and not everything converts: String() of an
+  // object with no prototype throws, and a report that throws is no report.
+  const textOf = (value) => {
+    try {
+      return String(value)
+    } catch (unconvertible) {
+      return Object.prototype.toString.call(value)
+    }
+  }
+
+  // The report, apart from the posting of it, because the debugger asks for
+  // the same one at an error pause (REPL.failure), before the run has ended.
+  const failure = (stage, error) => {
     // A compile error carries its own CoffeeScript location; a runtime error
     // carries a stack that has to be mapped back through the source map. The
     // renderer answers the two differently -- a syntax error puts the cursor
     // on it, a runtime one offers the stack -- so the kind travels with it.
     const location = error && error.location
     const frames = location ? [] : traceback(error)
-    postMessage({
+    return {
       type: 'error',
       stage,
       kind: location ? 'syntax' : 'runtime',
-      message: String((error && error.message) || error),
+      message: textOf((error && error.message) || error),
       line: location ? location.first_line + 1 : (frames[0] && frames[0].line),
       column: location ? location.first_column + 1 : undefined,
       frames,
-    })
+    }
+  }
+
+  const fail = (stage, error) => postMessage(failure(stage, error))
+
+  // Not among the message handlers below: they run under a catch, and nothing
+  // may catch above a run (see dispatchRun). Preparing it may, and does.
+  const run = ({ source, name }) => {
+    let body
+    try {
+      body = prepareSketch(source, name || 'sketch.coffee')
+    } catch (error) {
+      return fail('run', error)
+    }
+    const outcome = dispatchRun(body)
+    if (!outcome.threw) postMessage({ type: 'done' })
+    else if (outcome.error instanceof Interrupted) postMessage({ type: 'stopped' })
+    else fail('run', outcome.error)
   }
 
   const MODULES = [
@@ -452,7 +539,7 @@
   // addEventListener, not self.onmessage: sketches compile bare into this same
   // scope, and `onmessage = anything` would otherwise null out our inbox with
   // no error. Same reasoning for any other on* handler.
-  self.addEventListener('message', async ({ data }) => {
+  self.addEventListener('message', ({ data }) => {
     const handlers = {
       async boot() {
         for (const path of MODULES) await loadModule(path)
@@ -469,13 +556,15 @@
         // globalThis rather than a name at this scope, which is the rule the
         // whole file is built around.
         // `show` is for the debugger, which answers the prompt against a
-        // paused frame and wants the answer to read like any other; and
+        // paused frame and wants the answer to read like any other;
         // `complete` is how Tab asks that frame, in the same JSON the
-        // shared-memory answer comes back in.
+        // shared-memory answer comes back in; and `failure` is how an error
+        // pause gets the report the run would have made.
         globalThis.REPL = {
           serve: serveAsk,
           show,
           complete: (question, frameNames, root) => JSON.stringify(complete(question, frameNames, root)),
+          failure: (error) => failure('run', error),
         }
         postMessage({ type: 'ready' })
       },
@@ -486,20 +575,17 @@
       ask() {
         serveAsk()
       },
-      run() {
-        try {
-          runSketch(data.source, data.name || 'sketch.coffee')
-          postMessage({ type: 'done' })
-        } catch (error) {
-          if (error instanceof Interrupted) postMessage({ type: 'stopped' })
-          else fail('run', error)
-        }
-      },
     }
-    try {
-      await handlers[data.type]()
-    } catch (error) {
-      fail(data.type, error)
-    }
+    // The run outside the catch the others share. And a plain listener: the
+    // shape measured to stop on errors (research/pause-on-error, c5c788d) had
+    // no async function under the run, and one with it was never tried.
+    if (data.type === 'run') return run(data)
+    ;(async () => {
+      try {
+        await handlers[data.type]()
+      } catch (error) {
+        fail(data.type, error)
+      }
+    })()
   })
 })()
