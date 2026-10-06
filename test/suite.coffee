@@ -20,16 +20,21 @@ path = require 'path'
 PARTS = [
   'startup', 'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'about', 'input', 'random', 'names', 'sound', 'perf'
+  'pauseonerror'
 ]
+
+# Run only when named, never in a full run: `quit` ends the app it runs in, so
+# the lifecycle part starts a second Electron to run it.
+BY_NAME = ['quit']
 
 module.exports = (win, paths) ->
   asked   = (name.trim() for name in (process.env.BEANS_TESTS ? '').split(',') when name.trim())
-  unknown = (name for name in asked when name not in PARTS)
+  unknown = (name for name in asked when name not in PARTS and name not in BY_NAME)
   if unknown.length
     console.log "no such part: #{unknown.join ', '}"
-    console.log "have: #{PARTS.join ', '}"
+    console.log "have: #{PARTS.join ', '}, and by name only: #{BY_NAME.join ', '}"
     return 1
-  chosen = if asked.length then (name for name in PARTS when name in asked) else PARTS
+  chosen = if asked.length then (name for name in [PARTS..., BY_NAME...] when name in asked) else PARTS
 
   t       = require('./toolkit') win, paths
   guarded = path.join paths.sketches, 'hello.coffee'
@@ -37,6 +42,18 @@ module.exports = (win, paths) ->
   before = await fsp.readFile guarded, 'utf8'
 
   await t.settle 15000            # the window is still coming up
+
+  # And until it is drawing. On GitHub's Xvfb Linux runner a page gets no
+  # animation frames until its window is shown, and the suite starts before
+  # that: in run 37410488931 the show came 3.4s after `=== editor ===`
+  # (Claude, 2026-10-06). Why the show is that late there is not known. The
+  # first part inherited the wait, and 'ticking Vim Keys switches to vim live'
+  # failed in about half the pushes on 2026-10-05, its 3s spent waiting for
+  # a cursor CodeMirror places only on a frame. Waited for once, here, so no
+  # part has to know.
+  unless await t.drawing()
+    console.log "the test window drew no animation frame in 15s: no check after this could be trusted"
+    return 1
 
   for name in chosen
     console.log "\n=== #{name} ==="

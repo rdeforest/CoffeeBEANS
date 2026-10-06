@@ -6,7 +6,6 @@
 {execFileSync}                   = require 'child_process'
 fs                               = require 'fs'
 fsp                              = require 'fs/promises'
-{devNull}                        = require 'os'
 path                             = require 'path'
 {BrowserWindow, Menu, clipboard} = require 'electron'
 Version                          = require '../../src/main/version'
@@ -26,11 +25,15 @@ module.exports = (t) ->
     execFileSync('git', ['--no-optional-locks', args...], {cwd: root, env, encoding: 'utf8', stdio: 'pipe'}).trim()
   git = (args...) -> run unhooked(), paths.root, args...
   # The part's own repositories answer to no one's config -- signing, hooks,
-  # templates -- and need a name to commit under.
+  # templates -- and need a name to commit under. The global config is an
+  # empty file of the part's own rather than os.devNull: Git for Windows
+  # cannot open `\\.\nul` (windows-latest CI, 2026-10-06, run 37418464778).
+  noConfig = path.join paths.data, 'versioncheck-gitconfig'
+  fs.writeFileSync noConfig, ''
   gitIn = (root, args...) ->
     run {
       unhooked()...
-      GIT_CONFIG_GLOBAL:   devNull
+      GIT_CONFIG_GLOBAL:   noConfig
       GIT_CONFIG_NOSYSTEM: '1'
       GIT_AUTHOR_NAME:     'suite', GIT_AUTHOR_EMAIL:    'suite@invalid'
       GIT_COMMITTER_NAME:  'suite', GIT_COMMITTER_EMAIL: 'suite@invalid'

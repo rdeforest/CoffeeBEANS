@@ -15,6 +15,9 @@ vimSave = (file, text) ->
   await fsp.writeFile file, text, 'utf8'
   await fsp.rm "#{file}~"
 
+# CodeMirror's Mod: Cmd on a Mac, Ctrl elsewhere.
+onMac = process.platform is 'darwin'
+
 module.exports = (t) ->
   {js, wait, check, setDoc, cursorOnLine, selectLines, consoleText,
    clearConsole, handleEx, linesText, overLine, overRed, paths, scratch,
@@ -55,8 +58,9 @@ module.exports = (t) ->
   await js "const v = Editor.view(); v.dispatch({changes: {from: 4, insert: 'X'}, selection: {anchor: 6}}); Editor.focus(); return true"
   before = await editorState()
   await vimKeys yes
-  # codemirror-vim draws its block cursor after a measure, so it is waited
-  # for rather than read once: on a slow CI runner one read came too soon.
+  # codemirror-vim draws its block cursor on the next animation frame, so it
+  # is waited for rather than read once. The suite has seen the window draw
+  # before any part runs (suite.coffee), so the 3s is the switch's alone.
   fat     = await waitFor "return !!document.querySelector('.cm-fat-cursor')"
   ticked  = await editorState()
   await type ':'
@@ -72,7 +76,7 @@ module.exports = (t) ->
   await vimKeys no
   gone = await waitFor "return !document.querySelector('.cm-fat-cursor') && !document.querySelector('.cm-vim-panel')"
   unticked = await editorState()
-  await chord 'z', ctrl: yes
+  await chord 'z', if onMac then {meta: yes} else {ctrl: yes}
   undone = await js "return Editor.all()"
   check 'unticking it switches back live, keeping the buffer, the cursor and the undo history',
     gone and not vimItem().checked and JSON.stringify(unticked) is JSON.stringify(before) and undone is "one\ntwo\n",
@@ -619,6 +623,123 @@ module.exports = (t) ->
   await fsp.rm probe
   check 'a settings file that is not a JSON object reads as every default',
     read.every((found) -> JSON.stringify(found) is '{}'), JSON.stringify read
+
+  # --- Edit > Undo and Redo -------------------------------------------------
+
+  # The real menu items, clicked the way the menu clicks them, handed the
+  # window because a hidden test run has none focused. On a Mac they are the
+  # only way Cmd-Z reaches the prompt (K7, 2026-10-06), and no Mac runs this;
+  # what runs here is that each click goes to the history that has focus, and
+  # takes one step there. A step is a paste so that CodeMirror never joins
+  # two of them into one, as it joins edits typed close together.
+  {Menu, BrowserWindow} = require 'electron'
+  win      = BrowserWindow.getAllWindows()[0]
+  fromMenu = (id) -> Menu.getApplicationMenu().getMenuItemById(id)?.click undefined, win, win.webContents
+  pasted   = -> js """
+    const v = Editor.view()
+    v.focus()
+    v.dispatch({ changes: { from: 0, insert: 'X' }, userEvent: 'input.paste' })
+    v.dispatch({ changes: { from: v.state.doc.length, insert: 'Y' }, userEvent: 'input.paste' })
+    return document.activeElement === v.contentDOM && v.state.doc.toString()
+  """
+
+  # The prompt's edit goes through insertText, as the prompt's own keys do,
+  # which is one step of the input's native undo. This check alone would
+  # pass if every click took the native step; the two after it would not.
+  promptLine = -> js "return document.getElementById('promptLine').value"
+  until_ = (wanted) -> waitFor "return document.getElementById('promptLine').value === #{JSON.stringify wanted}"
+  await js """
+    const line = document.getElementById('promptLine')
+    line.value = 'keep'
+    line.focus()
+    line.setSelectionRange(4, 4)
+    document.execCommand('insertText', false, ' more')
+    return true
+  """
+  typed = await promptLine()
+  fromMenu 'undo'
+  undone = await until_ 'keep'
+  undid  = await promptLine()
+  fromMenu 'redo'
+  redone = await until_ 'keep more'
+  check 'Edit > Undo and Redo undo and redo an edit at the prompt',
+    typed is 'keep more' and undone and redone,
+    "typed=#{JSON.stringify typed} undo=#{JSON.stringify undid} redo=#{JSON.stringify await promptLine()}"
+
+  # From the canvas, nothing: the page has one native undo stack, and its
+  # last step is that redo at the prompt. A listener behind the editor's on
+  # the menu's message says when the click has been handled.
+  await js """
+    window.menuHandled = 0
+    beans.onHistory(() => window.menuHandled++)
+    document.getElementById('stage').focus()
+    return true
+  """
+  fromMenu 'undo'
+  handled = await waitFor "return window.menuHandled > 0"
+  kept    = await promptLine()
+  check 'Edit > Undo with the canvas focused leaves the prompt alone',
+    handled and kept is 'keep more', "handled=#{handled} prompt=#{JSON.stringify kept}"
+  await js "document.getElementById('promptLine').value = ''; return true"
+
+  # Typing in the editor is a native step too, and Edit > Undo at the prompt
+  # takes it. Through main's webContents.undo it reaches CodeMirror as an
+  # undo of its own; document.execCommand in the page instead took one q out
+  # of the editor's DOM behind CodeMirror's back, which read that as an edit,
+  # `baseq`, and saved it (found by a Claude reviewer, 2026-10-06). Vim is
+  # off for it: the reload check above left it on, and in normal mode q
+  # types nothing.
+  await vimKeys off
+  await setDoc 'base'
+  await js caretAtEnd
+  await type 'qq'
+  typedIn = await untilDoc 'baseqq'
+  await js "document.getElementById('promptLine').focus(); return true"
+  fromMenu 'undo'
+  undoneIn = await untilDoc 'base'
+  prompt   = await promptLine()
+  check 'Edit > Undo at the prompt, after typing in the editor, undoes there through CodeMirror',
+    typedIn is 'baseqq' and undoneIn is 'base' and prompt is '',
+    JSON.stringify {typedIn, undoneIn, prompt}
+
+  # Not the native undo the menu roles would send: CodeMirror answers that
+  # from its own history only while Chromium's stack has something too, and
+  # Redo after Undo found nothing there (measured by Claude, 2026-10-06).
+  stepped = {}
+  for vimOn in [off, on]
+    await vimKeys vimOn
+    await setDoc 'base'
+    focused = await pasted()
+    fromMenu 'undo'
+    undid = await untilDoc 'Xbase'
+    fromMenu 'redo'
+    redid = await untilDoc 'XbaseY'
+    stepped[if vimOn then 'vim' else 'keys'] = {focused, undid, redid}
+  await vimKeys off
+  want = {focused: 'XbaseY', undid: 'Xbase', redid: 'XbaseY'}
+  check 'Edit > Undo and Redo take one CodeMirror step each in the editor, with and without Vim Keys',
+    JSON.stringify(stepped) is JSON.stringify(keys: want, vim: want),
+    JSON.stringify stepped
+
+  # Ctrl-Z stays CodeMirror's on Linux and Windows, one step and not one
+  # more from the menu as well: the menu shows Ctrl+Z there but does not
+  # register it. Keys sent this way never reach a menu accelerator (see the
+  # repl part), so this guards the editor's bindings, not the registration --
+  # Ctrl-Shift-Z on Windows among them, which is ours, not CodeMirror's.
+  mod = if onMac then 'meta' else 'control'
+  key = (keyCode, modifiers) ->
+    win.webContents.sendInputEvent {type: 'keyDown', keyCode, modifiers}
+    win.webContents.sendInputEvent {type: 'keyUp',   keyCode, modifiers}
+  await setDoc 'base'
+  focused = await pasted()
+  key 'z', [mod]
+  undid = await untilDoc 'Xbase'
+  key 'z', [mod, 'shift']
+  redid = await untilDoc 'XbaseY'
+  check 'Ctrl-Z and Ctrl-Shift-Z (Cmd on a Mac) in the editor take one CodeMirror step each',
+    JSON.stringify({focused, undid, redid}) is JSON.stringify(want),
+    JSON.stringify {focused, undid, redid}
+  await setDoc ''
 
   # --- vim's autoindent -------------------------------------------------------
 
