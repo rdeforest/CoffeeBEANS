@@ -244,6 +244,14 @@ withdrawTab = ->
   drainAsk()
   yes
 
+# Stop at an idle worker takes back a question it has not claimed, as a line
+# takes back a Tab. Left there, it would run whenever the worker got to it --
+# after the boot a Stop cut short, say. A Tab goes as withdrawTab lets it go;
+# a line is over without having run, and says so as a stopped run does.
+takeBack = ->
+  return withdrawTab() if Atomics.load(i32, H.ASK_KIND) is LAYOUT.ASK_FOR.completion
+  say '*** stopped ***', 'sys' if Atomics.compareExchange(i32, H.ASK_STATE, 1, 0) is 1
+
 # The one way a question reaches a worker that is not line paused, a line or
 # Tab's alike; ASK_KIND says which, so drainAsk knows whose the answer is.
 askWorker = (text, kind) ->
@@ -1590,6 +1598,12 @@ globalThis.Sound =
 worker  = null
 pending = null
 
+# A run being armed is not a run yet. A Stop at `arming` stops whatever the
+# worker is really doing -- the status the run was asked from -- and cancels
+# the run: armFirst lets it go ahead only if no Stop came while it waited.
+armedOver = 'ready'
+stops     = 0
+
 # Once the worker says it is idle there is nothing left for a Stop to unwind.
 # Left raised, the flag makes every yield point reached from the prompt --
 # buffer.swap, sound -- throw 'stopped' until the next run.
@@ -1732,21 +1746,34 @@ start = (thenRun = null) ->
 
 stop = ->
   pending = null
+  stops  += 1
+  setStatus armedOver if status is 'arming'
   # Going through goFrames rather than just dropping the flag is what puts the
   # status line back: left saying "paused", nothing that reads it -- the
-  # buttons, a test, the next run -- can tell the pause is over. First, so a
-  # hold at an idle worker reads as idle once it is let go. A busy worker
-  # parked on the swap is released below, by clearing it.
-  goFrames()
+  # buttons, a test, the next run -- can tell the pause is over.
+  #
+  # Before the idle test only for a hold taken at an idle worker, so it reads
+  # as idle once let go. Never otherwise: the worker's messages set the status
+  # under a hold and leave the hold in place, so `resumeTo` can be older than
+  # the status. A sketch held as it ended reads 'ready' with `resumeTo` still
+  # 'running', and letting that go first would take the busy branch and shoot
+  # an idle worker for having no yield point. Whether those messages should
+  # end a hold is Robert's call (E3 review, 2026-10-06).
+  goFrames() if status is 'frame paused' and resumeTo in IDLE
   # Nothing running is nothing to unwind, but a note with no length can
   # outlive the sketch that started it, and Stop is where anyone reaches to
   # make it quiet. Raising the flag here would leave it up with no worker
   # busy to report idle and lower it -- unless the worker is busy in a prompt
-  # line it has claimed, which answers, and drainAsk lowers it then.
+  # line it has claimed, which answers, and drainAsk lowers it then. A line
+  # not claimed yet is taken back, or it would run whenever the worker got
+  # to it.
   if status in IDLE
     Atomics.add i32, H.SOUND_EPOCH, 1
+    takeBack()
     Atomics.store i32, H.INTERRUPT, 1 if Atomics.load(i32, H.ASK_STATE) is 4
     return
+  # A busy worker parked on the swap is released below, by clearing it.
+  goFrames()
   Atomics.store  i32, H.INTERRUPT, 1
   Atomics.store  i32, H.SWAP,      0
   Atomics.notify i32, H.SWAP
@@ -1789,11 +1816,13 @@ stop = ->
 # has already finished.
 armFirst = (source, run) ->
   return run() if wantsDebug(source) is armedFor and not skipping
-  before = status
+  before    = status
+  armedOver = before unless before is 'arming'   # a second arming keeps the first's
+  asked     = stops
   setStatus 'arming'
   await syncDebug source
   setStatus before if status is 'arming'
-  run()
+  run() if stops is asked
 
 runSource = (source, name, cut) -> armFirst source, ->
   return start {source, name, cut} unless worker

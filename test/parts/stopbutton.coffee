@@ -235,3 +235,88 @@ module.exports = (t) ->
   check 'Stop is gray while a worker boots with no run asked for',
     ready and booted.length > 0 and booted.every((state) -> state[1]),
     JSON.stringify seen
+
+  # 14. A sketch that ends under a hold. The worker's 'done' sets the status
+  # and leaves the hold in place, so it reads ready with the hold's
+  # `resumeTo` still 'running'. Ctrl-. from there (the button is gray) has an
+  # idle worker to deal with: letting the hold go first would read 'running',
+  # and 250ms later shoot the worker for having no yield point, its image
+  # with it.
+  await t.clearConsole()
+  await load "screen 320, 200\nkept = 42\nends = Date.now() + 1000\nnull while Date.now() < ends\nprint 'over'\n"
+  await t.evalAll()
+  await becomes 'running'
+  await click 'pauseFrame'
+  held  = await status()
+  ended = await becomes 'ready', 10000
+  await js """
+    const stage = document.getElementById('stage')
+    stage.focus()
+    stage.dispatchEvent(new KeyboardEvent('keydown', { key: '.', code: 'Period', ctrlKey: true, bubbles: true, cancelable: true }))
+    return true
+  """
+  shot = await t.waitFor "return /terminated/.test(document.getElementById('console').textContent)", 1500
+  kept = await t.ask 'kept'
+  check 'Stop after a sketch ended under a hold keeps the image',
+    held is 'frame paused' and ended and not shot and /42$/.test(kept),
+    JSON.stringify {held, ended, shot, kept}
+
+  # 15. A hold pressed while the worker boots. 'ready', and the run it sends,
+  # set the status under the hold, so the sketch reads 'running' held at its
+  # first frame with `resumeTo` still 'booting'. Stop from there ends it. The
+  # first Run is only there so the second neither arms nor finds a hold.
+  await t.clearConsole()
+  await load "screen 320, 200\nprint 'warm'\nloop\n  buffer.swap\n"
+  await click 'runFresh'
+  await becomes 'running'
+  boot = await js """
+    document.getElementById('runFresh').click()
+    const before = document.getElementById('status').textContent
+    document.getElementById('pauseFrame').click()
+    return [before, document.getElementById('status').textContent]
+  """
+  running = await becomes 'running', 10000
+  warm    = await t.waitFor "return /warm/.test(document.getElementById('console').textContent)"
+  await click 'stop'
+  ended   = await becomes 'ready', 10000
+  check 'Stop ends a sketch held from its boot',
+    boot[0] is 'booting' and boot[1] is 'frame paused' and running and warm and ended,
+    JSON.stringify {boot, running, warm, ended, status: await status()}
+
+  # 16. Stop while a run waits on arming the debugger cancels that run: it is
+  # not a run yet, and once armed nothing would stop it going ahead. 15's
+  # Stop set breakpoints aside, so this Run arms first. Nothing runs under
+  # it, so the prompt works after, too. The run going ahead would show as
+  # the status leaving ready.
+  await t.clearConsole()
+  await load "screen 320, 200\nprint 'armed and ran'\n"
+  arming = await js """
+    document.getElementById('runFresh').click()
+    const status = document.getElementById('status').textContent
+    document.getElementById('stop').click()
+    return status
+  """
+  ran   = await t.waitFor "return document.getElementById('status').textContent !== 'ready'", 1500
+  after = await answers()
+  check 'Stop at arming cancels the run, and leaves the prompt working',
+    arming is 'arming' and not ran and answered(after) and not /armed and ran/.test(await t.consoleText()),
+    JSON.stringify {arming, ran, after, status: await status()}
+
+  # 17. A prompt line asked while the worker boots waits, unclaimed, to be
+  # served once it is ready. Stop at booting takes it back, says so, and the
+  # line never runs. What it would print is not in its echo.
+  await t.clearConsole()
+  await load LOOPS
+  booting = await js """
+    document.getElementById('runFresh').click()
+    const status = document.getElementById('status').textContent
+    Prompt.ask("print ['took', 'it'].join '-'; buffer.swap while true")
+    document.getElementById('stop').click()
+    return status
+  """
+  ready = await becomes 'ready', 10000
+  after = await answers()
+  text  = await t.consoleText()
+  check 'Stop at booting takes back a prompt line not yet claimed, which never runs',
+    booting is 'booting' and ready and answered(after) and /\*\*\* stopped \*\*\*/.test(text) and not /took-it/.test(text),
+    JSON.stringify {booting, ready, after, text}
