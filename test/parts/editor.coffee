@@ -21,38 +21,6 @@ module.exports = (t) ->
    settled, evalRegion, untilDoc} = t
   {waitFor, type, chord, vimKeys, vimItem} = t
 
-  K6win  = require('electron').BrowserWindow.getAllWindows()[0]
-  K6x    = ->
-    try
-      id = K6win.getNativeWindowHandle().readUInt32LE 0
-      require('child_process').execSync("xwininfo -id #{id} | grep -E 'Map State|IsViewable|Absolute'", encoding: 'utf8').replace /\s+/g, ' '
-    catch e then "xwininfo: #{e.message.split('\n')[0]}"
-  K6main = -> {up: Math.round(process.uptime() * 1000), visible: K6win.isVisible(), min: K6win.isMinimized(), focused: K6win.isFocused(), x: K6x()}
-  console.log "K6 START #{JSON.stringify K6main()}"
-  for K6ev in ['show', 'hide', 'minimize', 'restore', 'focus', 'blur']
-    do (K6ev) -> K6win.on K6ev, -> console.log "K6 EVENT #{K6ev} #{JSON.stringify K6main()}"
-  await js '''
-    window.K6LOG = []; window.K6T0 = performance.now(); window.K6FRAMES = [];
-    const L = (s) => K6LOG.push(Math.round(performance.now() - K6T0) + ' ' + s);
-    (function f(now) { if (K6FRAMES.length < 3000) { K6FRAMES.push(Math.round(performance.now() - K6T0)); requestAnimationFrame(f) } })();
-    const EV = CM.EditorView.prototype, rm = EV.requestMeasure, me = EV.measure;
-    EV.requestMeasure = function (r) {
-      if (r && r.read && r.read.name == 'bound readPos' && !r.k6) {
-        r.k6 = 1; const rd = r.read, wr = r.write;
-        r.read  = function (v) { const o = rd(v); L('read ' + o.cursors.length + ' vim=' + !!(v.cm && v.cm.state.vim) + ' ins=' + !!(v.cm && v.cm.state.vim && v.cm.state.vim.insertMode)); return o };
-        r.write = function (o, v) { wr(o, v); L('write kids=' + v.scrollDOM.querySelectorAll('.cm-fat-cursor').length) };
-        L('req new sched=' + this.measureScheduled);
-      }
-      return rm.call(this, r);
-    };
-    EV.measure = function (f) { if (this.cm) L('measure sched=' + this.measureScheduled + ' reqs=' + this.measureRequests.length); return me.call(this, f) };
-    document.addEventListener('visibilitychange', () => L('visibility ' + document.visibilityState));
-    window.addEventListener('focus', () => L('focus')); window.addEventListener('blur', () => L('blur'));
-    window.addEventListener('resize', () => L('resize ' + innerWidth + 'x' + innerHeight));
-    document.fonts.addEventListener('loadingdone', () => L('fonts loaded'));
-    return true
-  '''
-
   # 1. the editor is mounted, with ordinary keys unless Edit > Vim Keys says
   # otherwise (Robert, 2026-10-04: most people on Steam will not want vim).
   mounted = await js "return !!document.querySelector('.cm-editor')"
@@ -86,33 +54,22 @@ module.exports = (t) ->
   await cursorOnLine 2
   await js "const v = Editor.view(); v.dispatch({changes: {from: 4, insert: 'X'}, selection: {anchor: 6}}); Editor.focus(); return true"
   before = await editorState()
+  # codemirror-vim draws its block cursor on the first animation frame after
+  # the switch, and this check can come before the test window has had any:
+  # on GitHub's Linux runner it lost that race in 5 of 9 runs, the cursor
+  # still undrawn after 3s because the window was not yet shown (Claude,
+  # 2026-10-06). So the window is drawing first, and the 3s below is the
+  # switch's alone. The cursor is still waited for rather than read once.
+  drawn   = await t.drawing()
   await vimKeys yes
-  # codemirror-vim draws its block cursor after a measure, so it is waited
-  # for rather than read once: on a slow CI runner one read came too soon.
   fat     = await waitFor "return !!document.querySelector('.cm-fat-cursor')"
-  K6diag = -> js '''
-    const v = Editor.view(), cm = v.cm, bc = cm && cm.state.vimPlugin && cm.state.vimPlugin.blockCursor
-    return {vim: !!(cm && cm.state.vim), insert: cm && cm.state.vim && cm.state.vim.insertMode,
-      layer: bc && bc.cursorLayer.isConnected, kids: bc && bc.cursorLayer.children.length,
-      cursors: bc && bc.cursors.length, read: bc && bc.readPos().cursors.length,
-      scheduled: v.measureScheduled, pending: v.measureRequests.length, hasReq: !!(bc && v.measureRequests.includes(bc.measureReq)),
-      vis: document.visibilityState, focus: document.hasFocus(), w: innerWidth, h: innerHeight,
-      now: Math.round(performance.now() - K6T0), log: K6LOG, frames: K6FRAMES.length, lastFrames: K6FRAMES.slice(-8), firstFrames: K6FRAMES.slice(0, 8)}
-  '''
-  console.log "K6 DIAG fat=#{fat} #{JSON.stringify K6main()} #{JSON.stringify await K6diag()}"
-  unless fat
-    for K6i in [1..20]
-      await wait 500
-      K6fat = await js "return !!document.querySelector('.cm-fat-cursor')"
-      console.log "K6 LATER #{K6i * 500}ms fat=#{K6fat} #{JSON.stringify K6main()} #{JSON.stringify await K6diag()}"
-      break if K6fat
   ticked  = await editorState()
   await type ':'
   panel   = await waitFor vimPanel
   untyped = await js "return Editor.all()"
   check 'ticking Vim Keys switches to vim live, keeping the buffer and the cursor',
     fat and vimItem().checked and JSON.stringify(ticked) is JSON.stringify(before),
-    JSON.stringify {fat, before, ticked}
+    JSON.stringify {drawn, fat, before, ticked}
   check 'and then : opens vim\'s command line instead of typing',
     panel and untyped is before.doc, JSON.stringify {panel, untyped}
 
