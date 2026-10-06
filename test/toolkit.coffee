@@ -57,6 +57,18 @@ module.exports = (win, paths) ->
       return seen if seen or Date.now() > deadline
       await wait 25
 
+  # Until the page has been given an animation frame: true, or false after
+  # `limit`. CodeMirror measures -- and so places anything it positions,
+  # vim's block cursor among them -- only on a frame, and on GitHub's Xvfb
+  # Linux runner a window gets none until it is shown (suite.coffee). Timers
+  # are not held back with the frames, so the limit still fires.
+  t.drawing = (limit = 15000) -> t.js """
+    return await new Promise((resolve) => {
+      const late = setTimeout(() => resolve(false), #{limit})
+      requestAnimationFrame(() => { clearTimeout(late); resolve(true) })
+    })
+  """
+
   # Keys as the OS would deliver them, to whatever has the page's focus. A
   # keydown dispatched by hand reaches CodeMirror's keymaps but never inserts
   # text, so it cannot tell an editor that types `:` from one that swallows it.

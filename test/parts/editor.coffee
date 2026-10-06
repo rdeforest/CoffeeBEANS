@@ -55,8 +55,9 @@ module.exports = (t) ->
   await js "const v = Editor.view(); v.dispatch({changes: {from: 4, insert: 'X'}, selection: {anchor: 6}}); Editor.focus(); return true"
   before = await editorState()
   await vimKeys yes
-  # codemirror-vim draws its block cursor after a measure, so it is waited
-  # for rather than read once: on a slow CI runner one read came too soon.
+  # codemirror-vim draws its block cursor on the next animation frame, so it
+  # is waited for rather than read once. The suite has seen the window draw
+  # before any part runs (suite.coffee), so the 3s is the switch's alone.
   fat     = await waitFor "return !!document.querySelector('.cm-fat-cursor')"
   ticked  = await editorState()
   await type ':'

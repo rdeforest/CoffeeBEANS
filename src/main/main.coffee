@@ -21,9 +21,10 @@ SKETCHES = path.join DATA, 'sketches'
 # the real app reopening a test fixture.
 app.setPath 'userData', path.join DATA, 'electron' if process.env.BEANS_DATA_HOME
 
+# Read in reachWindow, once the data folder is known to be there.
 SETTINGS     = path.join DATA, 'settings.json'
 Settings     = require './settings'
-settings     = Settings.read SETTINGS
+settings     = {}
 saveSettings = -> Settings.save SETTINGS, settings
 
 ipcMain.handle 'settings:vim',      -> settings.vim is true
@@ -655,12 +656,82 @@ installMenu = ->
     ]
   ]
 
-app.whenReady().then ->
+startupBox = (error) ->
+  box =
+    type:      'error'
+    title:     'CoffeeBEANS'
+    buttons:   ['Try Again', 'Open Folder', 'Quit']
+    defaultId: 0
+    cancelId:  2
+  return {box..., folder: DATA, message: 'CoffeeBEANS could not start.', detail: """
+    #{error.message}
+
+    The data folder is #{DATA}.
+  """} unless error.code is 'EDANGLING'
+  {box..., folder: path.dirname(error.link), message: "#{error.link} points to a folder that is not there.", detail: """
+    It is a link to #{error.target}. If that is on a drive that is not connected or not mounted, connect it and choose Try Again.
+
+    CoffeeBEANS will not create the folder itself: new sketches would collect there instead of on the drive.
+  """}
+
+# Shows the box until the answer is Try Again (yes) or Quit (no). A test run
+# has nobody to click, so it prints the box and takes its answers from
+# BEANS_STARTUP_ANSWERS, then Quit -- never a box on the screen, never a hang.
+#
+# The synchronous box, not showMessageBox: with no window yet, on Linux, that
+# one's promise never settles -- clicked or closed, the box goes and the app
+# sits there (Electron 44, a ten-line probe, Claude, 2026-10-05). Blocking
+# main costs nothing while there is no window to keep alive.
+startupAnswers = (process.env.BEANS_STARTUP_ANSWERS ? '').split(',').filter Boolean
+
+ask = (box) ->
+  return dialog.showMessageBoxSync box unless process.env.BEANS_TEST
+  console.log "startup box: #{JSON.stringify box}"
+  answer = box.buttons.indexOf startupAnswers.shift() ? 'Quit'
+  if answer < 0 then box.cancelId else answer
+
+# Open Folder opens the folder holding the link, not the link shown inside
+# it: shell.showItemInFolder on a dangling link brought up no new window on
+# Linux under Caja. And not awaited: like showMessageBox's, openPath's
+# promise never settled with no window up, and the box never came back
+# (Claude, 2026-10-05). A test run says which folder instead of opening a
+# file manager on the desktop of whoever is running it.
+openFolder = (folder) ->
+  return console.log "openPath: #{folder}" if process.env.BEANS_TEST
+  shell.openPath(folder).then (problem) -> console.log "openPath: #{problem}" if problem
+
+tryAgain = (box) ->
+  loop
+    answer = box.buttons[ask box]
+    return answer is 'Try Again' unless answer is 'Open Folder'
+    openFolder box.folder
+
+# Everything from ready to the window. A failure anywhere in it is shown in
+# the box, with a way out, rather than left as a rejection and no window --
+# which is what a dangling sketches/ link did on Robert's laptop, 2026-10-05.
+# Try Again runs it again from the top. Every step before createWindow is
+# safe to repeat: preparing the folder only fills in what is missing, the
+# probe and the settings are read afresh -- the settings because a data
+# folder on a drive that was not there read as all defaults, and the next
+# toggle would have saved those over the real ones -- the protocol is
+# handled once, and the menu is replaced whole. createWindow is not, which
+# is why it comes last; nothing in it is known to throw.
+reachWindow = ->
   await prepareDataHome()
   folding.probed = probeFolding SKETCHES
-  protocol.handle 'app', serve
+  settings = Settings.read SETTINGS
+  protocol.handle 'app', serve unless protocol.isProtocolHandled 'app'
   installMenu()
   createWindow()
+
+app.whenReady().then ->
+  loop
+    try
+      await reachWindow()
+      break
+    catch error
+      console.error "could not start: #{error.message}"
+      return app.exit 1 unless tryAgain startupBox error
   app.on 'activate', -> createWindow() unless BrowserWindow.getAllWindows().length
 
 app.on 'window-all-closed', -> app.quit()

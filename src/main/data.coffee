@@ -29,8 +29,41 @@ readManifest = (dir) ->
   catch error
     missingIsEmpty error, {found: no, names: []}
 
+# Every folder from the root down to `dir`, outermost first.
+ancestry = (dir) ->
+  up = path.dirname dir
+  if up is dir then [dir] else [(ancestry up)..., dir]
+
+# A link on the way to `dir` that points at nothing is refused, never made
+# good. It is what a sketches/ on a drive that is not mounted looks like
+# (Robert's laptop, 2026-10-05), and creating the folder it names would
+# quietly collect new sketches somewhere other than the drive. Checked before
+# mkdir rather than read off its failure: on Linux that is a bare ENOENT
+# naming the link, not where it points, and what mkdir does with a dangling
+# link on macOS and Windows was not checked (Claude, 2026-10-05).
+refuseDanglingLink = (dir) ->
+  for place in ancestry dir
+    try
+      stats = await fsp.lstat place
+    catch error
+      throw error unless error.code is 'ENOENT'
+      return                         # from here down is ours to create
+    continue unless stats.isSymbolicLink()
+    try
+      await fsp.stat place
+    catch error
+      throw error unless error.code is 'ENOENT'
+      # From where the link really is: a relative target is followed from
+      # there, not from the path as written, which may run through a link
+      # above it.
+      target = path.resolve (await fsp.realpath path.dirname place), await fsp.readlink place
+      throw Object.assign new Error("#{place} is a link to #{target}, which is not there"),
+        code: 'EDANGLING', link: place, target: target
+  undefined
+
 prepare = (data, examples) ->
   sketches = path.join data, 'sketches'
+  await refuseDanglingLink sketches
   await fsp.mkdir sketches, recursive: yes
 
   manifest = await readManifest data

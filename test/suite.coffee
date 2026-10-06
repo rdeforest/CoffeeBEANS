@@ -18,7 +18,7 @@ path = require 'path'
 # Order matters only for reading the output: the cheap, foundational parts
 # first, the slow ones last.
 PARTS = [
-  'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
+  'startup', 'editor', 'image', 'repl', 'buffers', 'stepping', 'debugging', 'focus', 'lifecycle'
   'drawing', 'color', 'loading', 'shell', 'about', 'input', 'random', 'names', 'sound', 'perf'
 ]
 
@@ -41,6 +41,18 @@ module.exports = (win, paths) ->
   before = await fsp.readFile guarded, 'utf8'
 
   await t.settle 15000            # the window is still coming up
+
+  # And until it is drawing. On GitHub's Xvfb Linux runner a page gets no
+  # animation frames until its window is shown, and the suite starts before
+  # that: in run 37410488931 the show came 3.4s after `=== editor ===`
+  # (Claude, 2026-10-06). Why the show is that late there is not known. The
+  # first part inherited the wait, and 'ticking Vim Keys switches to vim live'
+  # failed in about half the pushes on 2026-10-05, its 3s spent waiting for
+  # a cursor CodeMirror places only on a frame. Waited for once, here, so no
+  # part has to know.
+  unless await t.drawing()
+    console.log "the test window drew no animation frame in 15s: no check after this could be trusted"
+    return 1
 
   for name in chosen
     console.log "\n=== #{name} ==="
