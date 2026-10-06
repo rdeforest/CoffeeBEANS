@@ -1123,7 +1123,10 @@ saveReport = ->
 reportButton.addEventListener 'pointerdown', -> reportPressed = document.activeElement
 window.addEventListener 'pointerup',     ((event) -> reportPressed = null unless reportButton.contains event.target), yes
 window.addEventListener 'pointercancel', (-> reportPressed = null), yes
+# `close` is queued, so a quick reopen can run before the last close's
+# event; that event belongs to a dialog that is open again, not this one.
 reportBox.addEventListener 'close', ->
+  return if reportBox.open
   reportReturn?.focus()
   reportReturn = null
 reportButton.onclick = openReport
