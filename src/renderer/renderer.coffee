@@ -155,6 +155,16 @@ askBytes  = new Uint8Array sab, LAYOUT.askOffset, LAYOUT.ASK_BYTES
 entered   = []
 enteredAt = 0
 
+# The line being written, and its caret, for Down to come back to: taken
+# whenever a walk leaves a line that is not the history entry it was on, so
+# an edited recall counts as much as a line typed at the bottom. Mid-walk the
+# line on show is always entered[enteredAt] until it is edited, and at the
+# bottom entered[enteredAt] is undefined. And what every line Up and Down
+# recall must start with while a walk is under way; null between walks (see
+# recall).
+draft        = null
+recallPrefix = null
+
 # Tab's question while it is out -- the line and caret it was asked about, so
 # an answer that arrives after either has moved can be dropped -- and the
 # last ambiguous answer, which a second Tab on the same line opens as a list.
@@ -275,13 +285,32 @@ drainAsk = ->
   say text, (if state is 3 then 'err' else 'value')
   undefined
 
-recall = (step) ->
+# Up and Down search the history by what is typed left of the caret, as the
+# node REPL does (Robert's call, 2026-10-05). Ported by Claude, 2026-10-06,
+# from Node 24.20's lib/internal/readline/interface.js (the substring search
+# in [kTtyWrite], [kHistoryPrev] and [kHistoryNext]) and
+# lib/internal/repl/history.js (navigateToPrevious, navigateToNext): the
+# first Up or Down of a walk takes the prefix, and any other key ends the
+# walk -- an edit, a caret move, Esc. A line the same as the one on show is
+# passed over, so a run of repeats is one step. Ctrl-P and Ctrl-N are node's
+# too: every line, prefix or not, and they end a walk.
+#
+# Where ours differs from node, on purpose: Up past the oldest match stays
+# on it, as it always has here, where node shows the bare prefix; and Down
+# past the newest brings back the whole line as it was typed, caret and all,
+# where node gives back only the prefix and puts the caret at the end.
+recall = (step, prefix) ->
   tabbed = null
   closeChoices()
-  return unless entered.length
-  enteredAt = Math.min entered.length, Math.max 0, enteredAt + step
-  promptLine.value = entered[enteredAt] ? ''
-  promptLine.setSelectionRange promptLine.value.length, promptLine.value.length
+  shown = promptLine.value
+  index = enteredAt + step
+  index += step while 0 <= index < entered.length and (entered[index] is shown or not entered[index].startsWith prefix)
+  return unless 0 <= index <= entered.length
+  draft = {line: shown, at: caret()} unless shown is entered[enteredAt]
+  enteredAt = index
+  {line, at} = if index is entered.length then draft else {line: entered[index], at: entered[index].length}
+  promptLine.value = line
+  moveTo at
 
 # --- the prompt's keys --------------------------------------------------------
 
@@ -614,14 +643,17 @@ clearLine = ->
   rewrite 0, promptLine.value.length
   enteredAt = entered.length
 
+# The keys that carry on a walk through the history; any other ends it.
+WALK_KEYS = ['ArrowUp', 'ArrowDown']
+
 PROMPT_KEYS =
   'Enter':         submit
   # Shift-Tab still takes the keyboard back out of the prompt.
   'Tab':           (chord, event) -> if event.shiftKey then PASS else complete()
-  'ArrowUp':       -> recall -1
-  'ArrowDown':     -> recall  1
-  'C-p':           -> recall -1
-  'C-n':           -> recall  1
+  'ArrowUp':       -> recall -1, recallPrefix ?= leftOf()
+  'ArrowDown':     -> recall  1, recallPrefix ?= leftOf()
+  'C-p':           -> recall -1, ''
+  'C-n':           -> recall  1, ''
   'C-a':           -> moveTo 0
   'C-e':           -> moveTo promptLine.value.length
   'C-b':           -> moveTo caret() - charLeft()
@@ -706,7 +738,9 @@ requery = (query) ->
   searchOn()
 
 endSearch = ->
-  enteredAt = searching.match if searching.match?
+  if searching.match?
+    draft     = {line: searching.original, at: searching.caret} unless searching.original is entered[searching.from]
+    enteredAt = searching.match
   searching = null
   promptMark.textContent = '>'
 
@@ -744,7 +778,11 @@ onPromptKey = (event) ->
     return claim event, verb, chord if verb
     # Any other key takes the match and does what it does. Tab too, on
     # purpose: it completes the word at the caret, where the search left it.
+    # Up and Down then walk every line from the match, as node's do, not
+    # those starting with whatever is left of where the match put the caret.
     endSearch()
+    recallPrefix = ''
+  recallPrefix = null unless chord in WALK_KEYS
   return unless chord?
   yanking = no unless chord is 'M-y'
   verb = (CHOICE_KEYS[chord] if choicesOpen()) ? PROMPT_KEYS[chord]
@@ -756,7 +794,8 @@ onPromptKey = (event) ->
 # A click moves the caret out from under a yank, so Alt-Y after it would
 # replace text that is not the yank, and from the word the list is for.
 interruptPrompt = ->
-  yanking = no
+  yanking      = no
+  recallPrefix = null
   endSearch() if searching
   closeChoices()
 
@@ -765,6 +804,9 @@ listenForPrompt = ->
   promptLine.addEventListener 'pointerdown', interruptPrompt
   promptLine.addEventListener 'blur',        interruptPrompt
   promptLine.addEventListener 'input',       narrow
+  # An edit with no key of its own -- a paste from the menu, a drop -- ends
+  # a walk as a typed one does.
+  promptLine.addEventListener 'input',       -> recallPrefix = null
 
   # An edit has already narrowed the list and recorded where it left the
   # line and caret by the time this arrives, so a difference here is the

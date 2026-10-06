@@ -209,17 +209,54 @@ ipcMain.handle 'sketch:create', (event, asked) ->
     {name: await spelled(asked), created: no}
 
 ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(await spelled name), 'utf8'
+
+# Line endings follow the platform (Robert, 2026-10-05): players bring their
+# own editors, and nobody knows what every Windows editor does with LF. Read
+# by Claude, 2026-10-06, for Robert to overrule: a sketch keeps the endings it
+# already has, and one with none yet -- new, emptied, a single line -- takes
+# the platform's. Nothing remembers a sketch's endings: each save asks the
+# file, inside the save queue, so whatever wrote it last decides -- our last
+# save, or the player's editor in between, whose rewrite the editor ignores
+# when only the endings changed. The editor holds and sends `\n` throughout.
+# `forced` is the suite's, which cannot make this machine Windows; only the
+# suite is handed this object, as with `folding` above.
+newline   = {forced: null}
+NATIVE    = {true: '\r\n', false: '\n'}
+newEnding = -> newline.forced ? NATIVE[process.platform is 'win32']
+ENDINGS   = /\r\n|\r|\n/g
+CALLED    = {'\r\n': 'CRLF', '\n': 'LF', '\r': 'CR'}
+
+# The ending most of the file's lines have -- a tie goes to the platform's
+# when it is among them, else to the one first in the file -- and what to
+# tell the author when its lines did not agree. A file that will not be read
+# has endings nobody knows, so it is saved with the platform's and the rename
+# decides: it needs only the folder, and a save that gave up on the read
+# would fail every autosave of a file left mode 000.
+endingOf = (file) ->
+  old = await retried('reading', file, -> readOld file).catch (error) ->
+    return '' if error.code is 'ENOENT'
+    console.log "sketch:write: could not read #{file} for its line endings (#{error.code}), saving with the platform's"
+    ''
+  counts = {}
+  counts[ending] = (counts[ending] ? 0) + 1 for ending in old.match(ENDINGS) ? []
+  ending = Object.keys(counts).reduce ((best, each) -> if counts[each] > (counts[best] ? 0) then each else best), newEnding()
+  return {ending} if Object.keys(counts).length < 2
+  tally = ("#{count} #{CALLED[each]}" for each, count of counts).join ', '
+  {ending, note: "#{sketchName file}.coffee had mixed line endings (#{tally}); saved with #{CALLED[ending]} throughout"}
+
 # Written beside the target and renamed into place. writeFile truncates
 # first, so a watcher firing mid-write could read an empty file, hand it to
 # the editor, and have the editor autosave the emptiness back. A rename is
 # atomic: a reader sees the old file or the new one. The temp name must not
 # end in .coffee or the watcher would pick it up as a sketch of its own.
+# Answers with the note about mixed endings, or null.
 writeSketch = (file, text) ->
   await fsp.mkdir path.dirname(file), recursive: yes     # :e sub/new makes sub/
+  {ending, note} = await endingOf file
   staging = path.join path.dirname(file), ".#{path.basename file}.saving"
-  await fsp.writeFile staging, text, 'utf8'
+  await fsp.writeFile staging, text.replace(ENDINGS, ending), 'utf8'
   await renameOnto staging, file
-  true
+  note ? null
 
 # Windows refuses a rename while something else has either file open: Defender
 # or the indexer reading the staging file just written, or the target. EPERM
@@ -229,14 +266,33 @@ writeSketch = (file, text) ->
 # goes to the renderer as an error, and the next edit saves again anyway.
 # graceful-fs waits up to a minute for the same thing, which suits npm, not
 # an editor. Elsewhere these codes mean a real refusal, so no retry there.
-RENAME_WAITS = [10, 20, 40, 80, 160, 320, 640]
-TRANSIENT    = ['EPERM', 'EACCES', 'EBUSY']
+# The read for a save's line endings meets the same holders (EBUSY, opened
+# without read sharing), so it waits the same way, before the rename does.
+TRANSIENT_WAITS = [10, 20, 40, 80, 160, 320, 640]
+TRANSIENT       = ['EPERM', 'EACCES', 'EBUSY']
 
-# The suite's way to hold a save in flight, or to have a rename refused the
-# way Windows refuses it, neither of which it can arrange from outside. Only
-# the suite is handed this object (createWindow); nothing else touches it, so
-# outside a test run every field stays at its zero and the hook does nothing.
-faults = {slow: 0, refuse: 0, windows: no}
+retried = (what, file, attempt) ->
+  for pause in TRANSIENT_WAITS
+    try
+      return await attempt()
+    catch error
+      throw error unless (process.platform is 'win32' or faults.windows) and error.code in TRANSIENT
+      console.log "sketch:write: #{error.code} #{what} #{file}, again in #{pause}ms"
+      await new Promise (resolve) -> setTimeout resolve, pause
+  attempt()
+
+# The suite's way to hold a save in flight, or to have a rename or a save's
+# read refused the way Windows refuses them, none of which it can arrange
+# from outside. Only the suite is handed this object (createWindow); nothing
+# else touches it, so outside a test run every field stays at its zero and
+# the hook does nothing.
+faults = {slow: 0, refuse: 0, unreadable: 0, windows: no}
+
+readOld = (file) ->
+  if faults.unreadable > 0
+    faults.unreadable -= 1
+    throw Object.assign new Error("EBUSY: refused by the suite, open '#{file}'"), code: 'EBUSY'
+  fsp.readFile file, 'utf8'
 
 rename = (staging, file) ->
   if faults.slow
@@ -246,15 +302,7 @@ rename = (staging, file) ->
     throw Object.assign new Error("EPERM: refused by the suite, rename '#{staging}'"), code: 'EPERM'
   fsp.rename staging, file
 
-renameOnto = (staging, file) ->
-  for pause in RENAME_WAITS
-    try
-      return await rename staging, file
-    catch error
-      throw error unless (process.platform is 'win32' or faults.windows) and error.code in TRANSIENT
-      console.log "sketch:write: #{error.code} renaming onto #{file}, again in #{pause}ms"
-      await new Promise (resolve) -> setTimeout resolve, pause
-  await rename staging, file
+renameOnto = (staging, file) -> retried 'renaming onto', file, -> rename staging, file
 
 # Saves of one sketch run one at a time, in the order they were asked for.
 # Overlapping, they shared the staging file: one save's rename carried off
@@ -286,12 +334,12 @@ queueSave = (name, text) ->
 ipcMain.handle 'sketch:write', (event, name, text) -> queueSave name, text
 
 # How long a page going away, and then the quit, wait for saves still in
-# flight. Above the ~1.3s of rename retries, so a Windows refusal is still
-# waited out, and above the suite's 1.5s held save. Bounded at all because a
-# data folder on NFS or FUSE can hang an fs call for good, and unbounded, a
-# reload would freeze the page in sendSync and a quit would never finish. A
-# save past the limit is not cancelled; it lands, or fails, on its own time,
-# if the app is still there.
+# flight. Above the ~2.6s a save can spend retrying its read and then its
+# rename, so a Windows refusal is still waited out, and above the suite's
+# 1.5s held save. Bounded at all because a data folder on NFS or FUSE can
+# hang an fs call for good, and unbounded, a reload would freeze the page in
+# sendSync and a quit would never finish. A save past the limit is not
+# cancelled; it lands, or fails, on its own time, if the app is still there.
 SAVE_LIMIT = 5000
 
 settlesWithin = (ms, promise) ->
@@ -312,6 +360,7 @@ settlesWithin = (ms, promise) ->
 ipcMain.on 'sketch:flush', (event, name, text) ->
   last = Promise.resolve()
     .then -> if text? then queueSave name, text else saving.get caseKey sketchFile name
+    .then (note) -> console.log "sketch:flush: #{note}" if note
     .catch (error) -> console.error "sketch:flush: could not save #{name}: #{error.message}"
   settlesWithin(SAVE_LIMIT, last).then (settled) ->
     console.error "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting" unless settled
@@ -579,7 +628,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, saveLimit: SAVE_LIMIT})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"

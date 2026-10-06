@@ -436,9 +436,6 @@ loop
   # rest: after 40 region evals an error in `old` stopped on its caller, and
   # the report lost `at old` (a reviewer of E1, 2026-10-06). Each eval here
   # stops at a breakpoint, so each makes main fetch that script's map.
-  # Not a comment on the first line: a sketch that starts with one keeps none
-  # of its names in the image (declaredNames in worker-boot.js skips only
-  # block comments; found 2026-10-06, and not this check's to fix).
   await setDoc "z = 0\nold = (v) -> v.x.y\n"
   await wait 500
   await click 'runFresh'

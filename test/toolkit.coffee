@@ -49,6 +49,12 @@ module.exports = (win, paths) ->
       return doc if doc is wanted or Date.now() > deadline
       await wait 25
 
+  # A sketch's bytes as the editor holds them. A sketch with no line endings
+  # yet -- scratch, emptied by every reset -- is saved with the platform's
+  # (main's writeSketch), so a check that is not about endings reads CRLF
+  # on Windows and compares through this.
+  t.asHeld = (text) -> text.replace /\r\n?/g, '\n'
+
   # Until the page answers `probe` with something truthy, and that answer.
   t.waitFor = (probe, limit = 3000) ->
     deadline = Date.now() + limit

@@ -8,7 +8,7 @@
  defaultKeymap, history, historyKeymap, indentWithTab,
  StreamLanguage, syntaxHighlighting, HighlightStyle, indentUnit, bracketMatching,
  coffeeScript, searchKeymap, highlightSelectionMatches,
- vim, Vim, tags} = CM
+ vim, Vim, getCM, tags} = CM
 
 SAVE_DELAY  = 250
 FLASH_DELAY = 260
@@ -151,7 +151,8 @@ save = ->
   writing[name] = (writing[name] ? 0) + 1
   sent[name]    = text
   try
-    await beans.write name, text
+    note = await beans.write name, text
+    handlers.onMessage? note if note
   catch error
     lastWritten = was if lastWritten is text
     handlers.onProblem? "could not save #{name}: #{error.message}"
@@ -196,8 +197,9 @@ dropPending = ->
 
 # lastWritten is the text as CodeMirror holds it, never the bytes on disk:
 # CodeMirror reads \r\n and \r as \n, so a CRLF sketch compared raw read dirty
-# forever and its next save rewrote a file nobody edited. A sketch the author
-# does edit is saved with \n (decided by Claude, 2026-10-05).
+# forever and its next save rewrote a file nobody edited. A save sends \n and
+# main writes it back with the endings the file already has (writeSketch), so
+# the echo of a CRLF save is recognised here in its \n form.
 asHeld = (text) -> view.state.toText(text).toString()
 
 # Echoes of our own writes come back through the watcher; ignore those.
@@ -412,6 +414,185 @@ installVimCommands = ->
   Vim.mapCommand '<C-r>', 'action', 'beansEvalRegion', {}, context: 'visual'
   toVim entry for entry in COMMANDS
 
+# --- vim's autoindent ---------------------------------------------------------
+
+# With 'autoindent', Vim takes back an indent it put on a line if nothing was
+# typed there. codemirror-vim keeps CodeMirror's indent and has no such rule,
+# so `o` then Esc left the spaces behind (Robert, 2026-10-05). What Vim 9.1
+# does -- `vim -u NONE -N -i NONE -c 'set ai bs=indent,eol,start'` driven by
+# feedkeys, on "if x / ··foo / ··bar / baz", measured by Claude on 2026-10-06;
+# the `editor` test part checks each row:
+#
+#   keys (on a ··line)               the line after
+#   o Esc, O Esc, 3o Esc             blank
+#   o Enter Enter Esc                all three blank
+#   o Up Esc, o Down Esc             blank, Down on the last line too
+#   o Ctrl-T Esc                     blank
+#   cc Esc, S Esc, cj Esc            blank
+#   o Ctrl-O 0 x Esc                 x      the indent gone before the x
+#   o ·· Esc                         ····   typed, so kept
+#   o x Backspace Esc                ··     typed, so kept
+#   o Left Esc                       ··     moved along the line, so kept
+#   ^C Esc                           ··     a change, but not a linewise one
+#   A Esc, on a line of spaces       kept: not an indent Vim made
+#   o Esc u, o Down Esc u, cc Esc u  as it was: one undo
+#   o Esc u Ctrl-R                   blank: one redo
+#   o Backspace Esc                  ·      kept, though `:help autoindent`
+#                                           says Backspace counts as nothing
+#
+#   played back by @q, or by `.`     the line after
+#   o Esc                            blank
+#   o ·· Esc                         ····   typed, so kept
+#   A Esc, i Esc (onto ····, after   ····   not an indent Vim made
+#     a cc on the line below)
+#   cc Esc                           blank  ours: ··
+#   o Ctrl-T Esc (by `.`)            blank  ours: ····
+#   o Enter Enter Esc (by @q)        blank  ours: ··, ··, then blank
+#   o ·· Esc after a `.`, in one @q  ····   typed, so kept
+#
+# So: a newline brings an indent (o, O, Enter) and a linewise change keeps
+# one (cc, S, cj); typing on the line, or moving along it, makes it the
+# author's; Esc, Ctrl-O, Enter or moving to another line takes it back --
+# Enter with nothing here, since CodeMirror's newline already empties a line
+# of spaces it breaks at the end. The last row is not ours to match:
+# CodeMirror's Backspace takes a whole indent unit, so `o` Backspace Esc
+# leaves the line blank either way.
+#
+# A playback runs inside the one vim command that plays it, and
+# codemirror-vim records no last edit during one, so there the rule is
+# coarser: what it types or Ctrl-T does on the line makes it the author's,
+# and a cc keeps its indent. The rows marked "ours" are where that leaves an
+# indent Vim takes back; the Enters keep theirs because a played-back Enter
+# is inserted text, not CodeMirror's newline. None takes back too much --
+# the last row did, until playback was decided once per vim command
+# (playedBack, below).
+
+indentOnly = (line) -> line.length > 0 and not /\S/.test line.text
+
+# The undo label codemirror-vim gives a command's second change, which the
+# history always joins to the change before it. Taken back under it, the
+# indent goes with whatever brought it, and one `u` undoes both, as in Vim.
+TAKE_BACK = 'input.type.compose'
+
+setIndent = StateEffect.define()
+
+# Where the line starts whose indent is still the editor's, or null. A field,
+# so it follows undo and redo too, which skip transaction filters; any edit
+# to the line that followIndent did not vouch for makes the line the author's.
+indentField = StateField.define
+  create: -> null
+  update: (at, tr) ->
+    for effect in tr.effects when effect.is setIndent
+      return effect.value
+    return null unless at?
+    line = tr.startState.doc.lineAt at
+    if tr.changes.touchesRange line.from, line.to then null else tr.changes.mapPos at
+
+# A line break followed by the line's whole indent, and the cursor after it:
+# what CodeMirror's newline makes for o, O and Enter.
+newIndent = (tr) ->
+  {head, empty} = tr.newSelection.main
+  line = tr.newDoc.lineAt head
+  return null unless empty and head is line.to and indentOnly line
+  made = null
+  tr.changes.iterChanges (fromA, toA, fromB, toB, text) ->
+    made = line.from if toB is head and text.toString() is "\n#{line.text}"
+  made
+
+# Inside one vim command (o and cc on their way, Ctrl-T, Ctrl-U) neither the
+# edits nor the cursor's steps are the author's: all that counts is whether
+# the line is still nothing but indent.
+byCommand = (tr, line) ->
+  return tr unless tr.changes.touchesRange line.from, line.to
+  still = tr.newDoc.lineAt tr.changes.mapPos line.from
+  [tr, {effects: setIndent.of(if indentOnly still then still.from else null)}]
+
+# Typing on the line is left to indentField. The cursor still at the end
+# keeps the indent pending, anywhere else on the line makes it the author's,
+# and on another line takes it back, in the same transaction as the move.
+# A click keeps its own label first: CodeMirror's mouse selection reads only
+# the first, takes TAKE_BACK for typing and ends the drag the click began.
+# So after a click off the line, undo takes two steps instead of one.
+byAuthor = (tr, line) ->
+  return tr if tr.changes.touchesRange line.from, line.to
+  here = tr.newDoc.lineAt tr.changes.mapPos line.from
+  head = tr.newSelection.main.head
+  return tr if head is here.to
+  return [tr, {effects: setIndent.of null}] if here.from <= head <= here.to
+  strip = {changes: {from: line.from, to: line.to}, userEvent: TAKE_BACK}
+  if tr.isUserEvent 'select.pointer' then [tr, strip] else [strip, tr]
+
+# A macro (@q) or a repeat (.) plays its typing back inside the one vim
+# command that plays it, so there byCommand would take typed spaces for an
+# indent. codemirror-vim keeps the flag only in its global state, reached
+# through what it calls a testing hook, and a `.` lowers it as it ends even
+# inside a macro still playing. So it is read once per vim command, at the
+# command's first transaction, insert mode or not -- @q and `.` have raised
+# it by then, a live o or cc has not -- and kept on codemirror-vim's
+# operation, which spans the whole command, a macro's nested keys included,
+# and is new for each command typed (traced by K5's second fixer, Claude,
+# 2026-10-06). 3o's Esc plays its copies outside any vim operation, so they
+# go through byAuthor without asking.
+#
+# A macro that calls itself (`j@q` recorded into q) overflows the stack, and
+# with no finally around the playback codemirror-vim's flag stays raised
+# until a reload. From then on K5 errs only the safe way, keeping indents Vim
+# would take back, and `.` is dead in the plugin itself.
+playedBack = (cm) ->
+  cm.curOp.beansPlaying ?= Vim.getVimGlobalState_().macroModeState.isPlaying
+
+followIndent = EditorState.transactionFilter.of (tr) ->
+  cm      = getCM view
+  liveVim = cm.curOp?.isVimOp and not playedBack cm
+  return tr unless cm.state.vim.insertMode
+  made = newIndent tr
+  return [tr, {effects: setIndent.of made}] if made?
+  at = tr.startState.field indentField
+  return tr unless at?
+  line = tr.startState.doc.lineAt at
+  if liveVim then byCommand tr, line else byAuthor tr, line
+
+takeBack = ->
+  at = view.state.field indentField
+  return unless at?
+  line = view.state.doc.lineAt at
+  view.dispatch changes: {from: line.from, to: line.to}, userEvent: TAKE_BACK
+
+# The lastEditInputState keepAfterChange last read. codemirror-vim records a
+# new one for each edit command typed (none before the first), but not for
+# one a macro or a repeat plays, nor when Ctrl-O or a paste in normal mode
+# brings insert mode back: then it still names some earlier command, maybe a
+# cc on another line.
+seenEdit = null
+
+# cc, S and cj empty their line down to its indent, and enter insert mode
+# with the selection still starting there. Only the command can tell cc from
+# ^C, which makes the same edit and keeps the indent, and only a command just
+# recorded is the one that entered insert mode. So a cc played by @q or `.`
+# keeps its indent, where Vim's line ends blank.
+keepAfterChange = ->
+  edit = getCM(view).state.vim.lastEditInputState
+  return if edit is seenEdit
+  seenEdit = edit
+  {operator, motionArgs} = edit ? {}
+  return unless operator is 'change' and motionArgs?.linewise
+  line = view.state.doc.lineAt view.state.selection.main.from
+  view.dispatch effects: setIndent.of line.from if indentOnly line
+
+ON_MODE =
+  insert: keepAfterChange
+  normal: takeBack
+
+followMode = ({mode}) -> ON_MODE[mode]?()
+
+# Each switch-on brings a new codemirror-vim, and at mount the setting
+# arrives twice over the same one (beans.vim and beans.onVim): off before on
+# keeps it to one listener.
+followModes = ->
+  cm = getCM view
+  cm.off 'vim-mode-change', followMode
+  cm.on  'vim-mode-change', followMode
+
 # --- vim, if asked for -------------------------------------------------------
 
 # Ordinary keys unless Edit > Vim Keys is ticked (Robert, 2026-10-04: most
@@ -419,7 +600,7 @@ installVimCommands = ->
 # shows it; the editor only follows. Swapped in place, so the buffer, the
 # cursor and the undo history all survive the switch.
 vimSlot = new Compartment
-VIM     = vim()
+VIM     = [vim(), indentField, followIndent]
 
 # codemirror-vim only learns of a selection from a transaction it sees, so
 # one made before the switch is handed over again; otherwise vim ignores it
@@ -427,6 +608,7 @@ VIM     = vim()
 setVim = (wanted) ->
   view.dispatch effects: vimSlot.reconfigure if wanted then VIM else []
   view.dispatch selection: view.state.selection if wanted
+  followModes() if wanted
 
 # --- Edit > Undo and Redo ----------------------------------------------------
 
