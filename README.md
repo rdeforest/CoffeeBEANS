@@ -415,6 +415,12 @@ the same thing as running it in the middle of everything else, and a part
 that fails does not take the ones after it with it. The whole suite takes a
 few minutes; one part is a few seconds. It exits nonzero when a check fails.
 
+One more part, `quit`, runs only when named, and is not meant to be named by
+hand: it quits the app it runs in -- that is what it is for, checking that an
+edit made just before File > Quit reaches the disk -- and no part after it
+could run. `lifecycle` starts a second Electron, on a data folder of its own,
+to run it, and reads the disk and the exit status once that one has gone.
+
 `VAR=x npm test` is the POSIX shells' way to set a switch. From cmd.exe it
 is `set BEANS_TESTS=buffers` and then `npm test`; from PowerShell,
 `$env:BEANS_TESTS='buffers'` and then `npm test`. Either way it stays set

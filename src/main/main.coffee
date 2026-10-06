@@ -263,7 +263,7 @@ renameOnto = (staging, file) ->
 saving = new Map
 begun  = new Map
 
-ipcMain.handle 'sketch:write', (event, name, text) ->
+queueSave = (name, text) ->
   key   = caseKey sketchFile name
   write = -> writeSketch sketchFile(await spelled name), text
   begun.set key, (begun.get(key) ? 0) + 1
@@ -273,6 +273,41 @@ ipcMain.handle 'sketch:write', (event, name, text) ->
   forget = -> saving.delete key if saving.get(key) is done
   done.then forget, forget
   done
+
+ipcMain.handle 'sketch:write', (event, name, text) -> queueSave name, text
+
+# How long a page going away, and then the quit, wait for saves still in
+# flight. Above the ~1.3s of rename retries, so a Windows refusal is still
+# waited out, and above the suite's 1.5s held save. Bounded at all because a
+# data folder on NFS or FUSE can hang an fs call for good, and unbounded, a
+# reload would freeze the page in sendSync and a quit would never finish. A
+# save past the limit is not cancelled; it lands, or fails, on its own time,
+# if the app is still there.
+SAVE_LIMIT = 5000
+
+settlesWithin = (ms, promise) ->
+  timer = null
+  clock = new Promise (resolve) -> timer = setTimeout resolve, ms, no
+  Promise.race([promise.then(-> yes), clock]).finally -> clearTimeout timer
+
+# The page's last save, sent as it goes away: View > Reload, the window
+# closing, the app quitting. Synchronous, and answered only once the sketch's
+# saves are all on disk -- the edit, if there was one, and any autosave still
+# in flight -- so a reload waits for them and the page it brings up reads
+# what was typed -- for up to SAVE_LIMIT, then the page goes anyway. Measured
+# by Claude on Electron 44, 2026-10-06: a reload waited out a 1.5s save; a
+# closing window waits only about 500ms, then goes anyway, which is why the
+# quit waits as well (will-quit, below). An async message from the page always
+# arrived too, but nothing waited for its write. The page is gone by the time
+# anything could go wrong, so a failure is said here.
+ipcMain.on 'sketch:flush', (event, name, text) ->
+  last = Promise.resolve()
+    .then -> if text? then queueSave name, text else saving.get caseKey sketchFile name
+    .catch (error) -> console.error "sketch:flush: could not save #{name}: #{error.message}"
+  settlesWithin(SAVE_LIMIT, last).then (settled) ->
+    console.error "sketch:flush: still saving #{name} after #{SAVE_LIMIT / 1000}s, not waiting" unless settled
+    event.returnValue = true
+
 ASSETS = path.join DATA, 'assets'
 
 # Cached on first fetch, and thereafter never touched again. A sketch shown
@@ -535,15 +570,15 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, saveLimit: SAVE_LIMIT})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
         failures = 1
       # app.exit, not process.exitCode then app.quit: Electron's quit path
       # ignores exitCode, so a red suite reported success to the shell
-      # (checked by Claude, 2026-10-04). Nothing here hooks before-quit or
-      # will-quit, which are what app.exit skips.
+      # (checked by Claude, 2026-10-04). It skips will-quit, whose only hook
+      # waits for saves in flight; the suite's are long done by now.
       app.exit if failures then 1 else 0
   win
 
@@ -700,3 +735,18 @@ app.whenReady().then ->
   app.on 'activate', -> createWindow() unless BrowserWindow.getAllWindows().length
 
 app.on 'window-all-closed', -> app.quit()
+
+# A window stops waiting for its page's last save after about 500ms (see
+# sketch:flush), and without this the app then exited with the save still
+# in flight: a 1.5s save was lost every time (Claude, 2026-10-06). So the
+# quit waits for every save still going, and then quits again -- for up to
+# SAVE_LIMIT, then exits with them unfinished. app.exit, because a second
+# app.quit would come back here and hold again.
+app.on 'will-quit', (event) ->
+  return unless saving.size
+  event.preventDefault()
+  settlesWithin(SAVE_LIMIT, Promise.allSettled saving.values()).then (settled) ->
+    return app.quit() if settled
+    still = [saving.keys()...]
+    console.error "will-quit: still saving #{still.join ', '} after #{SAVE_LIMIT / 1000}s, quitting anyway"
+    app.exit 0
