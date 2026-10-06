@@ -25,7 +25,8 @@ Each entry: what to do, what should happen, where it came from.
 ## macOS (Robert's MacBook)
 
 - Everything on `docs/overnight/done/2026-10-05.md`'s play-test list, and in
-  particular: undo/redo at the prompt (Cmd-Z, Cmd-Shift-Z) may be dead, since
-  the Edit menu has no undo/redo roles (inferred by the integration review);
+  particular: undo/redo at the prompt (Cmd-Z, Cmd-Shift-Z) -- confirmed dead
+  by Robert on 2026-10-05, fix queued as K7 for the night of 2026-10-06, to
+  be re-tested on the Mac once it lands;
   Ctrl-Enter, Ctrl-S and Ctrl-. are literal Ctrl, not Cmd; the CI by-hand run
   missed the first save in a folder created outside the app.
