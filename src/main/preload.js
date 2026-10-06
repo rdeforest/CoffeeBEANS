@@ -39,7 +39,7 @@ contextBridge.exposeInMainWorld('beans', {
     pause:   ()             => ipcRenderer.invoke('debug:pause'),
     step:    ()             => ipcRenderer.invoke('debug:step'),
     resume:  (skip)         => ipcRenderer.invoke('debug:resume', skip),
-    evaluate: (source)      => ipcRenderer.invoke('debug:eval', source),
+    evaluate: (pause, source) => ipcRenderer.invoke('debug:eval', pause, source),
     members: (pause, id)    => ipcRenderer.invoke('debug:members', pause, id),
     getter:  (pause, owner, name) => ipcRenderer.invoke('debug:getter', pause, owner, name),
     onEvent: (handler) =>

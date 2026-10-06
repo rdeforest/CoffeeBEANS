@@ -61,11 +61,19 @@ module.exports = (win, paths) ->
     await t.reset()
     # A part that throws is one failure, not the end of the run: the parts
     # after it are independent and still worth knowing about.
+    crossed = t.crossings().length
     try
       await require("./parts/#{name}") t
     catch error
       console.error "  #{name} crashed: #{error.stack ? error}"
       t.failures += 1
+    # The debugger is armed for every run, so any part can break the rule
+    # that nothing reaches V8 while an evaluation is out there (AGENTS.md:
+    # a step sent into one segfaults the renderer). Counted in main, under
+    # BEANS_TEST only; see `watched` in src/main/debugger.coffee.
+    crossings = t.crossings()[crossed..]
+    t.check "#{name}: nothing reached V8 while an evaluation was out", not crossings.length,
+      (if crossings.length then JSON.stringify crossings else '')
     fell = t.failures - started
     console.log "--- #{name}: #{if fell then "#{fell} failed" else 'all passed'}"
 

@@ -404,14 +404,14 @@ module.exports = (t) ->
   # the first is still arming. The first leaves the status to the second:
   # putting back its own 'running' over the idle worker, it made the
   # second's run refused as already running. A real arming takes about 4ms,
-  # so main stretches each one for this check, and the second eval must
-  # come while the first is still arming.
+  # so the suite's hook in main stretches each one for this check, and the
+  # second eval must come while the first is still arming.
   STRETCH = 1000
   await t.clearConsole()
   await load LOOPS
   await t.evalAll()
   await becomes 'running'
-  await t.delayArming STRETCH
+  t.debugHooks.arming = -> wait STRETCH
   try
     cancelled = await js """
       #{typed "screen 320, 200\nprint 'third ran'\nloop\n  buffer.swap\n# breakpoint\n"}
@@ -429,7 +429,7 @@ module.exports = (t) ->
     """
     ran = await saw '/third ran/', 3 * STRETCH
   finally
-    await t.delayArming 0
+    t.debugHooks.arming = null
   inside = again.at - cancelled.at < STRETCH
   text   = await t.consoleText()
   check 'a cancelled arming leaves the status to the arming after it, whose run goes ahead',

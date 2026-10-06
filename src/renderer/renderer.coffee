@@ -301,8 +301,9 @@ evaluatePaused = (ask) ->
 # The pane is redrawn only once the evaluation is counted back in, so the
 # objects it re-opens are not asked for while one is still out.
 askPaused = (source) ->
+  seq = linePaused
   try
-    reply = await evaluatePaused -> beans.debug.evaluate source
+    reply = await evaluatePaused -> beans.debug.evaluate seq, source
   catch error
     return say String(error.message ? error), 'err'
   return movedOn() unless reply
@@ -552,8 +553,9 @@ completePaused = (asked) ->
   question = JSON.stringify {path, word: asked.word, local}
   source   = "REPL.complete #{question}, #{JSON.stringify pausedNames}, #{if local then path[0] else 'undefined'}"
   completing = asked
+  seq = linePaused
   try
-    reply = await evaluatePaused -> beans.debug.evaluate source
+    reply = await evaluatePaused -> beans.debug.evaluate seq, source
   catch error
     completing = null if completing is asked
     return say String(error.message ? error), 'err'
@@ -1862,7 +1864,11 @@ start = (thenRun = null) ->
   worker.onmessage = ({data}) -> messages[data.type]? data
   # A worker that dies on the way up posts nothing, and without this the
   # status sits on 'booting' forever while every run is silently queued.
+  # Said here only: left to bubble, an error thrown before worker-boot's own
+  # listeners exist was said again as `renderer:` (an importScripts that
+  # failed to load, measured by Claude, 2026-10-06).
   worker.onerror = (event) ->
+    event.preventDefault()
     say "worker: #{event.message ? 'failed to start'}", 'err'
     setStatus 'error'
   worker.postMessage type: 'boot', sab: sab, owner: Atomics.load i32, H.OWNER
@@ -1913,15 +1919,17 @@ stop = ->
   # "no yield point", which would be a lie.
   # The debugger is armed for every run, so a Stop always sets pauses aside.
   skipping = yes
+  # The deadline belongs to this worker. A restart before it passes replaces
+  # the worker, and this check must not shoot the new one -- nor, if the
+  # restart comes while the resume is out, set the new one's status.
+  stopping = worker
   if linePaused
     endLinePause()
     await beans.debug.resume yes
+    return unless worker is stopping
     setStatus 'running' if status in ['line paused', 'error paused']
   else
     beans.debug.resume yes
-  # The deadline belongs to this worker. A restart before it passes replaces
-  # the worker, and this check must not shoot the new one.
-  stopping = worker
   deadline = performance.now() + 250
   check = ->
     return unless worker is stopping and status is 'running'
