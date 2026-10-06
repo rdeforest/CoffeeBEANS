@@ -1723,15 +1723,17 @@ stop = ->
   # "no yield point", which would be a lie.
   # The debugger is armed for every run, so a Stop always sets pauses aside.
   skipping = yes
+  # The deadline belongs to this worker. A restart before it passes replaces
+  # the worker, and this check must not shoot the new one -- nor, if the
+  # restart comes while the resume is out, set the new one's status.
+  stopping = worker
   if linePaused
     endLinePause()
     await beans.debug.resume yes
+    return unless worker is stopping
     setStatus 'running' if status in ['line paused', 'error paused']
   else
     beans.debug.resume yes
-  # The deadline belongs to this worker. A restart before it passes replaces
-  # the worker, and this check must not shoot the new one.
-  stopping = worker
   deadline = performance.now() + 250
   check = ->
     return unless worker is stopping and status is 'running'

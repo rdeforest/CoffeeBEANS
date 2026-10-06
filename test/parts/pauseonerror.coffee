@@ -632,3 +632,83 @@ loop
   check 'with error stops off, an error ends the run and is reported once, without stopping',
     (await status()) is 'error' and not (await pauseNumber()) and times(text, "run (line 2): #{NULL_X}") is 1,
     "status=#{await status()} console=#{JSON.stringify text.trim()}"
+
+  # 21-23. Nothing may reach V8 in a session while an evaluation is out there
+  # (AGENTS.md: a step sent into one segfaults the renderer). Main counts
+  # every command that breaks that under the suite (`watched` in
+  # src/main/debugger.coffee), and each of these reads the count itself, as
+  # well as the sweep after every part (test/suite.coffee).
+  linePause = (source) ->
+    await setDoc source
+    await wait 500
+    await clearConsole()
+    before = (await pauseNumber()) ? 0
+    await evalAll()
+    await nextPause before
+
+  freed = -> until_ (-> js "return Prompt.pending() === false"), 8000
+
+  # 21. A line still being answered in a worker a Run has replaced. Its turn
+  # ended with the old session, which let the new worker's prompt start an
+  # evaluation, and the old line carried on regardless: once V8 answered it,
+  # it sent REPL.show to whatever session was current -- the new worker's, in
+  # the middle of that worker's own line (a reviewer of cbe904b, 2026-10-06,
+  # 3 of 3). The old line finishes by itself 1.5s in; the new one never does.
+  crossed = t.crossings().length
+  first   = await linePause "n = 0\nbreakpoint\nprint 'after'\n"
+  await js "Prompt.ask('t0 = Date.now(); null while Date.now() - t0 < 1500; {a: 1}'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await setDoc "z = 1\nbreakpoint\nloop\n  buffer.swap\n"
+  await click 'runFresh'
+  second = await nextPause first, 5000
+  await js "Prompt.ask('z = 0; loop then z += 1'); return true"
+  answered = await freed()
+  await t.quiet()
+  said = await consoleText()
+  crossings = t.crossings()[crossed..]
+  check "a line answered in a worker a Run replaced sends nothing on, into the next worker's evaluation",
+    first and second and answered and not crossings.length and said.includes('moved on') and said.includes('gave up'),
+    "first=#{first} second=#{second} answered=#{answered} crossings=#{JSON.stringify crossings} console=#{JSON.stringify said.trim()}"
+  await click 'stop'
+  await statusBecomes 'ready', 5000
+
+  # 22. An answer that never finishes showing. The prompt's line is bounded,
+  # but showing its answer ran REPL.show through Runtime.callFunctionOn,
+  # which has no timeout, and a Proxy's trap that loops held the turn for
+  # good: the Stop waited on it forever, `line paused` (a reviewer of
+  # cbe904b, 2026-10-06). The sketch never ends by itself, so `stopped` is
+  # the Stop's doing.
+  await linePause "n = 0\nbreakpoint\nloop\n  buffer.swap\n"
+  await js "Prompt.ask('new Proxy {a: 1}, get: -> (x = 0; x += 1 while yes; x)'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await wait 500
+  await click 'stop'
+  ended = await statusBecomes 'ready', 10000
+  await t.quiet()
+  said = await consoleText()
+  check 'Stop ends a line pause whose answer never finishes showing, and says it gave up showing it',
+    ended and said.includes('gave up showing') and said.includes('*** stopped ***'),
+    "status=#{await status()} console=#{JSON.stringify said.trim()}"
+  await setDoc "print 'fresh'\n"                # a Run is the way out if it did not
+  await wait 500
+  await click 'runFresh'
+  await statusBecomes 'ready'
+
+  # 23. The buffer arming and disarming while an endless line is out. Every
+  # arm told V8 to stop skipping pauses, whether or not a Stop had set them
+  # aside, straight into the evaluation (a reviewer of cbe904b, 2026-10-06).
+  crossed = t.crossings().length
+  await linePause "n = 0\nbreakpoint\nprint 'after'\n"
+  await js "Prompt.ask('loop then n += 1'); return true"
+  await until_ -> js "return Prompt.pending()"
+  await setDoc "n = 0\nprint 'after'\n"            # no breakpoint: disarms
+  await wait 700                                   # past the buffer's 300ms debounce
+  await setDoc "n = 0\nbreakpoint\nprint 'after'\n"
+  await wait 700
+  answered = await freed()
+  crossings = t.crossings()[crossed..]
+  check 'the buffer arming and disarming during an endless line sends nothing into it',
+    answered and not crossings.length,
+    "answered=#{answered} crossings=#{JSON.stringify crossings}"
+  await click 'stop'
+  await statusBecomes 'ready', 5000
