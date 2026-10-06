@@ -109,7 +109,7 @@ cost minutes: push merges, not every commit.
 
 Parts: `startup problems editor image repl buffers stepping debugging focus
 lifecycle drawing color loading shell about report input random names sound
-perf pauseonerror`. Each starts from a reset app, so running one alone means
+perf pauseonerror stopbutton`. Each starts from a reset app, so running one alone means
 the same thing as running it in the middle of everything else. `quit` runs
 only when named (`BY_NAME` in `test/suite.coffee`): it ends the app it runs
 in, so `lifecycle` starts a second Electron to run it, and `startup` starts
@@ -250,9 +250,28 @@ Done:
   (`buffer.swap`, `keys.poll`, `mouse.wheel`) are a click away too, as they
   always were at the prompt.
 
+- **Pausing on uncaught errors** (E1, 2026-10-06, then six rounds of review
+  and fixes the same night; test part `pauseonerror`). The sketch runs as
+  the listener of an event the worker dispatches to itself (`dispatchRun`),
+  with no `catch` above it, and the debugger is armed for every run with
+  `pauseOnExceptions 'uncaught'`. An uncaught error in the run stops on the
+  author's line as `error paused`: pane, prompt and stack work against the
+  live frame; Continue ends the run as the error without saying it twice;
+  Step is refused (decided by Claude -- nothing catches the error, so a step
+  could only end the run). An error the sketch catches, the prompt's own,
+  Stop and a syntax error never stop. Errors after the run has ended
+  (timers, promise callbacks, after an `await`) are reported once, "after
+  the run", never stopped on; unhandled rejections are now reported at all
+  (before E1 they vanished). A check guards the prediction trap: any `catch`
+  above the run turns the feature off silently.
+
 Not done, each waiting on a reason:
 
-- **Pausing on uncaught errors** -- still blocked, see Decisions.
+- **Retiring arming from the buffer.** With the debugger armed for every
+  run, `watchBuffer`/`wantsDebug`/`armedFor` in the renderer and `wanted`/
+  `forced`/`disable` in main decide nothing. They are kept until Robert
+  rules on the Decision below; `armFirst` is still load-bearing (the first
+  attach, and clearing a Stop's skip).
 
 ## Facts line stepping established
 
@@ -289,8 +308,46 @@ Verified in Electron 44 while building it; do not re-derive.
   is out; Stop waits it out. `timeout` on `evaluateOnCallFrame` bounds it
   (`EVAL_LIMIT`): V8 terminates the expression, the call rejects with
   "Execution was terminated", and the paused frame stays usable.
-- **`t.settle()` counts both pauses as settled.** A check that waits for a
-  Stop to finish has to wait for `ready` itself.
+- **`t.settle()` counts all three pauses as settled.** A check that waits
+  for a Stop to finish has to wait for `ready` itself.
+
+Facts pausing on errors established (2026-10-06, Electron 44):
+
+- **Every debugger turn speaks only to its own session.** A Run replaces the
+  worker while an old evaluation may still be finishing, and the old turn's
+  next command once went to the new worker's session mid-evaluation. Now:
+  `asking` is the one evaluation out in a paused worker; `takeTurn` races it
+  against `left`, a promise that settles when the session goes
+  (`sessionGone`, in `setUp` and `resetSession`); `speaker()` gives a
+  multi-step job a `talk` bound to the session it started in, which refuses
+  once that session is gone; `whenFree` waits for the turn and sends in the
+  same tick. `halted` is V8's real pause and `current` checks it between
+  awaits in a pause's setup; `stopped` is the pause the renderer was told
+  of.
+- **The suite checks the binding rule itself.** Under `BEANS_TEST` every CDP
+  command goes through `watched`, which records any command sent to a
+  session while an `evaluateOnCallFrame` or `callFunctionOn` is out there,
+  and every part ends with a check that nothing was recorded. A new path
+  that breaks the rule fails the suite instead of waiting for a reviewer.
+- **`callFunctionOn` has no timeout.** Anything that runs author code (a
+  getter on a thrown object, `REPL.show` of a Proxy) goes through
+  `onParked`: the value is parked on the worker global under
+  `__beansParked` (by `callFunctionOn` with `this` the global, so no name
+  is looked up), then read by an `evaluateOnCallFrame` with `timeout:
+  EVAL_LIMIT`. Frame expressions name nothing but `__beansParked`: a sketch
+  variable called `globalThis` once turned every pause off.
+- **Source maps are fetched when a pause needs them**
+  (`Debugger.getScriptSource`), the newest 32 cached; the worker keeps each
+  run's source to recompile an old map for a traceback, so its memory grows
+  with runs for the worker's life (not measured; not bounded).
+- **A pause names its worker** (`REPL.owner`), and the renderer drops one
+  from a worker it has replaced. A sketch that clobbers `REPL` makes the
+  pause fail loudly ("could not pause") rather than vanish.
+- **A Stop's skip-all-pauses is reported** to the renderer (`'skipping'`), so
+  the next run re-arms; guessed from the renderer's own request, it once
+  left the next run's breakpoint and error stops silently skipped.
+- **Test hooks** for these races live in `hooks` (`pausing`, `stopping`,
+  `arming`), null outside the suite.
 
 - **`Worker.terminate()` gives a busy worker two seconds.** Chromium queues
   the shutdown behind whatever the worker is running and only forces
@@ -353,8 +410,9 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   stop working. That is why it sits outside `beans-runtime/`.
 - **Only pause in user code.** Blackbox `beans-runtime/` and `worker-boot.js`.
   If runtime debugging is ever wanted, gate it behind an env var.
-- **Two kinds of pause, named apart:** `frame paused` and `line paused`.
-  `held`/`paused` was rejected — you cannot remember which is which.
+- **Three kinds of pause, named apart:** `frame paused`, `line paused` and
+  (since E1) `error paused`. `held`/`paused` was rejected — you cannot
+  remember which is which.
 - **No mode toggle.** Both step buttons mean something in both states: from a
   frame pause, step-line resumes and breaks on the next sketch line; from a
   line pause, step-frame runs to the next frame boundary.
@@ -370,6 +428,9 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   keystroke stream the line counter already uses; a run checks for itself
   first. Zero ceremony, and it cannot be armed-when-you-forgot. Armed means
   the Debugger domain is on, not attached -- see the re-attach fact above.
+  **Moot since 2026-10-06:** Robert's choice for pausing on errors arms the
+  debugger for every run. The code is kept until he decides whether to
+  remove it (see "Not done" above).
 - **A line step is a step *into*:** the next line that runs, wherever it is.
   The runtime is ignore-listed, so `print` and `buffer.swap` are one step.
   There is no separate step-over; the scope wall has room for four verbs.
@@ -385,7 +446,8 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   wraps `runSketch` in a `try/catch`, so V8 predicts every sketch error as
   caught and `pauseOnExceptions: 'uncaught'` never fires. Needs either
   pause-on-all plus auto-resume outside user code, or restructuring how sketch
-  errors propagate. Must read as *an error*, not a silent freeze.
+  errors propagate. Must read as *an error*, not a silent freeze. (Built
+  2026-10-06, E1: see Done above.)
   Researched 2026-10-05: `docs/research/pause-on-error.md`. **Decided by
   Robert, 2026-10-05:** build it the note's way -- the sketch runs as an
   event listener with no catch above it, and the debugger is armed for
@@ -423,8 +485,8 @@ for runtime errors: the stack shows in the variables pane, innermost first,
 the innermost line marked, the prompt focused, and a click takes the editor
 to a frame's line (`showStack`/`visitFrame` in the renderer, test part
 `focus`). It is post-mortem -- the frames are gone, only their lines are
-known -- so it is not "pausing on uncaught errors", which is still blocked
-(see Decisions). A live stack while line paused is still out, but now that
+known -- so it is not "pausing on uncaught errors", which is a live pause
+(built 2026-10-06, see Done). A live stack while line paused is still out, but now that
 the pane can draw one, it would be cheap if a reason turns up.
 
 ## Platform facts
@@ -623,6 +685,38 @@ Found on the night of 2026-10-06, Electron 44, measured unless marked:
   render quantum and a busy bit per voice (`Sound.*` in the renderer), and
   the `sound` part checks those. None of it says the result sounds good --
   that takes an ear.
+
+## Stop, and what it means in each state (E3, 2026-10-06)
+
+Stop is disabled (really, with a title saying why) when there is nothing to
+stop, and Ctrl-. calls `stop()` directly, so it works either way.
+`stoppable()` in the renderer: live while arming, running or in any of the
+three pauses; while booting with a run waiting on the boot; while a prompt
+line is out (`ASK_STATE` 1 or 4); and while any voice sounds (`SOUND_BUSY`)
+-- Stop with nothing running is how a held note is hushed. The 16ms console
+timer re-checks it, because the worker and the worklet change those words
+without telling anyone. Each term, mutated out in review, broke exactly its
+own check.
+
+What three rounds of review established about `stop()`:
+
+- **Stop at an idle worker** (`IDLE`: ready, error, booting) bumps the sound
+  epoch, raises the interrupt only for a prompt line the worker has claimed
+  (state 4), and takes back one not yet claimed (state 1 -> 0, "*** stopped
+  ***"). Raised at any other time, the interrupt stayed up and the next
+  prompt line answered "stopped".
+- **A run being armed is cancelled** by Stop: the `stops` counter is checked
+  after `armFirst`'s await, and `armedOver` puts back the status the run was
+  asked from. `underneath()` is the status beneath an `arming`, and `send`
+  tests it, so a second run cannot be posted to a busy worker.
+- **A hold ends with its run** -- decided by Claude, Robert may overrule.
+  `finished` clears it; a hold pressed during a boot still carries into that
+  run. Before, a hold outlived its run and froze the next `/eval` at its
+  first frame under a status reading `running`.
+- **Stop of a held, busy sketch counts as stopping a running one**
+  (`resumeTo = 'running'`), so the 250ms deadline still applies.
+- Still open: a prompt line with no yield point at an idle worker cannot be
+  stopped; an `/eval` sent before a stopped line answers lowers the flag.
 
 ## Vim emulation (codemirror-vim), the facts worth keeping
 
