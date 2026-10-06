@@ -402,11 +402,13 @@ The 📣🐞 button in the header writes a report you can attach to an issue.
 Say what happened, and tick the box if the sketch that is open should go
 with it (it is left out unless you do). The app adds the About text and the
 last 100 console lines, then takes out what would identify you or your
-machine: your home folder (paths start `~`), the data folder (`<data>`) and
-the app's own folder (`<app>`), your user name and the machine's host name
-wherever they appear, IP and MAC addresses, e-mail addresses, and anything
-shaped like a password, token or key. Versions, line numbers and the app's
-own messages stay, since they are what makes a report useful.
+machine: home folders, yours or anyone's (paths start `~`), the data folder
+(`<data>`) and the app's own folder (`<app>`), a network share's server and
+name (`\\<share>`), your user name and the machine's host name wherever
+they appear, IP and MAC addresses, e-mail addresses, and anything shaped
+like a password, token, key or session cookie. Versions, line numbers, the
+paths in web addresses and the app's own messages stay, since they are what
+makes a report useful.
 
 You then see exactly what will be saved, and can change or remove anything
 before saving. It goes to `reports/` in the data folder, named for the time

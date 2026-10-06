@@ -984,6 +984,7 @@ reportBox     = document.getElementById 'report'
 reportWords   = document.getElementById 'reportWords'
 reportSketch  = document.getElementById 'reportSketch'
 reportText    = document.getElementById 'reportText'
+reportNext    = document.getElementById 'reportDraft'
 reportSave    = document.getElementById 'reportSave'
 reportRefused = document.getElementById 'reportRefused'
 reportSaved   = document.getElementById 'reportSaved'
@@ -993,7 +994,15 @@ reportSaved   = document.getElementById 'reportSaved'
 # click, the button itself, so Space would open the report again and typing
 # would go nowhere. pointerdown comes before the click moves focus. Reached
 # by Tab instead, the button is where the player was, and stays null.
-reportReturn = null
+reportReturn  = null
+# Taken at pointerdown, and forgotten if the pointer is let go anywhere but
+# the button: a press dragged off is no click, and the next open, from the
+# keyboard, would hand focus to wherever that press began.
+reportPressed = null
+# Counts opens. A draft or a save still out when the player cancelled
+# answers a dialog that has moved on, and must not move the next one. Not
+# counted at `close`: that event is queued, and a quick reopen beats it.
+reportShown   = 0
 
 reportStep = (id) ->
   step.hidden = step.id isnt id for step in reportBox.querySelectorAll '.step'
@@ -1006,50 +1015,67 @@ reportFailed = (what, error) ->
   reportStep 'reportDone'
 
 openReport = ->
-  reportReturn = document.activeElement unless document.activeElement is reportButton
+  reportShown  += 1
+  reportReturn  = if document.activeElement is reportButton then reportPressed else document.activeElement
+  reportPressed = null
   reportWords.value     = ''
   reportSketch.checked  = no
   reportRefused.hidden  = yes
+  reportNext.disabled   = no
+  reportSave.disabled   = no
   reportStep 'reportAsk'
   reportBox.showModal()
   reportWords.focus()
 
+# One draft at a time, like a save.
 draftReport = ->
+  shown = reportShown
+  reportNext.disabled = yes
   flushConsole()
   lines  = (line.textContent for line in output.children)[-REPORT_LINES..]
   sketch = if reportSketch.checked then {name: Editor.name(), text: Editor.all()} else null
   try
-    reportText.value = await beans.report.draft {words: reportWords.value, lines, sketch}
+    text = await beans.report.draft {words: reportWords.value, lines, sketch}
   catch error
+    return unless shown is reportShown
+    reportNext.disabled = no
     return reportFailed 'draft the report', error
+  return unless shown is reportShown
+  reportNext.disabled = no
+  reportText.value    = text
   reportStep 'reportCheck'
   reportText.focus()
 
 # One save at a time. A save that fails leaves the player where they were,
-# their edits intact, to try again.
+# their edits intact, to try again. One that lands after a cancel still
+# wrote its file, so the console says so either way.
 saveReport = ->
+  shown = reportShown
   reportSave.disabled  = yes
   reportRefused.hidden = yes
   try
     {file, issues} = await beans.report.save reportText.value
   catch error
+    return unless shown is reportShown
+    reportSave.disabled       = no
     reportRefused.textContent = "Could not save the report: #{error.message}"
     reportRefused.hidden      = no
     return
-  finally
-    reportSave.disabled = no
   told = "Saved #{file} -- its folder is open. To send it, open an issue at #{issues} and attach the file."
-  reportSaved.textContent = told
   say told, 'sys'
+  return unless shown is reportShown
+  reportSave.disabled     = no
+  reportSaved.textContent = told
   reportStep 'reportDone'
 
-reportButton.addEventListener 'pointerdown', -> reportReturn = document.activeElement
+reportButton.addEventListener 'pointerdown', -> reportPressed = document.activeElement
+window.addEventListener 'pointerup', ((event) -> reportPressed = null unless reportButton.contains event.target), yes
 reportBox.addEventListener 'close', ->
   reportReturn?.focus()
   reportReturn = null
-reportButton.onclick                            = openReport
-document.getElementById('reportDraft').onclick  = draftReport
-reportSave.onclick                              = saveReport
+reportButton.onclick = openReport
+reportNext.onclick   = draftReport
+reportSave.onclick   = saveReport
 document.getElementById('reportIssues').onclick = -> beans.report.issues()
 
 # --- presentation -----------------------------------------------------------

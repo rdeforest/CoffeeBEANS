@@ -57,6 +57,12 @@ AWS_PIECES = ['wJalrXUtnFEMI', 'K7MDENG', 'bPxRfiCY3EXAMPLEKEY']
 AWS_SECRET = AWS_PIECES.join '/'
 BODY = ['MIIEowIBAAKCAQEAx3Lq/Z9f2kP0sH4yQe7Vb1nWm8cR/5tJ3uL6oD2gA0iXz+Y9e',
         'T4hKp1Wq8s7Fm3Nv2Bc5/Xr0Lz9Jd6Gy4Ht1Ue8Ka3/Op2Iq7Rs5Mw0Vb9Nc6Xd==']
+# A body's last line can be any length.
+TAIL = 'Ab3Cd5Ef7Gh9Ij=='
+# AWS's documented example secret key: one digit, so random letters in both
+# cases have to be enough. And a key with no digits at all.
+AWS_EXAMPLE = ['wJalrXUtnFEMI', 'K7MDENG', 'bPxRfiCY' + 'EXAMPLEKEY']
+NO_DIGITS   = 'qWeRtYuIoPaSdFgHjKl+' + 'ZxCvBnMqWeRtYuIoPaSd'
 
 CASES = [
   # pattern, machine, a realistic line, what must be gone, what must be
@@ -81,6 +87,14 @@ CASES = [
     ['jos%C3%A9'], ['file://~/sketches/x.coffee'], 'percent-encoded']
   ['home-shaped folder', LINKED, "EACCES: open '/home/alice/sketches/x.coffee'",
     ['alice'], ["open '~/sketches/x.coffee'"], 'through a link']
+  ['home-shaped folder', ALICE, "ENOENT: open '/Users/Mike Smith/Library/beans/x.png'",
+    ['Mike', 'Smith'], ["open '~/Library/beans/x.png'"], 'a name with a space']
+  ['network share', ALICE, 'EACCES: \\\\fileserver\\Users\\erin\\Documents and \\\\fs\\home$\\frank\\docs',
+    ['fileserver', 'erin', 'fs\\', 'frank'], ['EACCES: \\\\<share>\\Documents and \\\\<share>\\docs']]
+  ['mounted drive', PI, 'loaded /run/media/pi/BEANS/x.coffee from the stick at /media/pi',
+    ['/pi'], ['/run/media/<user>/BEANS/x.coffee', 'the stick at /media/<user>']]
+  ['home by account name', ALICE, 'open ~bob/.ssh/id_rsa failed; ~carol/games/x.coffee loaded',
+    ['bob', 'carol'], ['open ~/.ssh/id_rsa failed; ~/games/x.coffee loaded']]
   ['password in a URL', ALICE, 'fetch https://bob:hunter2@example.com/feed.json failed: 401',
     ['bob', 'hunter2'], ['https://<secret>@example.com/feed.json']]
   ['JSON web token', ALICE, "session #{JWT} expired",
@@ -99,12 +113,20 @@ CASES = [
     AWS_PIECES, ['aws_secret_access_key = <secret>'], 'from ~/.aws/credentials']
   ['secret assignment', ALICE, 'POST failed with client_secret=s3cr3t(1) in the body',
     ['s3cr3t', '(1)'], ['client_secret=<secret> in the body'], 'random, with parentheses']
+  ['secret assignment', ALICE, 'PGPASSWORD=hunter2 SESSIONTOKEN=abc psql -h db',
+    ['hunter2', '=abc'], ['PGPASSWORD=<secret> SESSIONTOKEN=<secret> psql'], 'glued in capitals']
+  ['secret block', ALICE, "config.yml:\nsecret: |\n  hunter2-the-real-one\n\n  and-a-second-line\nnext: 1",
+    ['hunter2', 'second-line'], ['secret: ', '\n  <secret>\nnext: 1']]
+  ['cookie', ALICE, 'sent Cookie: session=abcdefg12345; theme=dark, got Set-Cookie: sid=s%3Aabc123xyz; Path=/',
+    ['abcdefg12345', 'abc123xyz'], ['Cookie: session=<secret>; theme=', 'Set-Cookie: sid=<secret>;']]
   ['secret after its name', ALICE, 'machine api.example.com login bob password s3cr3t!x',
     ['s3cr3t'], ['login bob password <secret>'], 'from .netrc']
   ['secret after its name', ALICE, 'it said wrong password, but I typed password hunter2',
     ['hunter2'], ['wrong password, but I typed password <secret>'], 'ending its line']
   ['e-mail address', ALICE, 'sign-in failed for alice.smith+beans@example.co.uk',
     ['smith', 'example.co.uk'], ['failed for <email>']]
+  ['e-mail address', ALICE, 'sign-in failed for jose\u0301.garci\u0301a@example.com',
+    ['garci', 'example.com'], ['failed for <email>'], 'written decomposed']
   ['MAC address', ALICE, 'en0: ether 3c:22:fb:01:9a:7e, on Windows 3C-22-FB-01-9A-7E',
     ['3c:22', '3C-22'], ['ether <mac>, on Windows <mac>']]
   ['MAC address', ALICE, 'switch port Gi0/1 learned 3c22.fb01.9a7e.',
@@ -121,6 +143,12 @@ CASES = [
     AWS_PIECES, ['AWS refused <secret> for this bucket'], 'an AWS secret key']
   ['base64 run', ALICE, "pasted:\n#{BODY.join '\n'}\nand it failed",
     BODY.flatMap((line) -> line.split '/'), ['pasted:\n<secret>\n<secret>\nand it failed'], "a private key's body"]
+  ['base64 run', ALICE, "AWS refused #{AWS_EXAMPLE.join '/'} for this bucket",
+    AWS_EXAMPLE, ['AWS refused <secret> for this bucket'], "AWS's own example key"]
+  ['base64 run', ALICE, "AWS refused #{NO_DIGITS} too",
+    [NO_DIGITS[..19], NO_DIGITS[20..]], ['AWS refused <secret> too'], 'a key with no digits']
+  ['base64 last line', ALICE, "pasted:\n#{BODY[0]}\n#{TAIL}\nand it failed",
+    [TAIL[..13]], ['pasted:\n<secret>\n<secret>\nand it failed']]
   ['host name', ALICE, 'getaddrinfo ENOTFOUND alices-laptop.lan, and alices-laptop is not answering',
     ['alices-laptop'], ['ENOTFOUND <host>, and <host> is not']]
   ['user name', ALICE, 'Alice here: it froze when alice pressed space; malice is not a name',
@@ -144,11 +172,23 @@ KEEPS = [
   'esbuild@0.28.2 and coffeescript@2.7.0'
   'secret = random 100'
   'token = nextToken()'
-  "compass = 3; bypass = 4; author: 'Robert'"
+  "compass = 3; bypass = 4; author: 'Robert'; BYPASS=1 AUTHOR=Robert"
+  'mask = ~bits; half = ~x/2; ~str.indexOf c'
   'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
   'opened sketches/level2/boss3/arena4/final5.coffee'
   'the token expired at noon'
   'HEAD is now at 3c22fb019a7e K6 fix'
+]
+
+# Each of these the V2 follow-up's review found taken, and each is what a
+# report needs to say.
+KEPT = [
+  ['a sketch path in mixed case', "ENOENT: open 'sketches/Level2/Boss3/ArenaFinal/x.coffee'"]
+  ['a web address with /home/, /users/ or /media/ in it',
+    'load https://example.com/users/42/sprite.png failed: 404; https://cdn.site.com/home/hero.png, https://cdn.site.com/media/intro.webm']
+  # Each changes when composed: the report might be about exactly that.
+  ['letters that composing would change',
+    'Greek question mark \u037e, Kelvin \u212a, ohm \u2126, angstrom \u212b, CJK \uf900, Hangul \u1100\u1161']
 ]
 
 module.exports = (t) ->
@@ -162,13 +202,10 @@ module.exports = (t) ->
 
   # Gone and kept through the whole redactor, and changed by the named
   # pattern on its own -- so no pattern is quietly covered by another.
-  # The redactor composes accented letters first, so the pattern alone is
-  # given the line composed too.
   for [name, who, line, gone, kept, note] in CASES
     out      = Redact.redactor(who) line
     rule     = Redact.patterns(who).find (pattern) -> pattern.name is name
-    composed = line.normalize 'NFC'
-    alone    = rule? and composed.replace(rule.find, rule.put) isnt composed
+    alone    = rule? and line.replace(rule.find, rule.put) isnt line
     leaked   = (text for text in gone when out.includes text)
     lost     = (text for text in kept when not out.includes text)
     check "redaction: #{name}#{if note then ", #{note}" else ''}",
@@ -178,6 +215,10 @@ module.exports = (t) ->
   changed = ([line, Redact.redactor(ALICE) line] for line in KEEPS).filter ([line, out]) -> out isnt line
   check 'versions, line:col, clocks, prototypes and computed values come through whole',
     changed.length is 0, JSON.stringify changed
+
+  for [what, line] in KEPT
+    out = Redact.redactor(ALICE) line
+    check "comes through whole: #{what}", out is line, JSON.stringify out
 
   # The real machine's own: About says nothing a billboard would mind, so it
   # must come through whole -- redacted as a report redacts it, with the
@@ -217,6 +258,7 @@ module.exports = (t) ->
   visited = []
   realShow = shell.showItemInFolder
   realSave = Report.save
+  realDraft = Report.draft
   realOpen = shell.openExternal
   shell.showItemInFolder = (file) -> shown.push file
   shell.openExternal     = (url) -> visited.push url; Promise.resolve()
@@ -343,8 +385,63 @@ module.exports = (t) ->
     check 'Save waits for the save in flight: two clicks, one save', saves is 1, "#{saves} saves"
     await press 'reportSave'
     second = shown[1]
+    await click 'reportClose'
+    await waitFor "return !document.getElementById('report').open"
+
+    # A press dragged off the button is no click. Opened after it from the
+    # keyboard, the report must leave focus on the button when it closes,
+    # not send it to where that press began.
+    await js """
+      document.getElementById('promptLine').focus()
+      const button = document.getElementById('feedback')
+      button.dispatchEvent(new PointerEvent('pointerdown', {bubbles: true}))
+      document.body.dispatchEvent(new PointerEvent('pointerup', {bubbles: true}))
+      button.focus()
+      button.click()
+      return true
+    """
+    await waitFor "return document.getElementById('report').open"
+    # Read in a `close` listener added after the app's: the dialog puts focus
+    # back on the button itself first, and the app's listener moves it after,
+    # so a poll could catch the moment between.
+    await js """
+      window.suiteClosedOn = null
+      document.getElementById('report').addEventListener('close', () => {
+        window.suiteClosedOn = document.activeElement.id || document.activeElement.tagName
+      }, {once: true})
+      document.querySelector('#reportAsk form button.ghost').click()
+      return true
+    """
+    closedOn = await waitFor "return window.suiteClosedOn"
+    check 'a press dragged off the button is forgotten: opened from the keyboard after it, closing leaves focus on the button',
+      closedOn is 'feedback', closedOn
+
+    drafts = 0
+    Report.draft = (args...) -> drafts += 1; realDraft args...
+    await click 'feedback'
+    await js "const next = document.getElementById('reportDraft'); next.click(); next.click(); return true"
+    await waitFor "return !document.getElementById('reportCheck').hidden"
+    await js "return true"
+    Report.draft = realDraft
+    check 'Next waits for the draft in flight: two clicks, one draft', drafts is 1, "#{drafts} drafts"
+
+    # Cancelled while its save is out, then opened again: the save landing
+    # late must not jump the new report to its last step.
+    release = null
+    Report.save = (folder) -> new Promise (resolve) -> release = -> resolve path.join folder, 'late.txt'
+    await js "document.getElementById('reportSave').click(); return true"
+    deadline = Date.now() + 3000
+    await new Promise((resolve) -> setTimeout resolve, 20) until release? or Date.now() > deadline
+    await js "document.querySelector('#reportCheck form button.ghost').click(); return true"
+    await click 'feedback'
+    release?()
+    landed = await waitFor "return [...document.getElementById('console').children].some((line) => line.textContent.includes('late.txt'))"
+    check 'a save that lands after a cancel says so in the console, and leaves the reopened report where it is',
+      release? and landed and (await step 'reportAsk') and not await step('reportDone'),
+      "asked #{release?}, said #{landed}, ask step #{await step 'reportAsk'}"
   finally
     Report.save            = realSave
+    Report.draft           = realDraft
     shell.showItemInFolder = realShow
     shell.openExternal     = realOpen
     await js "document.getElementById('report').close(); return true"
