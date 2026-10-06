@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('beans', {
   read:  (name)       => ipcRenderer.invoke('sketch:read', name),
   write: (name, text) => ipcRenderer.invoke('sketch:write', name, text),
+  // Blocks until main has the sketch on disk; only for a page going away.
+  flush: (name, text) => ipcRenderer.sendSync('sketch:flush', name, text),
   list:  ()           => ipcRenderer.invoke('sketch:list'),
   find:  (name)       => ipcRenderer.invoke('sketch:find', name),
   create: (name)      => ipcRenderer.invoke('sketch:create', name),
@@ -13,6 +15,10 @@ contextBridge.exposeInMainWorld('beans', {
   // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
   vim:   ()        => ipcRenderer.invoke('settings:vim'),
   onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
+  // Edit > Undo and Redo, which the page sends to whichever history has focus.
+  onHistory: (handler) => ipcRenderer.on('edit:history', (_event, verb) => handler(verb)),
+  // And when that is a text field's, main takes the page's native step.
+  nativeHistory: (verb) => ipcRenderer.invoke('edit:native', verb),
   // Help > About. The text is main's: it knows git's answer and the OS.
   about:   ()        => ipcRenderer.invoke('app:about'),
   onAbout: (handler) => ipcRenderer.on('app:about', () => handler()),

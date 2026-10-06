@@ -22,11 +22,19 @@ status = ''
 # whole image in mid-flight. Anything that refuses to run while a sketch is
 # running has to refuse while one is paused too.
 #
-# Two kinds of pause, named apart: `frame paused` holds at a buffer.swap and
+# Three kinds of pause, named apart: `frame paused` holds at a buffer.swap and
 # still answers the prompt through the worker; `line paused` is stopped in V8
-# on a line the author wrote, and everything goes through the debugger.
-PAUSED = ['frame paused', 'line paused']
+# on a line the author wrote, and everything goes through the debugger;
+# `error paused` is a line pause at an uncaught error, which can only end.
+PAUSED = ['frame paused', 'line paused', 'error paused']
 BUSY   = ['running', PAUSED...]
+
+# What the hold button does from each pause; anywhere else, it holds.
+RUN_ON      = 'Let the sketch run on (F8)'
+HOLD_TITLES =
+  'frame paused': RUN_ON
+  'line paused':  RUN_ON
+  'error paused': 'Let the error end the run (F8)'
 
 setStatus = (text) ->
   status = text
@@ -34,15 +42,16 @@ setStatus = (text) ->
   # Eval means "evaluate into the live worker", which a busy worker cannot
   # do, so the button says so. Run replaces the worker and always works.
   document.getElementById('evalRegion').disabled = text in BUSY
-  document.getElementById('stepFrame').disabled  = text not in PAUSED
-  document.getElementById('stepLine').disabled   = text not in BUSY
+  # Neither step goes anywhere from an error: the run can only unwind.
+  document.getElementById('stepFrame').disabled  = text not in PAUSED or text is 'error paused'
+  document.getElementById('stepLine').disabled   = text not in BUSY or text is 'error paused'
   holding = text in PAUSED
   # The audio clock stands still with the frame clock, so stepping does not
   # leave the music running on ahead of the picture.
   Atomics.store i32, H.SOUND_HOLD, if holding then 1 else 0
   hold    = document.getElementById 'pauseFrame'
   hold.textContent = if holding then '\u23E9' else '\u275A\u275A'
-  hold.title       = if holding then 'Let the sketch run on (F8)' else 'Hold the sketch at its next frame'
+  hold.title       = HOLD_TITLES[text] ? 'Hold the sketch at its next frame'
   undefined
 
 # --- console ----------------------------------------------------------------
@@ -148,12 +157,14 @@ enteredAt = 0
 
 # Tab's question while it is out -- the line and caret it was asked about, so
 # an answer that arrives after either has moved can be dropped -- and the
-# last ambiguous answer, which a second Tab on the same line lists. One slot
-# for both ways of asking, the worker and the paused frame: an answer is
-# taken only by the question it belongs to, so a later Tab replaces the
-# earlier one rather than receiving its answer.
+# last ambiguous answer, which a second Tab on the same line opens as a list.
+# One slot for both ways of asking, the worker and the paused frame: an
+# answer is taken only by the question it belongs to, so a later Tab
+# replaces the earlier one rather than receiving its answer. And the list,
+# while it is open (see "the completion list").
 completing = null
 tabbed     = null
+choices    = null
 
 askLine = (source) ->
   return unless source.trim()
@@ -265,6 +276,7 @@ drainAsk = ->
 
 recall = (step) ->
   tabbed = null
+  closeChoices()
   return unless entered.length
   enteredAt = Math.min entered.length, Math.max 0, enteredAt + step
   promptLine.value = entered[enteredAt] ? ''
@@ -369,13 +381,14 @@ yankPop = ->
 # --- Tab ----------------------------------------------------------------------
 
 # Bash's Tab, as designed in AGENTS.md ("Tab completion"): as far as every
-# candidate agrees, a beep when that is ambiguous, and the candidates listed
-# on a second Tab. Only the worker knows the names worth offering, so it is
-# asked, by the same path a line takes -- through the paused frame while line
-# paused, so `ang` finds this call's `angle`. Whatever cannot be asked right
-# now -- a line still out, an evaluation in a paused frame -- beeps rather
-# than queues. A sketch with no yield point never answers, and Tab does
-# nothing, as the prompt does nothing.
+# candidate agrees, a beep when that is ambiguous, and the candidates in a
+# list on a second Tab (the completion list, below). Only the worker knows
+# the names worth offering, so it is asked, by the same path a line takes --
+# through the paused frame while line paused, so `ang` finds this call's
+# `angle`. Whatever cannot be asked right now -- a line still out, an
+# evaluation in a paused frame -- beeps rather than queues. A sketch with no
+# yield point never answers, and Tab does nothing, as the prompt does
+# nothing.
 #
 # The word is a dotted name ending at the caret. Anything else -- `a[0].`,
 # `f().`, `@x` -- would mean evaluating something to find out what it is,
@@ -389,57 +402,79 @@ commonPrefix = (a, b) ->
   at += 1 while at < a.length and a[at] is b[at]
   a[...at]
 
+# The question Tab asks of the text left of the caret: the word there, the
+# dotted path before it, and `key`, everything before the word. An answer is
+# for that key and every word that starts with the word asked. Null where
+# there is no word to finish.
+questionAt = ->
+  before  = leftOf()
+  command = COMMAND.exec before
+  return {key: before[...before.length - command[1].length], path: [], word: command[1], command: yes} if command
+  # A command's arguments are not CoffeeScript, so the worker's names mean
+  # nothing there.
+  return null if ARGUED.test before
+  found = DOTTED.exec before
+  path  = found?[1].split('.')[...-1] ? []
+  word  = found?[2] ? ''
+  return null unless path.length or word
+  {key: before[...before.length - word.length], path, word}
+
 # The answer to a question asked at `line`, with the caret at `at`. Dropped
 # if the line has moved on since: completing what is no longer there would
 # write into the middle of something else. Dropped too if the focus has left
 # the prompt, where the line and caret stand still: rewrite types into
-# whatever has focus, and in the editor that is the sketch, autosaved.
-offer = ({line, at, word}, names) ->
-  return unless document.activeElement is promptLine and promptLine.value is line and caret() is at
+# whatever has focus, and in the editor that is the sketch, autosaved. And
+# dropped during a reverse search, which owns the line and puts back the one
+# from before it on Esc -- and the list never opens over a search.
+offer = (asked, names) ->
+  {line, at, word} = asked
+  return unless document.activeElement is promptLine and promptLine.value is line and caret() is at and not searching
   fits = (name for name in names when name.startsWith word)
   return beep() unless fits.length
   common = fits.reduce commonPrefix
   rewrite at, at, common[word.length..] if common.length > word.length
   return if fits.length is 1
-  tabbed = {line: promptLine.value, at: caret(), names: fits}
+  tabbed = {line: promptLine.value, at: caret(), key: asked.key, word, names: fits}
+  return openChoices tabbed unless fitsOnALine fits
   beep()
 
 completed = (asked, text, threw) ->
   return unless asked and asked is completing
   completing = null
   return say "completion: #{text}", 'err' if threw
-  offer asked, JSON.parse text
+  names = JSON.parse text
+  if asked.relist then relisted asked, names else offer asked, names
 
 complete = ->
-  line = promptLine.value
-  at   = caret()
   return beep() unless promptLine.selectionStart is promptLine.selectionEnd
-  if tabbed?.line is line and tabbed.at is at
-    return say tabbed.names.join('   '), 'sys'
-  before  = line[...at]
-  command = COMMAND.exec before
-  return offer {line, at, word: command[1]}, Editor.commands() if command
-  # A command's arguments are not CoffeeScript, so the worker's names mean
-  # nothing there.
-  return beep() if ARGUED.test before
-  found = DOTTED.exec before
-  path  = found?[1].split('.')[...-1] ? []
-  word  = found?[2] ? ''
-  return beep() unless path.length or word
-  asked = {line, at, word}
-  return completePaused asked, path if linePaused
-  return beep() unless worker and Atomics.load(i32, H.ASK_STATE) is 0
+  return openChoices tabbed if tabbed?.line is promptLine.value and tabbed.at is caret()
+  question = questionAt()
+  return beep() unless question
+  asked = {question..., line: promptLine.value, at: caret()}
+  return offer asked, Editor.commands() if question.command
+  beep() unless askCompletion asked
+
+# To the paused frame while line paused, else to the worker; no if neither
+# can take a question now, since nothing is queued.
+#
+# A Tab still out to the worker is taken back before the frame is asked: it
+# was asked about the line before this one, and would otherwise answer into
+# this one's slot.
+askCompletion = (asked) ->
+  if linePaused
+    return no if debugAsking or not withdrawTab()
+    completePaused asked
+    return yes
+  return no unless worker and Atomics.load(i32, H.ASK_STATE) is 0
   completing = asked
-  askWorker JSON.stringify({path, word}), LAYOUT.ASK_FOR.completion
+  askWorker JSON.stringify({path: asked.path, word: asked.word}), LAYOUT.ASK_FOR.completion
+  yes
 
 # The frame's own names come from the pane's last report. The first name is
 # read in the frame only when it is one of them -- a variable, which cannot
 # be a getter; anything else is left to the worker's descriptor walk.
-#
-# A Tab still out to the worker is taken back first: it was asked about the
-# line before this one, and would otherwise answer into this one's slot.
-completePaused = (asked, path) ->
-  return beep() if debugAsking or not withdrawTab()
+completePaused = (asked) ->
+  {path}   = asked
   local    = path[0] in pausedNames
   question = JSON.stringify {path, word: asked.word, local}
   source   = "REPL.complete #{question}, #{JSON.stringify pausedNames}, #{if local then path[0] else 'undefined'}"
@@ -454,8 +489,117 @@ completePaused = (asked, path) ->
     return
   completed asked, (if reply.kind is 'value' then JSON.parse reply.text else reply.text), reply.kind isnt 'value'
 
+# --- the completion list ------------------------------------------------------
+
+# Robert reversed AGENTS.md's "no popup" on 2026-10-05: the candidates open
+# in a list above the prompt instead of being printed to the console -- on
+# the second Tab, or on the first when they would not fit on one line. The
+# conflict AGENTS.md recorded, a popup fighting history for Up/Down, is
+# settled by a rule Claude proposed in the 2026-10-06 plan, Robert's to
+# overrule: while the list is open, Up/Down, Tab, Enter and Esc are its own;
+# closed, every key is what it was.
+#
+# It follows the word at the caret as it is edited. While that word only
+# grows past the one the names were asked for, the list narrows from the
+# names in hand, since the answer was every name starting with the word
+# asked: no question goes to the worker. Anything else -- a deletion past
+# that word, a dot, an edit before the word -- does need one, and asks it
+# without a beep and without touching the line; what the old names still
+# cover stays on show meanwhile. It closes with one name left or none, on
+# Esc, when the caret moves without an edit, and when the focus leaves the
+# prompt. Never with a reverse search: Ctrl-R closes it, and offer drops an
+# answer that arrives during one.
+completionList = document.getElementById 'completions'
+ruler          = document.createElement('canvas').getContext '2d'
+
+choicesOpen = -> not completionList.hidden
+
+# One line is the prompt's own width, in its own font, with the gap the
+# second Tab's listing in the console used to leave between names.
+fitsOnALine = (names) ->
+  ruler.font = getComputedStyle(promptLine).font
+  ruler.measureText(names.join '   ').width <= promptLine.clientWidth
+
+# Above the prompt, never over the line being typed, and never up past the
+# header. The room is measured, so it is measured again whenever the
+# window's size or zoom changes; the CSS holds the most it will ever take.
+fitChoices = ->
+  return unless choicesOpen()
+  above = document.querySelector('header').getBoundingClientRect().bottom
+  room  = promptLine.parentElement.getBoundingClientRect().top - above
+  completionList.style.setProperty '--room', "#{Math.max 0, room}px"
+  completionList.style.left = "#{promptLine.offsetLeft}px"
+
+markChosen = ->
+  at = choices.shown.indexOf choices.chosen
+  row.classList.toggle 'chosen', i is at for row, i in completionList.children
+  completionList.children[at]?.scrollIntoView block: 'nearest'
+
+# The names that still fit the word at the caret, the chosen one kept if it
+# is still among them. Fewer than two closes the list -- unless an answer is
+# on its way, when the list waits for it, hidden.
+showChoices = (question) ->
+  shown = if question.key is choices.key then (name for name in choices.names when name.startsWith question.word) else []
+  return closeChoices() if shown.length < 2 and not completing?.relist
+  choices.shown  = shown
+  choices.chosen = shown[0] unless choices.chosen in shown
+  rows = document.createDocumentFragment()
+  for name in shown
+    row = rows.appendChild document.createElement 'div'
+    row.className   = 'choice'
+    row.setAttribute 'role', 'option'
+    row.textContent = name
+  completionList.replaceChildren rows
+  completionList.hidden = shown.length < 2
+  fitChoices()
+  markChosen()
+
+openChoices = ({key, word, names}) ->
+  choices = {key, word, names, line: promptLine.value, at: caret(), shown: [], chosen: null}
+  showChoices questionAt()
+
+closeChoices = ->
+  choices = null
+  completionList.hidden = yes
+  completionList.replaceChildren()
+
+# After every edit while the list is open. `line` and `at` are recorded so a
+# caret that moves without one can be told apart (listenForPrompt).
+narrow = ->
+  return unless choices
+  question = questionAt()
+  return closeChoices() unless question
+  Object.assign choices, line: promptLine.value, at: caret()
+  covered = question.key is choices.key and question.word.startsWith choices.word
+  unless covered or completing?.relist
+    asked = {question..., relist: yes}
+    # A command's names are all to hand; there is nobody to ask.
+    return relisted asked, Editor.commands() if question.command
+    return closeChoices() unless askCompletion asked
+  showChoices question
+
+# Every name for the word the list now follows. Whatever was typed while it
+# was out is caught up with by narrowing again, which asks once more only if
+# it has to.
+relisted = (asked, names) ->
+  return unless choices
+  Object.assign choices, key: asked.key, word: asked.word, names: names
+  narrow()
+
+choose = (step) ->
+  {shown, chosen} = choices
+  choices.chosen = shown[(shown.indexOf(chosen) + step + shown.length) % shown.length]
+  markChosen()
+
+# Over the word at the caret, through rewrite so Ctrl-Z takes it back.
+take = (name = choices.chosen) ->
+  {word} = questionAt()
+  closeChoices()
+  rewrite caret() - word.length, caret(), name
+
 submit = ->
   tabbed = null
+  closeChoices()
   askLine promptLine.value
   promptLine.value = ''
   enteredAt = entered.length
@@ -499,6 +643,17 @@ PROMPT_KEYS =
   'C-r':           -> startSearch 'bck'
   'C-s':           -> startSearch 'fwd'
 
+# Ahead of PROMPT_KEYS while the completion list is open. Shift-Tab still
+# leaves the prompt, which closes the list.
+CHOICE_KEYS =
+  'ArrowUp':   -> choose -1
+  'ArrowDown': -> choose  1
+  'C-p':       -> choose -1
+  'C-n':       -> choose  1
+  'Tab':       (chord, event) -> if event.shiftKey then PASS else take()
+  'Enter':     -> take()
+  'Escape':    closeChoices
+
 # Reverse-i-search, as the node REPL does it: the line shows the match, the
 # mark says what is being looked for, each entry is shown once per query, and
 # any key that is not part of the search takes the match and then does what
@@ -508,6 +663,7 @@ showSearch = ->
   promptMark.textContent = "#{if query and not match? then 'failed-' else ''}#{dir}-i-search: #{query}_"
 
 startSearch = (dir) ->
+  closeChoices()
   searching = {dir, query: '', from: enteredAt, at: enteredAt, match: null, seen: new Set,
                original: promptLine.value, caret: caret()}
   showSearch()
@@ -589,19 +745,40 @@ onPromptKey = (event) ->
     endSearch()
   return unless chord?
   yanking = no unless chord is 'M-y'
-  verb = PROMPT_KEYS[chord]
+  verb = (CHOICE_KEYS[chord] if choicesOpen()) ? PROMPT_KEYS[chord]
+  # Esc gives up on a list still waiting, hidden, for its names, too, which
+  # would otherwise appear after it.
+  verb ?= closeChoices if chord is 'Escape' and choices
   claim event, verb, chord if verb
 
 # A click moves the caret out from under a yank, so Alt-Y after it would
-# replace text that is not the yank.
+# replace text that is not the yank, and from the word the list is for.
 interruptPrompt = ->
   yanking = no
   endSearch() if searching
+  closeChoices()
 
 listenForPrompt = ->
   promptLine.addEventListener 'keydown',     onPromptKey
   promptLine.addEventListener 'pointerdown', interruptPrompt
   promptLine.addEventListener 'blur',        interruptPrompt
+  promptLine.addEventListener 'input',       narrow
+
+  # An edit has already narrowed the list and recorded where it left the
+  # line and caret by the time this arrives, so a difference here is the
+  # caret moved some other way -- an arrow, Ctrl-A, a value set from code.
+  # Listened for on the document, where it arrives for an input's caret in
+  # Electron 44 (the repl part's caret check fails without this).
+  document.addEventListener 'selectionchange', ->
+    closeChoices() if choices and (promptLine.value isnt choices.line or caret() isnt choices.at)
+
+  # Pressed without taking the focus from the prompt, which would close the
+  # list before the click could choose from it.
+  completionList.addEventListener 'mousedown', (event) -> event.preventDefault()
+  completionList.addEventListener 'click', (event) ->
+    row = event.target.closest '.choice'
+    take row.textContent if row
+  window.addEventListener 'resize', fitChoices
 
   # Clicking the log to read it should not cost you the prompt, but clicking
   # to select text should not steal it back either.
@@ -874,6 +1051,7 @@ goFrames = ->
 # From a line pause, a frame step runs on to the next frame boundary and holds
 # there: the swap it reaches is simply not served.
 stepFrame = ->
+  return cannotStep() if status is 'error paused'
   if linePaused
     seq = linePaused
     return stillAsking() unless await frameFree()
@@ -890,6 +1068,10 @@ stepFrame = ->
 linePaused  = null
 pausedNames = []          # every name the paused frame's scopes hold, for Tab
 
+# The error an error pause has already reported, so the run that ends with it
+# does not report it again.
+errorSaid = no
+
 # Suspend now, on whatever line is running. From a frame pause the swap has to
 # be let go, or the sketch never reaches a line to stop on.
 linePause = ->
@@ -903,10 +1085,14 @@ linePause = ->
 # is the saying so).
 stillAsking = -> say '*** still evaluating in the paused frame ***', 'sys'
 
+# An error pause can only end the run (see step in src/main/debugger.coffee).
+cannotStep = -> say '*** stopped at an error -- Continue (F8) ends the run ***', 'sys'
+
 # Each waits for the frame to be free, and the pause may be gone by then --
 # Stop, or a Run -- with nothing left to step or continue.
 stepLine = ->
   return linePause() unless linePaused
+  return cannotStep() if status is 'error paused'
   seq = linePaused
   return stillAsking() unless await frameFree()
   return unless linePaused is seq
@@ -950,6 +1136,11 @@ watchBuffer = ->
     syncDebug() unless BREAKPOINT.test(Editor.all()) is armedFor
   ), 300
 
+endLinePause = ->
+  linePaused = null
+  Editor.showLine null
+  hideVars()
+
 lineOnScreen = (where) ->
   return null unless where?.line? and where.name
   if where.name.replace(/ \(region\)$/, '') is Editor.name() then where.line else null
@@ -957,16 +1148,23 @@ lineOnScreen = (where) ->
 beans.debug.onEvent (event) ->
   switch event.type
     when 'paused'
+      # The worker Run just threw away, reporting an error it stopped on as
+      # the Run landed. Applied, it would put the old error in the new run's
+      # console and its pause over the new run's status. Told apart by owner,
+      # not by status: a second Run while the first boots reads 'arming'.
+      return if event.owner isnt Atomics.load i32, H.OWNER
       linePaused  = event.seq
       pausedNames = (entry.name for entry in scope.vars for scope in event.scopes).flat()
-      setStatus 'line paused'
+      setStatus if event.error then 'error paused' else 'line paused'
       Editor.showLine lineOnScreen event.where
       showVars event
+      showErrorPause event if event.error
+    # The worker may have said the run is over before this arrives; then the
+    # pause is already gone, and the stack a failed run shows must stay.
     when 'resumed'
-      linePaused = null
-      Editor.showLine null
-      hideVars()
-      setStatus (if paused then 'frame paused' else 'running') if status is 'line paused'
+      return unless linePaused
+      endLinePause()
+      setStatus (if paused then 'frame paused' else 'running') if status in ['line paused', 'error paused']
     when 'problem'
       say event.text, 'err'
   undefined
@@ -1085,7 +1283,7 @@ showVars = ({where, scopes}, forGetter = no) ->
   ranGetters.clear() unless forGetter
   head = document.createElement 'div'
   head.className = 'vars-head'
-  place = if where?.line? then "line #{where.line}" else 'somewhere of ours'
+  place = if where?.line? then "line #{where.line}" else 'no line to show'
   head.textContent = "#{where?.fn ? 'top level'} \u00b7 #{place}"
   sections = for scope in scopes
     section = document.createElement 'div'
@@ -1189,6 +1387,19 @@ showFailure = ({kind, line, column, frames, message}) ->
   frames ?= []
   showStack frames, message
   Editor.showError frames[0].line if frames[0]?.line? and sketchOf(frames[0].name) is Editor.name()
+  promptLine.focus()
+  undefined
+
+# An uncaught error, stopped where it was thrown: said the way a failed run
+# says it, once, and marked as one, with the paused frame in the pane and
+# the prompt to ask it questions. The canvas focus a Run left pending would
+# otherwise take the keyboard back.
+showErrorPause = (event) ->
+  clearTimeout canvasTimer
+  sayFailure event.error
+  errorSaid = yes
+  say '    stopped where it happened -- ask the prompt, then Continue (F8) to end the run', 'sys'
+  Editor.showError lineOnScreen event.where
   promptLine.focus()
   undefined
 
@@ -1316,25 +1527,43 @@ messages =
     # the end of boot instead, it would be answered from an empty image.
     worker.postMessage type: 'ask'
   load:    (data) -> answerLoad data.url
-  done:    -> standDown(); setStatus 'ready'
-  stopped: -> standDown(); say '*** stopped ***', 'sys'; setStatus 'ready'
+  done:    -> finished(); setStatus 'ready'
+  stopped: -> finished(); say '*** stopped ***', 'sys'; setStatus 'ready'
   error:   (data) ->
-    standDown()
-    where = if data.line? then " (line #{data.line})" else ''
-    say "#{data.stage}#{where}: #{data.message}", 'err'
-    # The frames span more than one sketch only when a region defined a helper
-    # another region calls; then say which sketch each frame belongs to.
-    frames = data.frames ? []
-    multi  = (new Set(step.name for step in frames)).size > 1
-    # Not `for frame in frames`: at this scope that is the present loop, and
-    # a comprehension variable would quietly reassign it. See NOTES.md.
-    for step in frames
-      site = step.fn ? 'top level'
-      site = "#{site} in #{step.name}" if multi and step.name
-      code = if step.text then ":  #{step.text}" else ''
-      say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
+    drainPrints()                     # what the sketch printed came first
+    # Something an earlier run left behind, failing while the next is busy:
+    # news, but that run is not over, and keeps its status and the keyboard.
+    return sayFailure data if data.stage is LATE and status in BUSY
+    sayFailure data unless errorSaid and data.stage is 'run'
+    finished()
     setStatus 'error'
     showFailure data
+
+# The stage worker-boot.js gives an error thrown once its run had ended.
+LATE = 'after the run'
+
+# The worker only speaks once it is running again, so a pause still showing
+# is over, whether or not the debugger has said so yet.
+finished = ->
+  standDown()
+  errorSaid = no
+  endLinePause() if linePaused
+
+sayFailure = (data) ->
+  where = if data.line? then " (line #{data.line})" else ''
+  say "#{data.stage}#{where}: #{data.message}", 'err'
+  # The frames span more than one sketch only when a region defined a helper
+  # another region calls; then say which sketch each frame belongs to.
+  frames = data.frames ? []
+  multi  = (new Set(step.name for step in frames)).size > 1
+  # Not `for frame in frames`: at this scope that is the present loop, and
+  # a comprehension variable would quietly reassign it. See NOTES.md.
+  for step in frames
+    site = step.fn ? 'top level'
+    site = "#{site} in #{step.name}" if multi and step.name
+    code = if step.text then ":  #{step.text}" else ''
+    say "    at #{site}, line #{step.line ? '?'}#{code}", 'err'
+  undefined
 
 # nativeImage hands back BGRA; the framebuffer wants RGBA. One swizzle here
 # beats one per pixel at draw time.
@@ -1389,6 +1618,10 @@ start = (thenRun = null) ->
   # own, and woken if it is parked on a frame, before anything is reset.
   Atomics.add    i32, H.OWNER, 1
   Atomics.notify i32, H.SWAP
+  # A worker terminated while stopped at an error reports that error to its
+  # Worker object on the way out, and its onerror would set 'error' over the
+  # new worker's status (found by the pause-on-error prototype, 2026-10-05).
+  worker?.onerror = (event) -> event.preventDefault()
   worker?.terminate()
   drainPrints()                       # anything the old worker already wrote
   Atomics.store i32, H.PRINT_HEAD, 0
@@ -1400,12 +1633,12 @@ start = (thenRun = null) ->
   Atomics.store i32, H.FRONT,     0
   Atomics.store i32, H.ASK_STATE, 0   # the old worker will never answer now
   Atomics.add   i32, H.SOUND_EPOCH, 1 # nor should anything it queued play
+  completing = null                   # so no Tab is out for a list to await
   clearInput()
   paused   = no                       # a new sketch does not inherit a pause
   stepOnce = no
-  linePaused = null                   # nor a line pause: the old worker is gone
-  Editor.showLine null
-  hideVars()
+  endLinePause()                      # nor a line pause: the old worker is gone
+  errorSaid = no
   pending = thenRun
   worker  = new Worker '/src/renderer/worker-boot.js'
   worker.onmessage = ({data}) -> messages[data.type]? data
@@ -1440,15 +1673,13 @@ stop = ->
   # the deadline only starts once it is actually running. Timed from the
   # press instead, it would always miss, destroy the live image, and blame
   # "no yield point", which would be a lie.
+  # The debugger is armed for every run, so a Stop always sets pauses aside.
+  skipping = yes
   if linePaused
-    linePaused = null
-    skipping = yes
+    endLinePause()
     await beans.debug.resume yes
-    Editor.showLine null
-    hideVars()
-    setStatus 'running' if status is 'line paused'
-  else if armedFor
-    skipping = yes
+    setStatus 'running' if status in ['line paused', 'error paused']
+  else
     beans.debug.resume yes
   # The deadline belongs to this worker. A restart before it passes replaces
   # the worker, and this check must not shoot the new one.

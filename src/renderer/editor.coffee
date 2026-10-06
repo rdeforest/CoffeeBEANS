@@ -18,6 +18,8 @@ handlers    = {}
 current     = null
 lastWritten = null
 saveTimer   = null
+writing     = {}      # sketch name -> this page's saves of it not yet answered
+sent        = {}      # sketch name -> the text of this page's latest save of it
 
 # --- ran-region flash -------------------------------------------------------
 
@@ -145,19 +147,44 @@ save = ->
   return if text is lastWritten
   was         = lastWritten
   lastWritten = text
+  name        = current
+  writing[name] = (writing[name] ? 0) + 1
+  sent[name]    = text
   try
-    await beans.write current, text
+    await beans.write name, text
   catch error
     lastWritten = was if lastWritten is text
-    handlers.onProblem? "could not save #{current}: #{error.message}"
+    handlers.onProblem? "could not save #{name}: #{error.message}"
+  finally
+    writing[name] -= 1
   undefined
 
 scheduleSave = ->
   clearTimeout saveTimer
   saveTimer = setTimeout save, SAVE_DELAY
 
+# The page is going away -- View > Reload, the window closing, the app
+# quitting -- and the debounce timer with it, so an edit made in the last
+# 250ms never reached the disk. Sent even with nothing new, so the page waits
+# for an autosave still in flight and a reload reads it back. The text goes
+# too while one of this page's saves is in flight: if that save fails, nobody
+# is left to save it again, so main writes it once more behind it. Blocks
+# until main answers (sketch:flush). A crashed renderer runs none of this,
+# and comes back as last saved. A sketch switched away from while its
+# autosave was in flight is flushed the same way, with the text that save
+# sent: switching saves first, but a save already going is not waited for.
+flush = ->
+  clearTimeout saveTimer
+  if current and view
+    text        = view.state.doc.toString()
+    resend      = text isnt lastWritten or writing[current] > 0
+    lastWritten = text
+    beans.flush current, (text if resend)
+  beans.flush name, sent[name] for name, count of writing when count > 0 and name isnt current
+  undefined
+
 # A pending debounced edit is the only "unsaved" state this editor has, and
-# only briefly: switching sketches flushes it first. :e honours it anyway so
+# only briefly: switching sketches saves it first. :e honours it anyway so
 # vim muscle memory holds.
 isDirty = -> view? and view.state.doc.toString() isnt lastWritten
 
@@ -316,7 +343,7 @@ beansKeymap = [
   {key: 'Ctrl-Shift-Enter', run: runFresh,   preventDefault: yes}
   {key: 'Ctrl-s',           run: (-> save(); true), preventDefault: yes}
   # Unclaimed, Ctrl-r reaches View > Reload (CmdOrCtrl+R off a Mac), which
-  # loses an edit still waiting for its autosave, and the worker with it.
+  # throws the worker away and everything the sketch built in it.
   # Vim keeps its own Ctrl-r (redo, insert register, eval in visual mode)
   # because its slot sees keys before this keymap does; the editor test
   # checks redo, so that order cannot quietly flip.
@@ -401,6 +428,40 @@ setVim = (wanted) ->
   view.dispatch effects: vimSlot.reconfigure if wanted then VIM else []
   view.dispatch selection: view.state.selection if wanted
 
+# --- Edit > Undo and Redo ----------------------------------------------------
+
+# The menu's, and on a Mac the only way Cmd-Z reaches the prompt: a text field
+# there takes undo from the menu, not from the key. Not the native undo the
+# menu roles send. Chromium keeps one undo stack for the whole page, and
+# undoes its last step wherever that was taken; CodeMirror answers it from
+# its own history only when that step was typed into the editor. Measured by
+# Claude on Linux, 2026-10-06, with the editor focused: after an edit made
+# only through CodeMirror (a paste; vim's are the same kind) native Undo did
+# nothing; after a prompt edit it undid the prompt; and after one Undo that
+# CodeMirror did answer, Redo did nothing. So the editor gets CodeMirror's
+# own commands, a field that takes typing -- the prompt, a dialog's -- the
+# page's native step, and anything else nothing: from the canvas, native undo
+# undid the prompt's last edit. The native step is taken by main's
+# webContents.undo, not document.execCommand: when that step was typed into
+# the editor, execCommand edits CodeMirror's DOM behind its back, which
+# CodeMirror then reads as half an edit of its own and saves (found by a
+# Claude reviewer, 2026-10-06; the editor part checks it). activeElement, not
+# view.hasFocus: that also asks whether the window has focus, which a hidden
+# test run's never does. The commands come from the keymap the bundle already
+# exports, rather than a rebuilt bundle for two names.
+HISTORY =
+  undo: (historyKeymap.find (binding) -> binding.key is 'Mod-z').run
+  redo: (historyKeymap.find (binding) -> binding.key is 'Mod-y').run
+
+fromMenu = (verb) ->
+  focused = document.activeElement
+  return HISTORY[verb] view if focused is view.contentDOM
+  beans.nativeHistory verb if focused.matches 'input, textarea'
+
+# Edit > Redo shows Shift+CmdOrCtrl+Z everywhere, but CodeMirror binds
+# Ctrl-Shift-Z only on Linux; Windows gets Ctrl-Y alone.
+shiftRedo = {key: 'Mod-Shift-z', run: HISTORY.redo, preventDefault: yes}
+
 # --- public -----------------------------------------------------------------
 
 Editor =
@@ -429,15 +490,19 @@ Editor =
           indentUnit.of '  '
           theme
           Prec.highest keymap.of beansKeymap
-          keymap.of [...defaultKeymap, ...historyKeymap, ...searchKeymap, indentWithTab]
+          keymap.of [...defaultKeymap, ...historyKeymap, shiftRedo, ...searchKeymap, indentWithTab]
           EditorView.updateListener.of (update) ->
             return unless update.docChanged
             scheduleSave()
             reportLines()
         ]
     beans.onChanged applyExternal
+    # pagehide rather than beforeunload: it comes once the page is really
+    # leaving, and both reached main every time (Claude, 2026-10-06).
+    window.addEventListener 'pagehide', flush
     beans.onVim setVim
     beans.vim().then setVim
+    beans.onHistory fromMenu
     reportLines()
     view
 
