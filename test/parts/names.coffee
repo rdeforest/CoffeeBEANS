@@ -229,8 +229,12 @@ module.exports = (t) ->
 
     # A name main refuses: before, the boot stopped at the refusal with no
     # sketch open, and whatever was typed next was never saved.
+    # Waits for the console to be flushed as well as the sketch to be open:
+    # since V1 the boot no longer waits on the version, so the sketch can be
+    # open before the batched console has printed why (found at the merge of
+    # F1 with V1 by the orchestrating Claude, 2026-10-06).
     refused = await t.freshPage """
-      if (typeof Editor === 'undefined' || !Editor.name()) return false
+      if (typeof Editor === 'undefined' || !Editor.name() || Printing.pending()) return false
       return {name: Editor.name(), said: document.getElementById('console').textContent}
     """, 8000, '?sketch=../names-outside'
     check '?sketch=../names-outside says it is outside and opens the first sketch',
