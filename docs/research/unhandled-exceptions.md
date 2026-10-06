@@ -18,12 +18,17 @@ above "Since 9c76fe0" keep their `9c76fe0` line numbers; where main's new
 code changes what an entry says, a **Since the merge** note follows it.
 Entries added at the merge cite names, and lines at the fixer's commit.*
 
+*Updated again by the second A2 fixer (Claude, Opus 5.5), 2026-10-06, after
+the second review: a test run's `uncaughtException` handler, the watcher's
+read failures said once, `setWindowOpenHandler`, and the merge of `main` at
+`22a0c08` (E1, T3, U2, D2, K5). Those notes are marked **second fixer**.*
+
 ## What each process does with a failure nobody catches, today
 
 | Where | What happens | Seen by a player? | |
 |---|---|---|---|
 | main, unhandled rejection | Node prints `UnhandledPromiseRejectionWarning` on stderr and carries on (Electron leaves Node in warn mode) | no | measured |
-| main, uncaught exception | Electron's own "A JavaScript error occurred in the main process" box, unless something listens for `uncaughtException` | yes, as a modal box -- also in a test run, on the desktop (AGENTS.md: the EPIPE box) | **inferred** from Electron's docs and AGENTS.md; not raised on purpose, to keep a box off Robert's screen |
+| main, uncaught exception | Electron's own "A JavaScript error occurred in the main process" box, unless something listens for `uncaughtException`; a test run now does (**second fixer**): it prints `uncaught exception: <stack>` and exits 1 | yes, as a modal box; a test run puts nothing on the screen | the box: **measured** -- two of the first A2 fixer's runs hung on it (below). The test run's exit: checked, `startup` part |
 | main, `ipcMain.handle` that throws | stderr gets `Error occurred in handler for 'x': ...`; the renderer's promise rejects with `Error invoking remote method 'x': Error: ...` | only if the renderer says so | measured |
 | renderer, after `renderer.coffee` has run | `window` `error` and `unhandledrejection` listeners (`renderer.coffee:1611-1614`) say `renderer: <message>` in the console, and do not `preventDefault`, so DevTools and main's terminal (`[renderer] Uncaught ...`) get it too | yes, without a stack | measured |
 | renderer, before `renderer.coffee` has run | the loader in `index.html:161-172` is an async function with no catch; nothing is listening yet | no: a dark window, an empty console | measured (see R1) |
@@ -54,6 +59,9 @@ owns the file tonight. **Fixed** marks what chunk A2 changed (below).
   it is an uncaught exception in an event handler: Electron's box. Also,
   `window-all-closed` quits on every platform (`:702`), so `activate` with
   no window is close to unreachable even on macOS. **Inferred**; not changed.
+  For a test run, every uncaught exception in main now ends the run instead
+  of raising the box (**second fixer**; "What A2 changed"). For a player it
+  is still the box: see Questions.
 
 - **M4. `main.coffee:487` and `:498`, `win.loadURL` not awaited or caught.**
   Measured in the bare probe: it rejects with `ERR_FILE_NOT_FOUND` for a
@@ -284,7 +292,12 @@ Added by the A2 fixer (Claude, 2026-10-06) after merging `main` at
   `sayProblem`'s list for good under A2's first version; see "What A2
   changed". `window.open` / `target=_blank` would open a new window
   (`setWindowOpenHandler` unset); nothing in the app can do either today
-  (**read**). Not changed.
+  (**read**). **Fixed by the second fixer**: `refuseNavigation` also
+  denies every new window (`setWindowOpenHandler -> action: 'deny'`), item
+  14 of Electron's security checklist. Not checked: a check that failed
+  against the old code would have a window opened on the desktop of
+  whoever runs the suite. That `refuseNavigation` sets it is one line,
+  read.
 - **M12. U1's `sketch:flush` (`main.coffee:381`) and `will-quit`
   (`:870`).** The flush's save failing, or still going after
   `SAVE_LIMIT`, went to stderr only: the page that sent it is going away.
@@ -309,6 +322,29 @@ Added by the A2 fixer (Claude, 2026-10-06) after merging `main` at
   cleaned up after itself. **Measured**. Harmless to the sketch, but a
   stray hidden file per failed save. Owner: whoever owns the save queue
   (S1/U); not changed.
+  **Since U2** (merged by the second fixer, `main` at `22a0c08`): a save
+  now first reads the sketch for its line endings (`endingOf`), and that
+  read, like the rename, is retried on Windows' transient codes
+  (`retried`, `TRANSIENT_WAITS`); a read that still fails is logged and
+  the save goes on with the platform's endings. Nothing changed after the
+  staging write: a rename that fails for good still leaves
+  `.<name>.coffee.saving` behind (**read**). A failed read leaves nothing,
+  since the staging file is written after it.
+- **M15. A reload that fails rejoins `listening` as an error page**
+  (second review, 2026-10-06). A page that started loading and stopped
+  without a `did-navigate` rejoins at `did-stop-loading` (M11's refused
+  navigation). A reload whose load failed outright would stop the same
+  way, and the error page -- which has no preload and never asks for
+  problems -- would be sent them, and they would be lost. It cannot happen
+  today: `serve` answers every failure with a 404, which is a page that
+  loads (M4). **Read**; recorded, not changed. If `serve` ever rejects, or
+  a load can fail before `serve` answers, check `did-fail-load` there.
+- **U2's mixed-endings note from `sketch:flush`** (`main.coffee`, the
+  flush) went to stdout only: the page that would have shown it is going
+  away. **Fixed by the second fixer** at the merge: it goes through
+  `sayProblem`, so the page that comes up says it. Not checked (**read**):
+  the `lifecycle` part checks the note through `sketch:write`, and the
+  flush path is the same `queueSave`.
 - **R8. T2's completion list.** No new promise chain without a catch;
   `completed` and `completePaused` still `JSON.parse` an answer, as R7
   says. **Read**. Owner: T.
@@ -347,8 +383,39 @@ each fix was taken out alone, and its check failed (Claude, 2026-10-06).
 - **`serve` and the suite**: `unserved`, a set of paths `serve` answers 404
   for, handed only to the suite (like `faults`), so R1 can be checked
   without breaking the checkout.
+- **A test run exits on an uncaught exception in main** (second fixer):
+  `process.on 'uncaughtException'`, registered at the top of `main.coffee`
+  only under `BEANS_TEST`, prints `uncaught exception: <stack>` and calls
+  `app.exit 1`. Before, Electron's modal box blocked main until clicked,
+  and a hidden run sat on it, on Robert's desktop, until killed (twice on
+  2026-10-06, below). Nothing in the suite depended on the box: the
+  `startup` part's children answer their own box through `ask` and raise
+  no exception (**read**). Checked by a `startup` child that a
+  `NODE_OPTIONS` preload (`test/fixtures/throw-in-main.js`) makes throw in
+  main once the app is ready: it must exit 1 and print the line. Against
+  the old code it prints no such line, so the check fails -- established
+  by reading, and by running the child with no display at all (no
+  `DISPLAY`, `--ozone-platform=headless`), where it died at once (exit
+  133, SIGTRAP) without printing it -- on Electron's box, **inferred**. Its effect on a regression:
+  that child would put Electron's box on the screen for the check's 15s,
+  then be killed.
 
 Not checked: Open Data Folder's failure (M5).
+
+The second fixer's, beside the handler (Claude, 2026-10-06):
+
+- **The watcher's read failures** -- a sketch that would not read, an
+  entry it could not stat -- now say `could not read <where>: <why>`, once
+  for each path until a read of it succeeds; the repeats go to stdout.
+  Before, each said that changes to it "will not be seen", which a failure
+  that may pass (Windows' `EBUSY`/`EPERM`, `ENOTDIR`) did not mean, and
+  said it at every event. A folder that cannot be watched, or whose watch
+  stops, still says "will not be seen". Checked (the `problems` part, a
+  sketch made mode 0: said once, a second failing event only on stdout,
+  said again after a read has succeeded; not on Windows or as root).
+- **The `problems` part's own windows**: `openPage` destroys its window
+  when the load rejects; before, the window leaked, its caller's
+  `finally` having nothing to destroy yet.
 
 The fixer's changes, from the two reviews and the merge (Claude,
 2026-10-06), each with a check that fails without it except where said:
@@ -387,6 +454,21 @@ The first version's check that a held problem was not shown early could
 not fail: the test window had been taken off the list by hand, so nothing
 was sent to it either way. It is replaced by the reload check, which fails
 if a reloading page is still sent problems.
+
+## Questions
+
+For Robert; the code does not decide them.
+
+- **What a player's app does with an uncaught exception in main.** Today
+  it is Electron's box: "A JavaScript error occurred in the main process",
+  a stack, and OK, after which the app carries on in whatever state the
+  throw left it. A test run now exits instead (above). The choices seen by
+  the second fixer, none built: keep the box; say it with `sayProblem`
+  and carry on (a player sees it in the console, but main may be broken
+  underneath); or say it and quit, perhaps with a box of the app's own.
+  No trigger is known in shipped code (M2, M3).
+- **R2: should the renderer's error line say where?** It says
+  `renderer: <message>`, with no stack, file or line.
 
 ## Not fixed, by owner
 

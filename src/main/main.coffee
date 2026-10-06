@@ -6,6 +6,18 @@ os   = require 'os'
 path = require 'path'
 url  = require 'url'
 
+# An exception nobody catches in main gets Electron's own modal box, which
+# blocks this process until somebody clicks it. A test run has nobody to
+# click: twice on 2026-10-06 a hidden run sat on that box, on Robert's
+# desktop, until it was killed (Claude, A2). So a test run says it and exits
+# instead. Registered first, so it covers everything below. What a player's
+# app should do is Robert's call (docs/research/unhandled-exceptions.md,
+# Questions); until then it keeps Electron's box.
+if process.env.BEANS_TEST
+  process.on 'uncaughtException', (error) ->
+    console.error "uncaught exception: #{error.stack ? error}"
+    app.exit 1
+
 ROOT     = path.join __dirname, '..', '..'
 EXAMPLES = path.join ROOT, 'examples'
 
@@ -75,9 +87,10 @@ app.on 'web-contents-created', (event, page) ->
       leaving.delete page
 
 # Visible, never quiet: the terminal still gets the stack, and the window the
-# message. Not uncaughtException, which Electron already shows in a box.
-# Listening replaces Node's own warning, so the terminal line says
-# "unhandled" itself: the startup part looks for that word in a launch.
+# message. Not uncaughtException, which Electron already shows in a box
+# (and a test run exits on, above). Listening replaces Node's own warning, so
+# the terminal line says "unhandled" itself: the startup part looks for that
+# word in a launch.
 process.on 'unhandledRejection', (reason) ->
   sayProblem "main: #{reason?.message ? reason}", "unhandled rejection: #{reason?.stack ? reason}"
 
@@ -457,6 +470,7 @@ ipcMain.handle 'sketch:pick', (event) ->
 watchSketches = (win) ->
   timers   = {}
   watchers = new Map
+  failing  = new Set     # paths a read failed for, said already (unread)
 
   # Never read a sketch while a save of it is in flight. The editor sets
   # lastWritten to the new text before the write lands, and takes any text
@@ -493,7 +507,8 @@ watchSketches = (win) ->
         name = await spelled heard
         text = await fsp.readFile sketchFile(name), 'utf8'
       catch error
-        return unseen heard, error
+        return unread heard, error
+      failing.delete heard
       return again() unless begun.get(key) is before
       win.webContents.send 'sketch:changed', {name, text} unless win.isDestroyed()
     ), 60
@@ -502,15 +517,28 @@ watchSketches = (win) ->
     watchers.get(dir)?.close()
     watchers.delete dir
 
-  # A sketch or a folder the watcher could not read or watch: an edit made to
-  # it outside the app -- vim's, say -- is not picked up, and before
+  # A folder the watcher could not watch, or whose watch stopped: an edit
+  # made in it outside the app -- vim's, say -- is not picked up, and before
   # 2026-10-06 only the terminal heard (Claude's audit,
   # docs/research/unhandled-exceptions.md). Not said when it is gone, which
-  # loses nothing: a sketch or a folder deleted outside the app.
+  # loses nothing: a folder deleted outside the app.
   unseen = (where, error, label = 'watch') ->
     logged = "#{label}: #{where}: #{error.message}"
     return console.log logged if error.code is 'ENOENT'
     sayProblem "changes made outside CoffeeBEANS to #{where} will not be seen: #{error.message}", logged
+
+  # A sketch, or an entry that may be a new folder, that would not read. That
+  # may pass -- Windows' EBUSY while something else holds the file -- and the
+  # next event reads it again, so it is said once for each path until a read
+  # of it succeeds, not once an event. Gone is not said, as above.
+  unread = (where, error) ->
+    logged = "watch: #{where}: #{error.message}"
+    if error.code is 'ENOENT'
+      failing.delete where
+      return console.log logged
+    return console.log logged if failing.has where
+    failing.add where
+    sayProblem "could not read #{where}: #{error.message}", logged
 
   watchTree = (dir) ->
     return if watchers.has dir
@@ -535,10 +563,13 @@ watchSketches = (win) ->
       # Anything else may be a folder arriving, which needs its own watch, or
       # one leaving, whose watch should go with it.
       fsp.stat(entry)
-        .then (stats) -> watchTree entry if stats.isDirectory()
+        .then (stats) ->
+          failing.delete entry
+          watchTree entry if stats.isDirectory()
         .catch (error) ->
-          return forget entry if error.code is 'ENOENT'
-          unseen entry, error
+          return unread entry, error unless error.code is 'ENOENT'
+          failing.delete entry
+          forget entry
     watchTree path.join dir, child.name for child in children when child.isDirectory()
     undefined
 
@@ -594,8 +625,13 @@ loadPage = (win, query) ->
 # a file dropped on the window outside the editor, or a link: either replaced
 # the app with that file, with only View > Reload to come back. Main's own
 # loads, reloads and in-page changes do not come here (measured by Claude,
-# Electron 44, 2026-10-06).
-refuseNavigation = (contents) -> contents.on 'will-navigate', (event) -> event.preventDefault()
+# Electron 44, 2026-10-06). A new window the page asks for -- `window.open`,
+# a link with a target -- is refused too: nothing in the app opens one, and
+# one would come up with Electron's defaults rather than this window's
+# (item 14 of Electron's security checklist).
+refuseNavigation = (contents) ->
+  contents.on 'will-navigate', (event) -> event.preventDefault()
+  contents.setWindowOpenHandler -> action: 'deny'
 
 createWindow = ->
   # A test run has no business taking the screen while you are working in

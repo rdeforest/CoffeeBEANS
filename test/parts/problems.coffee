@@ -18,7 +18,7 @@ nextTurn = -> new Promise (resolve) -> setImmediate resolve
 countIn = (shown, text) -> shown.split(text).length - 1
 
 module.exports = (t) ->
-  {check, waitFor, freshPage, consoleText, vimKeys, wait, paths} = t
+  {check, js, waitFor, freshPage, consoleText, vimKeys, wait, paths} = t
   {unserved, listening, loadPage, sayProblem, held, faults, refuseNavigation} = paths
 
   # What a promise gave, or `timed out`: a check here that hangs would hold
@@ -114,7 +114,13 @@ module.exports = (t) ->
         nodeIntegration:  no
         preload:          path.join paths.root, 'src', 'main', 'preload.js'
     page.webContents.setAudioMuted yes
-    await page.loadURL "app://beans/src/renderer/index.html#{query}"
+    # Destroyed here if it will not load: the caller's `finally` only has a
+    # page to destroy once this returns one.
+    try
+      await page.loadURL "app://beans/src/renderer/index.html#{query}"
+    catch error
+      page.destroy()
+      throw error
     page
 
   reload = (page) ->
@@ -282,3 +288,42 @@ module.exports = (t) ->
       await fsp.rmdir locked
     check 'a folder in sketches/ that cannot be watched is said in the console',
       unseen and shown.includes('changes made outside CoffeeBEANS to'), JSON.stringify shown[-200..]
+
+  # A sketch that will not read. That may pass -- Windows' EBUSY while
+  # something else holds the file -- and every event reads it again, so it
+  # is said once, and again only after a read of it has succeeded; before,
+  # every event said its changes "will not be seen". Unreadable by its mode,
+  # as above. A repeat goes to stdout only, so that is where the check looks
+  # for the second failed read.
+  unless process.platform is 'win32' or process.getuid?() is 0
+    sketch  = 'problems-unreadable'
+    file    = path.join paths.sketches, "#{sketch}.coffee"
+    saying  = "could not read #{sketch}: "
+    sayings = (count) -> waitFor "return document.getElementById('console').textContent.split(#{JSON.stringify saying}).length - 1 === #{count}"
+    logged  = []
+    log     = console.log
+    console.log = (args...) ->
+      logged.push args.join ' '
+      log args...
+    repeated = ->
+      deadline = Date.now() + 3000
+      await wait 25 until logged.some((line) -> line.startsWith "watch: #{sketch}: ") or Date.now() > deadline
+      logged.some (line) -> line.startsWith "watch: #{sketch}: "
+    await js "window.problemsRead = []; beans.onChanged((change) => window.problemsRead?.push(change.name)); return true"
+    try
+      await fsp.writeFile file, "print 'LOCKED'\n", mode: 0
+      first  = await sayings 1
+      await fsp.utimes file, new Date, new Date
+      again  = await repeated()
+      once   = await sayings 1
+      await fsp.chmod file, 0o644
+      read   = await waitFor "return problemsRead.includes('#{sketch}')"
+      await fsp.chmod file, 0
+      second = await sayings 2
+      shown  = await consoleText()
+    finally
+      console.log = log
+      await fsp.rm file, force: yes
+    check 'a sketch that will not read is said once, not at every event, and again after a read has succeeded',
+      first and again and once and read and second, JSON.stringify {first, again, once, read, second, shown: shown?[-300..]}
+
