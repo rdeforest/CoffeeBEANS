@@ -473,7 +473,19 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   the Edit menu shows Vim Keys and is built before any page loads, so main
   has to own it. JSON because YAML would be a new dependency. A file that
   will not parse, or is not an object, is logged and the defaults used.
-  Decided by Claude, 2026-10-05 (K2); Robert may overrule.
+  Decided by Claude, 2026-10-05 (K2); Robert may overrule. Since 2026-10-06
+  (E2) the remembered checkboxes -- Vim Keys, Stop on Errors, Warn About
+  Name Case -- come from one table, `PREFERENCES` in `main.coffee`: a label,
+  a default (a value that is not a boolean reads as the default), and a
+  `changed` that brings whatever follows the preference into line, run at
+  every launch and Try Again as well as on a click. Pages read them through
+  one `settings:get` channel.
+- **Stop on Errors is one switch with two writers** (E2, decided by
+  Claude): `errorStops` in `debugger.coffee`, written by the preference
+  and, in the suite only, by `t.stopOnErrors`; the last write wins, and
+  `t.reset` sets it before every part. Changed during an error pause, it
+  applies from the next error. Off means the run ends as it did before E1:
+  the same report, stack and marked line, byte for byte.
 
 ## The scope wall
 
