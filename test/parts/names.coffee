@@ -51,6 +51,25 @@ module.exports = (t) ->
   check 'main knows whether the sketches folder folds case',
     folding.probed is twin, "probed #{folding.probed} disk #{twin}"
 
+  # The probe swaps the case of ASCII letters only. A disk folding by a
+  # one-for-one table (NTFS's) finds STRAßE.COFFEE for straße.coffee, never
+  # STRASSE.COFFEE, JavaScript's full-mapping swap -- under which such a disk
+  # probed as one that does not fold. Here a hard link spelled the one-for-one
+  # way stands in for that disk; on a disk that folds, the link is refused as
+  # already there, and the disk itself answers.
+  probeDir = path.join paths.data, 'names-probe'
+  await fsp.rm probeDir, recursive: yes, force: yes
+  await fsp.mkdir probeDir
+  try
+    await fsp.writeFile path.join(probeDir, 'straße.coffee'), '', 'utf8'
+    await fsp.link(path.join(probeDir, 'straße.coffee'), path.join(probeDir, 'STRAßE.COFFEE')).catch (error) ->
+      throw error unless error.code is 'EEXIST'
+    unicode = paths.probeFolding probeDir
+  finally
+    await fsp.rm probeDir, recursive: yes, force: yes
+  check 'the probe finds straße.coffee again as STRAßE.COFFEE, where the disk folds that way',
+    unicode is true, "probed #{unicode}"
+
   remembered = await js "return localStorage.getItem('lastSketch')"
   try
     # A disk that keeps cases apart keeps names apart, as it always did.
@@ -68,14 +87,18 @@ module.exports = (t) ->
     # looked for `./names-foo` among the names, missed, and "created" it --
     # writing '' over names-foo.coffee. Then the editor held it as
     # `./names-foo`, which the watcher's news (of `names-foo`) never matched.
+    # Nor is `./names-foo` a spelling of names-foo the case notice is about.
     await fsp.writeFile file, original, 'utf8'
+    await clearConsole()
     await edit './names-foo', sketch
     dotted =
       name:  await js "return Editor.name()"
       title: await js "return document.title"
       disk:  await fsp.readFile file, 'utf8'
-    check '/e ./names-foo opens names-foo as it is, under that name',
-      dotted.name is sketch and dotted.title is "#{sketch} — CoffeeBEANS" and dotted.disk is original,
+      said:  (await consoleText()).trim()
+    check '/e ./names-foo opens names-foo as it is, under that name, with no word about its case',
+      dotted.name is sketch and dotted.title is "#{sketch} — CoffeeBEANS" and dotted.disk is original and
+        not dotted.said.includes('asked for'),
       JSON.stringify dotted
     await fsp.writeFile file, "print 'DOTTED'\n", 'utf8'
     reached = await untilDoc "print 'DOTTED'\n", 10000

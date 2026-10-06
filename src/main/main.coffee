@@ -102,9 +102,12 @@ sketchName = (file) ->
 # save queue's. Throws for a name that leads out of sketches/.
 canonical = (name) -> sketchName sketchFile name
 
-flip      = (c)    -> if c is c.toLowerCase() then c.toUpperCase() else c.toLowerCase()
-flipCase  = (text) -> (flip c for c in text).join ''
-hasLetter = (text) -> flipCase(text) isnt text
+# ASCII letters only. JavaScript's full case mapping turns `straße` into
+# `STRASSE` and `ﬁ` into `FI`, which NTFS's one-for-one upcase table never
+# matches, so a disk that folds would be probed as one that does not for the
+# whole session. Every sketch file has the letters of `.coffee` to ask with.
+flipCase  = (text) -> text.replace /[a-z]/gi, (c) -> if c is c.toLowerCase() then c.toUpperCase() else c.toLowerCase()
+hasLetter = (text) -> /[a-z]/i.test text
 
 # Whether `dir` finds its entry `name` again under `name` with its case
 # swapped. lstat, so a sibling symlink spelled that way is not taken for
@@ -167,9 +170,11 @@ spelled = (name) ->
 # ?sketch= ask this rather than looking for the name in sketch:list, which
 # cannot know whether the disk folds: `:e Foo` with foo.coffee present
 # missed it, "created" Foo, and on a disk that folds wrote '' over foo.coffee.
+# `asked` comes back canonical as well, so only the case it was typed in can
+# differ from `name`: `./foo` is foo asked for as foo.
 ipcMain.handle 'sketch:find', (event, asked) ->
   name = await spelled asked
-  {name, exists: fs.statSync(sketchFile(name), throwIfNoEntry: no)?}
+  {name, asked: canonical(asked), exists: fs.statSync(sketchFile(name), throwIfNoEntry: no)?}
 
 # A new, empty sketch -- unless one has appeared since sketch:find said
 # there was none, which the disk decides ('wx'), not a look beforehand.
@@ -520,7 +525,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"

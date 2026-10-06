@@ -1520,7 +1520,7 @@ openSketch = (asked) ->
   found = await beans.find asked
   {name, created} = if found.exists then found else await beans.create found.name
   say "created #{name}.coffee", 'sys' if created
-  await selectSketch name, asked
+  await selectSketch name, found.asked
 
 pickSketch = ->
   choice = await beans.pick()
@@ -1607,20 +1607,21 @@ do ->
     say "*** the app crashed (#{params.get 'crashed'}) and has restarted -- your sketch is as it was last saved ***", 'err'
 
   try
-    names  = await beans.list()
-    wanted = params.get 'sketch'
+    names   = await beans.list()
+    wanted  = params.get 'sketch'
     # The URL is how the suite drives the app, so it must not inherit
     # whatever the last hand-run session had open.
     # A name main refuses (one outside sketches/) falls through to the first
     # sketch like an unknown one, saying why, rather than leaving none open.
-    asked  = if params.has 'sketch' then wanted else localStorage.getItem 'lastSketch'
-    found  = if asked then await beans.find(asked).catch((error) -> {exists: no, error}) else {exists: no}
+    asked   = if params.has 'sketch' then wanted else localStorage.getItem 'lastSketch'
+    found   = if asked then await beans.find(asked).catch((error) -> {exists: no, error}) else {exists: no}
+    instead = if names.length then "opening #{names[0]}" else 'nothing to open'
     if found.error
-      say "#{found.error.message} -- opening #{names[0]}", 'err'
+      say "#{found.error.message} -- #{instead}", 'err'
     else if wanted and not found.exists
-      say "no sketch named \"#{wanted}\" -- opening #{names[0]}", 'err'
+      say "no sketch named \"#{wanted}\" -- #{instead}", 'err'
     if found.exists
-      await selectSketch found.name, wanted ? found.name     # only a name typed into the URL was asked for
+      await selectSketch found.name, (if wanted then found.asked else found.name)     # only a name typed into the URL was asked for
     else if names.length
       await selectSketch names[0]
     else
