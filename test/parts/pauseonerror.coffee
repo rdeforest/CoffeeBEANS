@@ -548,24 +548,86 @@ loop
   # the sketch's to clobber. Unread, the owner came back undefined and the
   # renderer dropped a live worker's pause as a replaced one's: the sketch
   # sat halted at `running` with nothing said until Stop. Now the pause is
-  # let go and the trouble said.
-  await setDoc "globalThis.REPL = null\nbreakpoint\nprint 'after'\n"
+  # let go and the trouble said. Nulled, reading the owner throws; replaced,
+  # it reads undefined without a murmur, and is refused all the same (a
+  # reviewer of 1389d44, 2026-10-06). A top-level `REPL = 5` is the sketch's
+  # own local and never reaches the global: it pauses as usual (checked by
+  # the fixer of 1389d44, 2026-10-06).
+  for clobber in ['null', '{}']
+    await setDoc "globalThis.REPL = #{clobber}\nbreakpoint\nprint 'after'\n"
+    await wait 500
+    await clearConsole()
+    before = (await pauseNumber()) ? 0
+    await evalAll()
+    ended = await statusBecomes 'ready', 5000
+    await t.quiet()
+    said = await consoleText()
+    check "a pause whose owner cannot be read (REPL = #{clobber}) is let go and said, not left halted",
+      ended and said.includes('could not pause') and said.includes('after') and ((await pauseNumber()) ? 0) is before,
+      "status=#{await status()} console=#{JSON.stringify said.trim()}"
+    await setDoc "print 'fresh'\n"              # a worker whose REPL is whole
+    await wait 500
+    await click 'runFresh'
+    await statusBecomes 'ready'
+
+  # 18. A setup that never answers. Reading the report of a thrown object
+  # runs its `location` getter in the paused worker, and this one loops: the
+  # Stop waits on it, its deadline shoots the worker, and the command sent to
+  # the dead worker is never answered. Main used to keep waiting on it for
+  # good -- every later switch of error stops hung, and every later Stop set
+  # nothing aside, so a sketch stopped from then on halted at a `breakpoint`
+  # met on its way out (a reviewer of 1389d44, 2026-10-06). A turn now ends
+  # with the worker it was taken in. The image is lost: nothing yields in
+  # that getter, so the deadline is right to fire.
+  await runText "bad = Object.defineProperty {}, 'location', get: -> (x = 0; x += 1 while true; x)\nthrow bad\n"
   await wait 500
-  await clearConsole()
+  await click 'stop'
+  replaced = await statusBecomes 'ready', 5000
+  toggled = await Promise.race [t.stopOnErrors(yes).then((-> 'toggled')), wait(2000).then((-> 'hung'))]
+  check 'after a setup that never answered, error stops can still be switched',
+    replaced and toggled is 'toggled',
+    "replaced=#{replaced} switch #{toggled} status=#{await status()}"
+
   before = (await pauseNumber()) ? 0
-  await evalAll()
-  ended = await statusBecomes 'ready', 5000
+  await runText "try\n  loop\n    buffer.swap\nfinally\n  breakpoint\n"
+  await wait 300
+  await click 'stop'
+  ended = await statusBecomes 'ready', 3000
   await t.quiet()
   said = await consoleText()
-  check 'a pause whose owner cannot be read is let go and said, not left halted',
-    ended and said.includes('could not pause') and said.includes('after') and ((await pauseNumber()) ? 0) is before,
-    "status=#{await status()} console=#{JSON.stringify said.trim()}"
-  await setDoc "print 'fresh'\n"                # a worker whose REPL is whole
+  check 'and a Stop still sets breakpoints aside: one met on the way out does not stop the sketch',
+    ended and ((await pauseNumber()) ? 0) is before and not said.includes('no yield point'),
+    "status=#{await status()} pause=#{await pauseNumber()} console=#{JSON.stringify said.trim()}"
+  await setDoc "print 'fresh'\n"
   await wait 500
   await click 'runFresh'
   await statusBecomes 'ready'
 
-  # 18. The switch the preference and the suite share: off, an error ends
+  # 19. A step whose landing arrives while a Stop is setting breakpoints
+  # aside. The Stop took V8's pause before that and never looked again, so
+  # the landing stood, the renderer was shown it, and the deadline shot the
+  # worker, image and all (a reviewer of 1389d44, 2026-10-06). On its own the
+  # gap is a few milliseconds; the hook holds it open.
+  await setDoc "kept = 'yes'\nz = 1\nbreakpoint\nz = 2\nloop\n  buffer.swap\n"
+  await wait 500
+  await clearConsole()
+  before = (await pauseNumber()) ? 0
+  await evalAll()
+  got = await nextPause before
+  hooks.stopping = ->
+    hooks.stopping = null
+    wait 300
+  await js "beans.debug.step(); document.getElementById('stop').click(); return true"
+  ended = await statusBecomes 'ready', 5000
+  hooks.stopping = null
+  await t.quiet()
+  said = await consoleText()
+  kept = await ask 'kept'
+  check 'a step landing while Stop sets breakpoints aside is let go too, and the image kept',
+    got and ended and not said.includes('no yield point') and kept.includes('"yes"'),
+    "got=#{got} status=#{await status()} console=#{JSON.stringify said.trim()} kept=#{JSON.stringify kept.trim()}"
+
+  # 20. The switch the preference and the suite share: off, an error ends
   # the run the way it always did.
   await t.stopOnErrors no
   await runText "ball = null\nball.x\nprint 'after'\n"

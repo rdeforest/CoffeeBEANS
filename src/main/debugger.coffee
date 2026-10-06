@@ -79,10 +79,11 @@ STASH       = '__beansGetterOwner'
 
 # For the suite: called, and waited for, while a pause is being set up and
 # before the renderer has heard of it -- 'exception' as an error pause starts,
-# 'report' once a pause is numbered. On its own that window is a few
-# milliseconds; a check holds it open to land a Stop or a stale line in it.
-# Null outside those checks.
-hooks = {pausing: null}
+# 'report' once a pause is numbered -- and, `stopping`, while a Stop has taken
+# V8's pause but not yet set breakpoints aside. On its own each window is a
+# few milliseconds; a check holds it open to land a Stop, a stale line or a
+# step's landing in it. Null outside those checks.
+hooks = {pausing: null, stopping: null}
 
 # --- source maps ------------------------------------------------------------
 
@@ -231,6 +232,8 @@ module.exports = (win) ->
   stopped  = null        # the pause the renderer is shown: {frames, where, seq}
   chase    = null        # a step or pause still looking for a sketch line
   asking   = null        # JS run in the paused worker -- the prompt's, a getter's, ours -- while it runs
+  left     = null        # settles once the session we are on has gone; see takeTurn
+  leave    = null        # which settles it
   seq      = 0
   devtools = no
 
@@ -249,6 +252,30 @@ module.exports = (win) ->
       clearTimeout timer
 
   scriptOf = (frame) -> scripts.get frame.location.scriptId
+
+  # A command to a worker that has gone -- shot by Stop's deadline, replaced by
+  # a Run -- is never answered (measured by a reviewer of 1389d44, 2026-10-06:
+  # a setup stuck in a thrown object's getter held the turn for good, and
+  # every later Stop and switch of error stops waited on it). So a turn ends
+  # with the session it was taken in, answered or not, and comes back empty:
+  # our own calls then fail, and the prompt and a getter say it moved on. That
+  # the prompt's evaluation can be stranded the same way is inferred, not
+  # measured.
+  takeTurn = (work) ->
+    turn = asking = Promise.race [work, left]
+    try
+      await turn
+    finally
+      asking = null if asking is turn
+
+  waitTurn = -> await asking.catch(->) while asking
+
+  sessionGone = ->
+    asking = null
+    leave?()
+    left = new Promise (resolve) -> leave = resolve
+
+  sessionGone()
 
   # Whether V8 is still halted in this pause. Setting a pause up takes several
   # round trips, and a Stop or a Run can end it in any of them; work for a
@@ -301,6 +328,7 @@ module.exports = (win) ->
     inHelper(frame) or frame.functionName in ['harvest', 'restore']
 
   resetSession = ->
+    sessionGone()
     session = null
     enabled = no
     ready   = null
@@ -336,7 +364,7 @@ module.exports = (win) ->
   exceptions = ->
     return unless enabled and session
     await ready
-    await asking?.catch(->)             # nothing reaches V8 while one is out
+    await waitTurn()                    # nothing reaches V8 while one is out
     await send('Debugger.setPauseOnExceptions', state: pauseState()).catch (error) ->
       tell type: 'problem', text: "debugger: #{error.message}"
 
@@ -347,6 +375,7 @@ module.exports = (win) ->
     send('Debugger.disable').catch ->
 
   setUp = (id, waiting) ->
+    sessionGone()
     session = id
     scripts.clear()
     maps.clear()
@@ -458,11 +487,9 @@ module.exports = (win) ->
   # segfaults the renderer (AGENTS.md), and a resume has not been shown to be
   # any safer.
   callInPause = (params) ->
-    call = asking = send 'Runtime.callFunctionOn', params
-    try
-      await call
-    finally
-      asking = null if asking is call
+    reply = await takeTurn send 'Runtime.callFunctionOn', params
+    throw new Error 'the worker has gone' unless reply
+    reply
 
   # REPL is on the worker's global, where a sketch can clobber it. Unread,
   # the owner would be undefined and the renderer would drop a live worker's
@@ -473,6 +500,8 @@ module.exports = (win) ->
       objectId: global.object.objectId, returnByValue: yes
       functionDeclaration: 'function () { return REPL.owner }'
     throw new Error exceptionDetails.exception?.description ? exceptionDetails.text if exceptionDetails
+    # Replaced rather than nulled, REPL reads without a murmur.
+    throw new Error "REPL.owner reads #{typeof result.value}, not a number" unless typeof result.value is 'number'
     result.value
 
   # The first frame the author wrote, innermost first, or -1.
@@ -555,17 +584,17 @@ module.exports = (win) ->
     if script?.url is BREAKPOINT
       return onward 'Debugger.stepOut'
 
-    if chase
-      chase.count += 1
-      if chase.count < CHASE_LIMIT
-        return onward 'Debugger.stepOut' if ours top
-        where = await locate top
-        return unless current halt
-        same  = where and chase.line? and where.line is chase.line and
-          frames.length is chase.depth and top.location.scriptId is chase.scriptId
-        return onward chase.method if not where or same
-    chase = null
     try
+      if chase
+        chase.count += 1
+        if chase.count < CHASE_LIMIT
+          return onward 'Debugger.stepOut' if ours top
+          where = await locate top
+          return unless current halt
+          same  = where and chase.line? and where.line is chase.line and
+            frames.length is chase.depth and top.location.scriptId is chase.scriptId
+          return onward chase.method if not where or same
+      chase = null
       await report halt
     catch error
       return unless current halt
@@ -674,18 +703,29 @@ module.exports = (win) ->
   # deadline shot the worker, blaming a missing yield point.
   resume = (skip = no) ->
     return false unless enabled
+    id = session
     # Stop has to get through, so it waits out the evaluation, which
     # EVAL_LIMIT bounds; anything else is the author's to retry. Waited out
     # until none is left: setting a pause up runs one after another.
     if asking
       return 'evaluating' unless skip
-      await asking.catch(->) while asking
+      await waitTurn()
+    # A worker gone meanwhile took its pause with it, and this Stop is done.
+    return true unless session is id
     # Over from here, before anything else is awaited: a pause still being set
     # up sees that and starts nothing more in the worker.
     was    = halted
     halted = null
     chase  = null
-    await send('Debugger.setSkipAllPauses', skip: yes).catch(->) if skip
+    if skip
+      await hooks.stopping() if hooks.stopping
+      await send('Debugger.setSkipAllPauses', skip: yes).catch(->)
+      # A step sent just before the Stop can land while that was out; its
+      # pause, set up or still being set up, is let go as well.
+      await waitTurn()
+      return true unless session is id
+      was   or= halted
+      halted  = null
     await send 'Debugger.resume' if was
     true
 
@@ -697,11 +737,7 @@ module.exports = (win) ->
   evaluate = (pauseSeq, source) ->
     return null unless stopped?.seq is pauseSeq and not chase
     return {text: '*** still evaluating the last line ***', kind: 'sys'} if asking
-    asking = answerFor source
-    try
-      return await asking
-    finally
-      asking = null
+    takeTurn answerFor source
 
   answerFor = (source) ->
     try
@@ -763,11 +799,7 @@ module.exports = (win) ->
   getter = (pauseSeq, owner, name) ->
     return null unless stopped?.seq is pauseSeq and not chase
     return 'evaluating' if asking
-    asking = runGetter owner, name
-    try
-      return await asking
-    finally
-      asking = null
+    takeTurn runGetter owner, name
 
   # Only evaluateOnCallFrame can be told to give up (Runtime.callFunctionOn
   # has no timeout), and it takes an expression, not an object. So the owner
