@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld('beans', {
   // Edit > Vim Keys: asked once at mount, then told whenever it is clicked.
   vim:   ()        => ipcRenderer.invoke('settings:vim'),
   onVim: (handler) => ipcRenderer.on('settings:vim', (_event, on) => handler(on)),
+  // Edit > Undo and Redo, which the page sends to whichever history has focus.
+  onHistory: (handler) => ipcRenderer.on('edit:history', (_event, verb) => handler(verb)),
+  // And when that is a text field's, main takes the page's native step.
+  nativeHistory: (verb) => ipcRenderer.invoke('edit:native', verb),
   // Help > About. The text is main's: it knows git's answer and the OS.
   about:   ()        => ipcRenderer.invoke('app:about'),
   onAbout: (handler) => ipcRenderer.on('app:about', () => handler()),

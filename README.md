@@ -252,8 +252,11 @@ question and takes back whatever the answer changed.
 A sketch that never reaches a yield point never answers, the same way it never
 stops.
 
-The prompt has the node REPL's keys. Up and Down walk earlier lines, and
-Ctrl-R and Ctrl-S search back and forward through them. Ctrl-A and Ctrl-E go
+The prompt has the node REPL's keys. Up and Down walk earlier lines -- with
+something typed, only those that start with what is left of the cursor, so
+`ci` and Up finds the last `circle` -- and Down comes back to the line as it
+was typed. Ctrl-P and Ctrl-N walk every line, and Ctrl-R and Ctrl-S search
+back and forward through them. Ctrl-A and Ctrl-E go
 to the start and end of the line, Alt-B and Alt-F a word at a time. Ctrl-K
 and Ctrl-U cut, and Ctrl-Y puts the cut back -- so redo there is
 Ctrl-Shift-Z, not Ctrl-Y; Ctrl-W and Alt-D delete a word. Ctrl-C copies a selection or else clears the line,
@@ -363,8 +366,10 @@ The `>` prompt then asks about the stopped call, and can change it.
     /step              run on to the next frame and hold there
     /continue          carry on, from either kind of pause
 
-A sketch that says `breakpoint` nowhere runs with no debugger at all. With
-DevTools open, `breakpoint` does nothing: the two cannot share the page.
+The debugger is on for every run, so an uncaught error stops on the line
+that threw, with its frame in the pane and the prompt, until Continue (F8)
+ends the run. With DevTools open neither happens, and `breakpoint` does
+nothing: the two cannot share the page.
 
 ## Panels
 
