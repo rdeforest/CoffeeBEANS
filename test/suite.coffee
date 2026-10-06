@@ -22,14 +22,18 @@ PARTS = [
   'drawing', 'color', 'loading', 'shell', 'about', 'report', 'input', 'random', 'names', 'sound', 'perf'
 ]
 
+# Run only when named, never in a full run: `quit` ends the app it runs in, so
+# the lifecycle part starts a second Electron to run it.
+BY_NAME = ['quit']
+
 module.exports = (win, paths) ->
   asked   = (name.trim() for name in (process.env.BEANS_TESTS ? '').split(',') when name.trim())
-  unknown = (name for name in asked when name not in PARTS)
+  unknown = (name for name in asked when name not in PARTS and name not in BY_NAME)
   if unknown.length
     console.log "no such part: #{unknown.join ', '}"
-    console.log "have: #{PARTS.join ', '}"
+    console.log "have: #{PARTS.join ', '}, and by name only: #{BY_NAME.join ', '}"
     return 1
-  chosen = if asked.length then (name for name in PARTS when name in asked) else PARTS
+  chosen = if asked.length then (name for name in [PARTS..., BY_NAME...] when name in asked) else PARTS
 
   t       = require('./toolkit') win, paths
   guarded = path.join paths.sketches, 'hello.coffee'

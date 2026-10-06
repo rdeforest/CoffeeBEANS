@@ -434,6 +434,15 @@ module.exports = (t) ->
     tabbed = await promptNow()
     tabbed.beeped = (await beeps()) - beepsBefore
     tabbed
+  # The completion list (T2), or null where there is none, as in the code
+  # before it.
+  listNow = -> js """
+    const list = document.getElementById('completions')
+    if (!list) return null
+    const rows = [...list.children]
+    return {open: !list.hidden, names: rows.map((row) => row.textContent),
+            chosen: rows.findIndex((row) => row.classList.contains('chosen'))}
+  """
 
   await setDoc """
 counter = hits: 0
@@ -465,37 +474,45 @@ pan = pup = 1
   check 'Tab after a command name does not offer the worker\'s names',
     argued.value is '/e myWid' and argued.beeped is 1, JSON.stringify argued
 
-  # 15. ambiguous: as far as they agree, a beep, and a second Tab lists them
-  first  = await tab 'circ'
-  before = (await consoleText()).length
+  # 15. ambiguous: as far as they agree, a beep, and a second Tab opens the
+  # list of them above the prompt -- not printed into the console, which is
+  # what a second Tab did before T2.
+  first     = await tab 'circ'
+  firstList = await listNow()
+  before    = (await consoleText()).length
   await press 'Tab'
   await t.quiet()
-  listed = (await consoleText())[before..]
+  said   = (await consoleText())[before..]
+  opened = await listNow()
   check 'an ambiguous Tab finishes as far as every name agrees, and beeps',
     first.value is 'circle' and first.beeped is 1, JSON.stringify first
-  check 'a second Tab lists them', /\bcircle\b/.test(listed) and listed.includes('circleFill') and
-    (await promptNow()).value is 'circle', JSON.stringify listed
+  check 'a second Tab opens the list of them above the prompt, the first chosen, and prints nothing',
+    firstList? and not firstList.open and opened?.open and opened.names[0] is 'circle' and
+      'circleFill' in opened.names and opened.chosen is 0 and said is '' and (await promptNow()).value is 'circle',
+    JSON.stringify {firstList, opened, said}
+  await press 'Escape'
 
   # Any other key in between, even one that comes back to the same line and
-  # caret, makes the next Tab ask again rather than list what it had.
+  # caret, makes the next Tab ask again rather than open what it had.
   await press 'C-a', 'C-e'
-  beepsAt     = await beeps()
-  before      = (await consoleText()).length
+  beepsAt = await beeps()
   await press 'Tab'
   await until_ -> not await js "return Prompt.pending()"
   await t.quiet()
-  relisted = (await consoleText())[before..]
+  reopened = await listNow()
   check 'a key between two Tabs means the second asks again instead of listing',
-    relisted is '' and (await beeps()) - beepsAt is 1, JSON.stringify relisted
+    reopened? and not reopened.open and (await beeps()) - beepsAt is 1, JSON.stringify reopened
 
   # Nearest first: the image's names, then CoffeeBEANS's, then JavaScript's,
   # alphabetical only within each. `pup` sorts after `print`, so a list sorted
   # as a whole would put it there.
+  # The first Tab opens the list itself when the names are too many for one
+  # line, which depends on the window's width; a second Tab then would take
+  # a name rather than open it.
   await tab 'p'
-  before = (await consoleText()).length
-  await press 'Tab'
-  await t.quiet()
-  listed = (await consoleText())[before..].trim().split /\s+/
+  await press 'Tab' unless (await listNow())?.open
+  listed = (await listNow())?.names ? []
+  await press 'Escape'
   ranked = ['pan', 'pup', 'pget', 'print', 'parseFloat', 'parseInt'].map (name) -> listed.indexOf name
   check 'Tab lists the sketch\'s names, then CoffeeBEANS\'s, then JavaScript\'s',
     -1 not in ranked and ranked.every((at, i) -> i is 0 or at > ranked[i - 1]), JSON.stringify listed
@@ -744,11 +761,9 @@ turn 5
   # The paused frame's names come before JavaScript's, though `parsed` sorts
   # after `parseFloat`.
   common = await tab 'pars'
-  before = (await consoleText()).length
   await press 'Tab'
-  await until_ -> not await js "return Prompt.pending()"
-  await t.quiet()
-  listed = (await consoleText())[before..].trim().split /\s+/
+  listed = (await listNow())?.names ? []
+  await press 'Escape'
   check 'line paused, Tab lists the frame\'s names before JavaScript\'s',
     common.value is 'parse' and listed.join(' ') is 'parsed parseFloat parseInt', JSON.stringify {common, listed}
 
@@ -900,3 +915,288 @@ done = 1
     asked is 'booting' and answered and text.includes('42'),
     "status=#{asked} answered=#{answered} console=#{JSON.stringify text}"
   await settle()
+
+  # 24. the completion list (T2). The proxy prints each time the worker lists
+  # its members, which is the count of questions a Tab or the list put to
+  # the worker about it.
+  await setDoc """
+noisy = new Proxy {alphaOne: 1, alphaTwo: 1, alphaThree: 1, betaOne: 1, betaTwo: 1}, ownKeys: (target) ->
+  print 'asked'
+  Reflect.ownKeys target
+noisyToo = 1
+"""
+  await wait 500
+  await evalAll()
+  await settled()
+  await clearConsole()
+  askedOf = -> ((await consoleText()).match(/asked/g) ? []).length
+  NOISY   = 'alphaOne alphaThree alphaTwo betaOne betaTwo'
+  # Five names fit on a line, so the first Tab beeps and the second opens.
+  # A key first, as a player's would be: a line set from here leaves the
+  # last Tab's answer standing, and a Tab on the same line would open it.
+  openNoisy = (line = 'noisy.') ->
+    await promptAt line, line.length
+    await press 'End'
+    first = await tab line
+    await press 'Tab'
+    first
+
+  first  = await openNoisy()
+  opened = await listNow()
+  await typeText 'a'
+  fromA  = await listNow()
+  await typeText 'lphaT'
+  fromT  = await listNow()
+  await typeText 'w'
+  fromW  = await listNow()
+  typed  = await promptNow()
+  await t.quiet()
+  asks   = await askedOf()
+  check 'the list opens on the second Tab, narrows as letters are typed, and closes at one, asking nothing more',
+    first.beeped is 1 and opened?.open and opened.names.join(' ') is NOISY and
+      fromA?.open and fromA.names.length is 3 and fromT?.open and fromT.names.join(' ') is 'alphaThree alphaTwo' and
+      fromW? and not fromW.open and typed.value is 'noisy.alphaTw' and asks is 1,
+    JSON.stringify {first, opened, fromA, fromT, fromW, typed, asks}
+
+  # A deletion past the word the names were asked for, or a dot, needs names
+  # the list does not have: it asks again, and shows them when they come.
+  await openNoisy 'noisy.alpha'
+  three = await listNow()
+  await t.quiet()
+  asks  = await askedOf()
+  await press 'Backspace', 'Backspace', 'Backspace', 'Backspace', 'Backspace'
+  wider = await until_ -> l = await listNow(); l if l?.names.length is 5
+  await t.quiet()
+  reasked = await askedOf()
+  await press 'Escape'
+  await clearConsole()
+  await openNoisy 'nois'
+  both = await listNow()
+  await typeText '.'
+  members = await until_ -> l = await listNow(); l if l?.open and l.names.join(' ') is NOISY
+  check 'a deletion past the word asked, or a dot, asks again and lists what it answers',
+    three?.names.length is 3 and wider?.open and reasked > asks and
+      both?.names.join(' ') is 'noisy noisyToo' and members? and (await promptNow()).value is 'noisy.',
+    JSON.stringify {three, wider, reasked, both, members}
+  await press 'Escape'
+
+  # Up and Down are the list's while it is open, and the history's again
+  # once it closes.
+  earlier = await js "return Prompt.entered()"
+  await openNoisy()
+  await t.quiet()
+  before = (await consoleText()).length
+  await press 'Down', 'Down', 'Up'
+  moved = await listNow()
+  held  = await promptNow()
+  await press 'Up', 'Up'
+  wrapped = await listNow()
+  await press 'Enter'
+  took   = await promptNow()
+  closed = await listNow()
+  await t.quiet()
+  ran = (await consoleText())[before..]
+  check 'Up and Down move the highlight, round the ends, and leave the history alone',
+    moved?.chosen is 1 and held.value is 'noisy.' and wrapped?.chosen is 4, JSON.stringify {moved, held, wrapped}
+  check 'Enter takes the chosen name and does not run the line',
+    took.value is 'noisy.betaTwo' and took.from is 13 and closed? and not closed.open and ran is '' and
+      (await js "return Prompt.entered()").length is earlier.length,
+    JSON.stringify {took, closed, ran}
+  await press 'Up'
+  recalled = await promptNow()
+  check 'once the list has closed, Up is the history again',
+    took.value is 'noisy.betaTwo' and recalled.value is earlier.at(-1),
+    JSON.stringify {took: took.value, recalled: recalled.value, last: earlier.at(-1)}
+
+  await openNoisy()
+  await press 'Down', 'Tab'
+  tookTab = await promptNow()
+  check 'Tab takes the chosen name', tookTab.value is 'noisy.alphaThree' and not (await listNow()).open,
+    JSON.stringify tookTab
+
+  await openNoisy()
+  wasOpen = (await listNow())?.open
+  await press 'Escape'
+  escaped = await promptNow()
+  check 'Esc closes the list and leaves the line', wasOpen and not (await listNow()).open and
+    escaped.value is 'noisy.' and escaped.focused, JSON.stringify {wasOpen, escaped, list: await listNow()}
+
+  # Taking a name that begins another leaves a word both still fit, so a
+  # list that only narrowed after the take would stay open on the pair.
+  await openNoisy 'nois'
+  pair = await listNow()
+  await press 'Enter'
+  tookPrefix = await promptNow()
+  check 'taking a name that begins another still closes the list',
+    pair?.open and pair.names.join(' ') is 'noisy noisyToo' and pair.chosen is 0 and
+      tookPrefix.value is 'noisy' and not (await listNow()).open,
+    JSON.stringify {pair, tookPrefix, list: await listNow()}
+
+  await openNoisy()
+  wasOpen = (await listNow())?.open
+  # Dispatched as well as moving the focus, as the input part does: in a
+  # window that is not the OS's focused one, Chromium moves the focus
+  # without firing blur.
+  await js """
+    Editor.focus()
+    document.getElementById('promptLine').dispatchEvent(new FocusEvent('blur'))
+    return true
+  """
+  away = await listNow()
+  await js "document.getElementById('promptLine').focus(); return true"
+  back = await listNow()
+  check 'leaving the prompt closes the list, and coming back does not reopen it',
+    wasOpen and away? and not away.open and not back.open, JSON.stringify {wasOpen, away, back}
+
+  await openNoisy()
+  await press 'Left'
+  moved = await until_ -> l = await listNow(); l if l and not l.open
+  check 'moving the caret without an edit closes the list', moved? and (await promptNow()).value is 'noisy.',
+    JSON.stringify {list: await listNow(), prompt: await promptNow()}
+
+  # A real click, so a press that took the focus from the prompt would close
+  # the list before the click could choose.
+  await openNoisy()
+  spot = await js """
+    const row = document.getElementById('completions')?.children[2]?.getBoundingClientRect()
+    return row && {x: Math.round(row.left + row.width / 2), y: Math.round(row.top + row.height / 2)}
+  """
+  if spot
+    win.webContents.sendInputEvent {type: 'mouseDown', x: spot.x, y: spot.y, button: 'left', clickCount: 1}
+    win.webContents.sendInputEvent {type: 'mouseUp',   x: spot.x, y: spot.y, button: 'left', clickCount: 1}
+  clicked = await until_ -> p = await promptNow(); p if p.value isnt 'noisy.'
+  check 'a click takes a name and leaves the prompt focused',
+    clicked?.value is 'noisy.alphaTwo' and clicked.focused and not (await listNow()).open, JSON.stringify {spot, clicked}
+
+  # More than fit on a line open the list on the first Tab, with no beep.
+  # It sits between the header and the line being typed, and still does
+  # after the window's size changes -- by zoom, which resizes the page in
+  # CSS pixels as a resize does: the test window is minimised on Linux and
+  # never shown on macOS, and whether a setSize reaches the page then has
+  # not been measured. At 4x the room above the prompt is less than the
+  # list's own most, so a list sized only when it opened would rise past
+  # the top of the window. A window that small takes room from the panels
+  # (reflowPanels) and does not give it back, so they are put back as they
+  # were, stored sizes and all, for the checks after this one.
+  placed = -> js """
+    const list   = document.getElementById('completions')?.getBoundingClientRect() ?? {}
+    const header = document.querySelector('header').getBoundingClientRect()
+    const line   = document.getElementById('promptLine').getBoundingClientRect()
+    return {open: document.getElementById('completions')?.hidden === false, top: list.top, bottom: list.bottom,
+            header: header.bottom, line: line.top, height: innerHeight}
+  """
+  inPlace = (at) -> at.open and at.top >= at.header - 1 and at.bottom <= at.line + 1 and at.bottom - at.top > 10
+  many = await tab 'Math.'
+  manyList = await listNow()
+  normal = await placed()
+  layout = await js """
+    return {editor: Panels.size('editor'), console: Panels.size('console'),
+            stored: ['panel.editor', 'panel.console'].map((key) => localStorage.getItem(key))}
+  """
+  win.webContents.setZoomFactor 4
+  # Until it is in place, not just until the page has shrunk: the page
+  # learns its new size at once, and runs resize handlers only at its next
+  # rendering update.
+  zoomed = await until_ -> at = await placed(); at if at.height < normal.height / 2 and inPlace at
+  zoomed ?= await placed()
+  win.webContents.setZoomFactor 1
+  await until_ -> (await placed()).height is normal.height
+  await js """
+    Panels.set('editor', #{layout.editor})
+    Panels.set('console', #{layout.console})
+    const stored = #{JSON.stringify layout.stored}
+    ;['panel.editor', 'panel.console'].forEach((key, i) =>
+      stored[i] === null ? localStorage.removeItem(key) : localStorage.setItem(key, stored[i]))
+    return true
+  """
+  check 'too many names for one line open the list on the first Tab, without a beep',
+    many.beeped is 0 and manyList?.open and 'hypot' in manyList.names and many.value is 'Math.',
+    JSON.stringify {many, names: manyList?.names.length}
+  check 'the list sits between the header and the prompt line, and still does after a resize',
+    inPlace(normal) and zoomed.height < normal.height / 2 and inPlace(zoomed), JSON.stringify {normal, zoomed}
+
+  # Down past the rows the list has room for keeps the chosen one in sight.
+  await press 'Escape'
+  await tab 'Math.'
+  await press ('Down' for [1..25])...
+  scrolled = await js """
+    const list = document.getElementById('completions')
+    const box  = list.getBoundingClientRect()
+    const row  = list.querySelector('.chosen')?.getBoundingClientRect()
+    return {open: !list.hidden, taller: list.scrollHeight > list.clientHeight,
+            chosen: [...list.children].findIndex((row) => row.classList.contains('chosen')),
+            inside: !!row && row.top >= box.top - 1 && row.bottom <= box.bottom + 1}
+  """
+  await press 'Escape'
+  check 'Down past the rows in sight scrolls the chosen one into view',
+    scrolled.open and scrolled.taller and scrolled.chosen is 25 and scrolled.inside, JSON.stringify scrolled
+
+  # Never with a reverse search: Ctrl-R closes the list, and a Tab answered
+  # once a search has begun does not open one over it. The sketch answers
+  # only while space is held, so the answer comes after the search starts.
+  await press 'C-r'
+  searched = {list: await listNow(), prompt: await promptNow()}
+  await press 'Escape'
+  await setDoc """
+gate = 1
+loop
+  null until keys.down 'space'
+  buffer.swap
+"""
+  await wait 500
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  await promptAt 'Math.', 5
+  await press 'Tab'
+  out = await js "return Prompt.pending()"
+  await press 'C-r'
+  await stageKey 'keydown', 'Space'
+  await until_ -> not await js "return Prompt.pending()"
+  await stageKey 'keyup', 'Space'
+  during = {out, list: await listNow(), prompt: await promptNow()}
+  await press 'Escape'
+  check 'Ctrl-R closes the list, and a Tab answered during a search does not open one',
+    searched.list? and not searched.list.open and searched.prompt.mark is 'bck-i-search: _' and
+      out and not during.list.open and during.prompt.mark is 'bck-i-search: _' and during.prompt.value is 'Math.',
+    JSON.stringify {searched, during}
+
+  await click 'stop'
+  await settle()
+
+  # Esc closes a list that is waiting, hidden, for the names after a dot,
+  # and they do not open it when they come. The sketch answers until x is
+  # pressed and then says it has stopped answering, so the dot's question
+  # is certain to wait -- until space lets it answer again.
+  await setDoc """
+noisy = alphaOne: 1, betaOne: 1
+noisyToo = 1
+loop
+  buffer.swap
+  break if keys.down 'x'
+print 'parked'
+null until keys.down 'space'
+loop
+  buffer.swap
+"""
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  await until_ -> (await status()) is 'running'
+  await openNoisy 'nois'
+  both = await listNow()
+  await stageKey 'keydown', 'KeyX'
+  parked = await until_ -> (await consoleText()).includes 'parked'
+  await stageKey 'keyup', 'KeyX'
+  await typeText '.'
+  waiting = {list: await listNow(), out: await js "return Prompt.pending()"}
+  await press 'Escape'
+  await stageKey 'keydown', 'Space'
+  await until_ -> not await js "return Prompt.pending()"
+  await stageKey 'keyup', 'Space'
+  after = await listNow()
+  check 'Esc closes a list waiting for its names, and they do not open it when they come',
+    both?.open and parked and waiting.out and not waiting.list.open and after? and not after.open and
+      (await promptNow()).value is 'noisy.', JSON.stringify {both, parked, waiting, after}
+  await click 'stop'
+  await settle()
+  await setDoc ''

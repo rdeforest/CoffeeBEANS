@@ -95,6 +95,20 @@
     padding: .25rem .6rem .35rem; border-top: 1px solid var(--edge);
   }
   #promptMark { opacity: .45; }
+  /* Tab's list of names, above the prompt and free to rise over the stage:
+     the console alone is often four lines tall. --room is the measured space
+     up to the header, set from the renderer. Above CodeMirror's gutters and
+     panels (z-index 200 and 300), which a wide list can reach. */
+  #promptRow { position: relative; }
+  #completions {
+    position: absolute; bottom: 100%; z-index: 400;
+    min-width: 16ch; max-width: calc(100% - 2rem); overflow-y: auto;
+    max-height: min(18em, var(--room, 18em));
+    background: var(--panel); border: 1px solid var(--edge); border-bottom: 0;
+  }
+  .choice { padding: 0 .6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .choice:hover  { background: #ffffff0a; }
+  .choice.chosen { background: #c0ffee26; }
   #promptLine {
     flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
     color: var(--coffee); font: inherit; padding: 0;
@@ -153,6 +167,7 @@
   <div id="promptRow">
     <span id="promptMark">&gt;</span>
     <input id="promptLine" spellcheck="false" autocomplete="off" autocapitalize="off">
+    <div id="completions" role="listbox" hidden></div>
   </div>
   <div id="vars" hidden></div>
 </div>
