@@ -8,7 +8,7 @@ export { EditorView, Decoration, keymap, lineNumbers, highlightActiveLine,
 export { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 export { StreamLanguage, syntaxHighlighting, HighlightStyle,
          indentUnit, bracketMatching, foldGutter } from '@codemirror/language'
-export { coffeeScript } from '@codemirror/legacy-modes/mode/coffeescript'
+export { coffeeScript } from './coffeescript-mode.js'
 export { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 export { vim, Vim, getCM } from '@replit/codemirror-vim'
 export { tags } from '@lezer/highlight'

@@ -506,33 +506,32 @@ hands a brush the pixel underneath (`p.color`, read lazily), so this may be
 a small runtime brush rather than a sketch trick. Untried; worth a look if a
 3D camera ever comes into the runtime.
 
-## Parked: the highlighter reads division as a regex
+## Fixed: the highlighter read division as a regex
 
 Found 2026-10-05 in the challenges session; upstream checked 2026-10-07
-with no fix there. Small, but the fix should also go upstream, so it waits.
+and 2026-10-08 (6.5.5) with no fix there. Fixed by Claude on 2026-10-08.
 
-`near = h2 / tan(fov / 2)` colours `/ tan(fov /` as a regex. The legacy
-CoffeeScript mode (`@codemirror/legacy-modes/mode/coffeescript.js`, around
-lines 121-127; it arrives through `src/renderer/vendor/editor-entry.js` and
-is used in `src/renderer/editor.coffee`) starts a regex at a lone `/`
-whenever another `/` appears later on the line
-(`stream.match(/^.*\//, false)`). It never looks at what came before, so any
-line with two divisions is highlighted as a regex between them.
+`near = h2 / tan(fov / 2)` coloured `/ tan(fov /` as a regex. The legacy
+CoffeeScript mode (`@codemirror/legacy-modes/mode/coffeescript.js`) started
+a regex at a lone `/` whenever another `/` appeared later on the line
+(`stream.match(/^.*\//, false)`), never looking at what came before. So
+`a // b` and `x /= 2 / y` were regexes too.
 
-The usual rule, and CoffeeScript's own lexer's: a `/` is division when the
-previous significant token is a value (an identifier, a number, a closing
-`)` `]` `}`, a string) and a regex start otherwise (after an operator, `(`,
-`,`, `=`, a keyword such as `return`, or at line start). The wrinkle is the
-implicit call: `f /re/` is a regex but `f / 2` is division, told apart by
-the space after the slash, since a regex cannot start with one.
+The fix follows CoffeeScript's lexer: the mode remembers whether the last
+token was a value (`state.after`); after one, `/` is division, except after
+a name, `)`, `]`, `?`, `@` or `this` with a space between, where `f /re/` is
+a call with a regex -- unless the would-be regex starts with a space, as in
+`f / 2`. A regex must also close on its line and is never `//`. It lives in
+a patched copy, `src/renderer/vendor/coffeescript-mode.js`, which
+`editor-entry.js` bundles in place of the package's; the package stays in
+`package.json` as the diff base. Checks are at the end of the `editor` part.
 
-Fix: wrap or patch the mode so its state remembers the class of the last
-token, and treat `/` as a regex start only when that class is not a value,
-or when it follows whitespace and is not itself followed by whitespace.
-Rebuild with `npm run build:vendor`. Checks: the token at `tan` in
-`near = h2 / tan(fov / 2)` must not carry the regex (`string.special`)
-class; `/ab+c/` in `x = /ab+c/` and in `f /ab+c/` still must. Then offer
-the patch upstream.
+Still wrong, all rare and none made worse: `Foo:: / 2` (the mode splits `::`
+into two `:`), `/[/]/` (a slash in a class ends the regex), names outside
+ASCII, a `\` line continuation, a heregex over several lines. Worse than
+before only on `yield / 2 / 3` and `a ?/b/`, which nobody writes.
+
+Offering the patch upstream waits on Robert.
 
 ## Handedness, and the canvas that is not white
 

@@ -12,7 +12,7 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: main is green at 663 checks on Linux (Windows CI green
+Where it stands: main is green at 674 checks on Linux (Windows CI green
 apart from one runner-side `sound` flake). The last overnight,
 `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
 open questions for Robert (retire arming from the buffer, main's uncaught
@@ -21,10 +21,9 @@ redaction of names, Eval after DevTools, literal-first sketches, splitting
 `main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
 moves to `docs/overnight/done/` once he has read it.
 
-Next small step: the editor colours `a / f(b / 2)` as a regex (the legacy
-CoffeeScript mode starts a regex at any `/` with another `/` later on the
-line). Check upstream `@codemirror/legacy-modes` first, then patch the mode
-and add a check.
+The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
+patched copy of the CoffeeScript mode (`src/renderer/vendor/coffeescript-
+mode.js`). Offering the patch upstream waits on Robert.
 
 Known bugs and gaps: the brief's "Not done" list, and the "Still open" notes
 throughout this file.
@@ -118,7 +117,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 663 checks
+    npm test                                 all 674 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell

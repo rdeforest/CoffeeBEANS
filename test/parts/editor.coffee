@@ -895,3 +895,34 @@ module.exports = (t) ->
   """
   check 'with ordinary keys, Enter then Esc and Down leave the new line its indent',
     plain is KEPT, JSON.stringify plain
+
+  # A lone / is division or a regex as CoffeeScript's lexer reads it, not
+  # (as the legacy mode did until 2026-10-08) a regex whenever another /
+  # follows on the line. Read by colour, which a regex shares with strings,
+  # once the highlighter has reached the string literal on the line after;
+  # each word is at least two letters, so the read lands inside its token.
+  colours = (line, word) -> js """
+    const v = Editor.view(), doc = #{JSON.stringify line} + "\\n'q'"
+    v.dispatch({changes: {from: 0, to: v.state.doc.length, insert: doc}})
+    const colour = (at) => getComputedStyle(v.domAtPos(at).node.parentElement).color
+    const plain = getComputedStyle(v.contentDOM).color, until = Date.now() + 3000
+    while (colour(doc.length - 2) === plain && Date.now() < until)
+      await new Promise(r => setTimeout(r, 25))
+    return {word: colour(doc.indexOf(#{JSON.stringify word}) + 1), string: colour(doc.length - 2), plain}
+  """
+  for [line, word, regex] in [
+    ['near = h2 / tan(fov / 2)', 'tan',  no ]
+    ['y = f(x) / gg(x) / 2',     'gg',   no ]
+    ['x = w/22 + h/2',           '22',   no ]
+    ['n = a // bb + c / 2',      '//',   no ]
+    ['x /= 22 / y',              '22',   no ]
+    ['z = 3 /22/ 1',             '22',   no ]
+    ['s = "s" / 22 / 3',         '22',   no ]
+    ['x = /ab+c/',               'ab',   yes]
+    ['f /ab+c/',                 'ab',   yes]
+    ['r = [/a/, /bb/]',          'bb',   yes]
+    ['a = bb\n/re/.test x',      're',   yes]
+  ]
+    seen = await colours line, word
+    check "the editor colours #{word} in #{JSON.stringify line} as #{if regex then 'a regex' else 'code'}",
+      seen.string isnt seen.plain and (seen.word is seen.string) is regex, JSON.stringify seen
