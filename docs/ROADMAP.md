@@ -3,6 +3,10 @@
 Set by Robert on 2026-10-04, written up by Claude the same day. This is the
 schedule; NOTES.md is the design diary and AGENTS.md the working state.
 
+**On hold since 2026-10-07.** Robert dropped the Steam target for a new
+venture; this file is kept as the record of the plan, not as a schedule.
+AGENTS.md, "Status", says where things stand.
+
 ## The goal
 
 CoffeeBEANS becomes a game: a story about programming in the late '80s and

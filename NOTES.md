@@ -494,3 +494,14 @@ challenge (docs/ROADMAP.md, Game content); gating `rnd` alone would leave
 Related, separate: `elapsed` is wall-clock time, so seeding alone does not
 make a physics sketch repeat exactly. Simulated time would. Not needed while
 challenges are proved by demonstration.
+
+## Parked: a depth-test brush
+
+Robert's idea, 2026-10-05, set aside the same night while building a camera
+mock-up (`sketches/camera.coffee` in CoffeeBEANS-content): hidden-line
+drawing without a separate depth buffer. Draw with depth stored in the alpha
+channel and a brush that writes a pixel only over one that is farther away,
+then one full-screen pass sets alpha back to opaque. The paint axis already
+hands a brush the pixel underneath (`p.color`, read lazily), so this may be
+a small runtime brush rather than a sketch trick. Untried; worth a look if a
+3D camera ever comes into the runtime.

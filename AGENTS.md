@@ -4,6 +4,31 @@ README says what CoffeeBEANS is and how to use it. NOTES.md is the design
 diary. This file is the working state: what is half-built, what was decided
 and why, and the facts that cost something to learn.
 
+## Status: on hold, recreation only (since 2026-10-07)
+
+Robert put CoffeeBEANS on hold on 2026-10-07 for a new venture that takes
+his working energy. The Steam / Next Fest October 2027 target is dropped;
+`docs/ROADMAP.md` stays as the record of that plan, not a schedule. He may
+still open sessions because he enjoys it: no deadlines, no phases, no
+overnight queues. Keep sessions short and small.
+
+Where it stands: main is green at 663 checks on Linux (Windows CI green
+apart from one runner-side `sound` flake). The last overnight,
+`docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
+open questions for Robert (retire arming from the buffer, main's uncaught
+exceptions in a player's app, seeded examples' line endings on Windows,
+redaction of names, Eval after DevTools, literal-first sketches, splitting
+`main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
+moves to `docs/overnight/done/` once he has read it.
+
+Next small step: the editor colours `a / f(b / 2)` as a regex (the legacy
+CoffeeScript mode starts a regex at any `/` with another `/` later on the
+line). Check upstream `@codemirror/legacy-modes` first, then patch the mode
+and add a check.
+
+Known bugs and gaps: the brief's "Not done" list, and the "Still open" notes
+throughout this file.
+
 ## Before starting work
 
 **Check upstream first**, every session, before touching anything:
@@ -187,14 +212,16 @@ those safely needs a lexer, because a heredoc can hold a line starting
 
 ## Priorities
 
+**On hold since 2026-10-07** (see Status, at the top). What follows is the
+record of the priorities before that.
+
 **The direction changed on 2026-10-04:** CoffeeBEANS becomes a game for
 Steam, done by 2027-07-30, aimed at Next Fest in October 2027. The schedule
-and every decision behind it are in `docs/ROADMAP.md`; read it before
-choosing what to work on.
+and every decision behind it are in `docs/ROADMAP.md`. Dropped 2026-10-07.
 
-Now: Phase 0 there -- the licence, builds and tests for all three platforms
-in CI, seeded `rnd` (NOTES.md, Seeded randomness), feature gating, and the
-sandbox mode.
+Was next: Phase 0 there -- the licence, builds and tests for all three
+platforms in CI, seeded `rnd` (NOTES.md, Seeded randomness), feature gating,
+and the sandbox mode.
 
 From Robert's playtesting, 2026-10-04:
 
