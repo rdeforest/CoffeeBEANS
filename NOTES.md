@@ -505,3 +505,57 @@ then one full-screen pass sets alpha back to opaque. The paint axis already
 hands a brush the pixel underneath (`p.color`, read lazily), so this may be
 a small runtime brush rather than a sketch trick. Untried; worth a look if a
 3D camera ever comes into the runtime.
+
+## Parked: the highlighter reads division as a regex
+
+Found 2026-10-05 in the challenges session; upstream checked 2026-10-07
+with no fix there. Small, but the fix should also go upstream, so it waits.
+
+`near = h2 / tan(fov / 2)` colours `/ tan(fov /` as a regex. The legacy
+CoffeeScript mode (`@codemirror/legacy-modes/mode/coffeescript.js`, around
+lines 121-127; it arrives through `src/renderer/vendor/editor-entry.js` and
+is used in `src/renderer/editor.coffee`) starts a regex at a lone `/`
+whenever another `/` appears later on the line
+(`stream.match(/^.*\//, false)`). It never looks at what came before, so any
+line with two divisions is highlighted as a regex between them.
+
+The usual rule, and CoffeeScript's own lexer's: a `/` is division when the
+previous significant token is a value (an identifier, a number, a closing
+`)` `]` `}`, a string) and a regex start otherwise (after an operator, `(`,
+`,`, `=`, a keyword such as `return`, or at line start). The wrinkle is the
+implicit call: `f /re/` is a regex but `f / 2` is division, told apart by
+the space after the slash, since a regex cannot start with one.
+
+Fix: wrap or patch the mode so its state remembers the class of the last
+token, and treat `/` as a regex start only when that class is not a value,
+or when it follows whitespace and is not itself followed by whitespace.
+Rebuild with `npm run build:vendor`. Checks: the token at `tan` in
+`near = h2 / tan(fov / 2)` must not carry the regex (`string.special`)
+class; `/ab+c/` in `x = /ab+c/` and in `f /ab+c/` still must. Then offer
+the patch upstream.
+
+## Handedness, and the canvas that is not white
+
+From Langton's ant, 2026-10-05 (the playtest is in CoffeeBEANS-content,
+`docs/playtests.md`). Two engine-level traps, both of which mirrored the ant
+for Robert:
+
+- **Which way is "right".** The screen's y runs down, so a positive angle
+  turns clockwise (`stamp`'s help already says so). Code that uses
+  math-convention angles on a y-down screen gets every turn mirrored: "turn
+  right" goes left on screen. With the ant's rules as written, the highway
+  runs south-west; mirrored, south-east. Any challenge or story clue that
+  depends on a direction (the field agent following the ant's highway) needs
+  the convention fixed by the runtime and stated in the help, or the clue
+  must not be a compass direction. Worth deciding once, for turtles, `stamp`
+  and anything else that turns, before the story leans on it.
+- **A new surface starts transparent, not white or black.** Code that tests
+  "is this cell white?" on a fresh surface takes the other branch everywhere.
+  Robert also said he would have cleared to black anyway ("in my head the
+  screen started black"). The help states it for `surface`; a challenge that
+  says "every cell starts white" should probably have the player `cls` first,
+  or the runtime should make the starting colour easy to see.
+
+Also for the game, not the engine: the highway starts at step 9,977 (period
+104), and judging by eye overshoots by about a thousand, so the challenge
+either accepts a window or asks the player to measure it.

@@ -131,6 +131,9 @@ still holds its own files in there until it has exited.
 ubuntu-24.04 (under xvfb) and windows-latest on every push, macOS on a `v*`
 tag or by hand (`gh workflow run test.yml`). The repo is private, so runs
 cost minutes: push merges, not every commit.
+**Disabled since 2026-10-08** (Robert, with the project on hold), with
+`gh workflow disable`; the file is kept. `gh workflow enable test.yml`
+turns it back on. Until then, run the suite locally before pushing.
 
 Parts: `startup problems editor image repl buffers stepping debugging focus
 lifecycle drawing color loading shell about report input random names sound
