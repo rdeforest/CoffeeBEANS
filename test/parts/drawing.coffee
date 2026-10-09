@@ -113,7 +113,6 @@ print 'pixels=' + overlaps(left, 0, 0, right, -5, -5)
   blending = """
 screen 320, 200
 hex = (c) -> (c >>> 0).toString(16)
-near = (c, want) -> [24, 16, 8, 0].every (s) -> abs((c >>> s & 255) - (want >>> s & 255)) <= 1
 dot = (argb) ->
   s = surface 1, 1
   drawTo s, -> cls argb
@@ -128,17 +127,17 @@ put solid, 11, 10
 put clear, 12, 10
 put half, 13, 10, 'copy'
 stamp half, 14, 10
-print 'midpoint=' + hex(pget 10, 10) + ' ' + near(pget(10, 10), 0xFF80007F)
+print 'midpoint=' + hex(pget 10, 10) + ' ' + (pget(10, 10) is 0xFF80007F)
 print 'solid=' + hex(pget 11, 10) + ' ' + (pget(11, 10) is 0xFFFF0000)
 print 'clear=' + hex(pget 12, 10) + ' ' + (pget(12, 10) is 0xFF0000FF)
 print 'copy=' + hex(pget 13, 10) + ' ' + (pget(13, 10) is 0x80FF0000)
-print 'stamped=' + hex(pget 14, 10) + ' ' + near(pget(14, 10), 0xFF80007F)
+print 'stamped=' + hex(pget 14, 10) + ' ' + (pget(14, 10) is 0xFF80007F)
 
 # Over a half-clear destination the result is more opaque than either, and
 # its colour is weighted by what each side shows: 192 alpha, 170 red, 85 blue.
 glass = dot 0x800000FF
 drawTo glass, -> put half, 0, 0
-print 'layered=' + hex(drawTo glass, -> pget 0, 0) + ' ' + near(drawTo(glass, -> pget 0, 0), 0xC0AA0055)
+print 'layered=' + hex(drawTo glass, -> pget 0, 0) + ' ' + (drawTo(glass, -> pget 0, 0) is 0xC0AA0055)
 """
   await setDoc blending
   await wait 500
