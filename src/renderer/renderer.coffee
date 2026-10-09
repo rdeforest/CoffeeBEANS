@@ -1289,10 +1289,11 @@ linePause = ->
 
 # Why main did not pause, by its answer. `stale` is a worker it let go of to
 # DevTools, which it arms again only once that worker is idle (see stale in
-# src/main/debugger.coffee) -- and Ctrl-\ is only ever at a busy one.
+# src/main/debugger.coffee) -- and Ctrl-\ is only ever at a busy one, which
+# may have been running when DevTools closed or started since.
 UNPAUSED =
   false: '*** could not pause -- is DevTools open? ***'
-  stale: '*** could not pause: this sketch was already running when DevTools closed -- pausing works again from the next Run, or an Eval once it has stopped ***'
+  stale: '*** could not pause: this worker has not been armed again since DevTools let it go, and cannot be while it runs -- pausing works again from the next Run, or an Eval once it has stopped ***'
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
 # paused frame, and V8 must not be moved on under it (main refuses too; this
@@ -1977,9 +1978,12 @@ stop = ->
 # pauses aside since (see `armed`), and said on the status line when it
 # happens, which is also what stops anything watching the status from
 # mistaking the gap for a run that has already finished.
-armFirst = (run) ->
+#
+# `fresh` is for a Run, which throws the worker away: arming it first, if it
+# is one main let go of to DevTools, would only hold the Run up.
+armFirst = (run, fresh = no) ->
   return run() if armed and not skipping
-  idle      = underHold() in ['ready', 'error'] and Atomics.load(i32, H.ASK_STATE) not in [1, 4]
+  idle      = not fresh and underHold() in ['ready', 'error'] and Atomics.load(i32, H.ASK_STATE) not in [1, 4]
   before    = status
   armedOver = before unless before is 'arming'   # a second arming keeps the first's
   asked     = stops
@@ -1997,7 +2001,7 @@ runSource = (source, name, cut) -> armFirst ->
   return pending = {source, name, cut} if status is 'booting'
   send {source, name, cut}
 
-runFresh = (source, name) -> armFirst -> start {source, name}
+runFresh = (source, name) -> armFirst (-> start {source, name}), yes
 
 # A sketch you run is almost always one you are about to play with, so Run
 # and :eval give it the keyboard. Region eval does not: that is the loop of

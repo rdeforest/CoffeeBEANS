@@ -12,8 +12,8 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: main is green at 674 checks on Linux (Windows CI green
-apart from one runner-side `sound` flake). The last overnight,
+Where it stands: main is green at 674 checks on Linux, 681 with fixes/arming
+(not yet run on Linux; Windows CI green apart from a runner-side `sound` flake). The last overnight,
 `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
 open questions for Robert (retire arming from the buffer, main's uncaught
 exceptions in a player's app, seeded examples' line endings on Windows,
@@ -120,7 +120,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 674 checks
+    npm test                                 all 681 checks
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -320,7 +320,7 @@ Done:
   enabled again once it is idle, so an Eval into it stops on errors and
   `breakpoint`; only a busy one is refused, at once. How, and what is
   known about the race, is under "Never re-attach" below. Checks
-  `pauseonerror` 31-34; suite hook `t.debugArmed`.
+  `pauseonerror` 31-35; suite hook `t.debugArmed`.
 
 ## Facts line stepping established
 
@@ -339,20 +339,27 @@ Verified in Electron 44 while building it; do not re-derive.
   anyway, so main remembers its `targetId` (`stale` in
   `src/main/debugger.coffee`). Until 2026-10-08 it was never enabled again,
   so an Eval into it went without error stops or `breakpoint` until the
-  next Run. Since then (Robert's call) it is enabled again at the next arm
-  made while the renderer says the worker is idle -- a Run, or an Eval,
-  which is refused at a busy worker anyway -- and is not stale once that
+  next Run. Since then (Robert's call) it is enabled again at the next
+  Eval made while the renderer says the worker is idle (a Run never
+  offers it: it is about to be thrown away), and is not stale once that
   answers. Busy, it is refused at once: Ctrl-\ at it says pausing works
   again from the next Run, or an Eval once it has stopped. The renderer's
   `idle` (status `ready` or `error`, no prompt line asked or being
-  answered) can be wrong by the time main acts -- a prompt line can start
-  in between -- so that enable is bounded by `STALE_LIMIT` (500ms, a
-  choice) and said. **Seen 2026-10-08** (Claude, Electron 44, macOS, 6 of 6
-  runs of `pauseonerror` 34): an enable given up on at a busy
-  worker is answered once the worker goes idle, and main then counts it
-  armed (`revived`); no second enable is ever sent behind one still out.
-  Whether Linux and Windows answer late too is untested; if they do not,
-  the worker stays stale until the next Run, which is what the app says.
+  answered) can be wrong -- an async sketch still looping after its run
+  said it was done reads `ready` -- so that enable is bounded by
+  `STALE_LIMIT` (500ms, a choice) and said. **Seen 2026-10-08** (Claude,
+  Electron 44, macOS):
+  - an enable given up on at a busy worker is answered once the worker
+    goes idle (11 of 11 runs of `pauseonerror` 34), and main then counts it
+    armed (`revived`). Until then every arm is refused at once; no second
+    enable is sent behind one still out, and its two follow-up settings
+    wait for the turn (`whenFree`) since they can land on a live worker.
+    Whether Linux and Windows answer late too is untested; if they do not,
+    the worker stays stale until the next Run, which is what the app says.
+  - only a running *sketch* stalls the enable. A busy prompt line --
+    swap-bound or CPU-bound -- did not: the enable answered and the Eval
+    paused (a Claude reviewer's probe). The renderer still counts a prompt
+    line out as busy; that is caution, not a measured need.
   A worker born while DevTools was open is enabled as any other: with the
   events simulated nobody had attached it, but a real DevTools does, and
   whether enabling it then hangs is untested -- as is a real DevTools

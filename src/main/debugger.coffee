@@ -54,10 +54,11 @@ CHASE_LIMIT = 200
 SETUP_LIMIT = 2000
 
 # How long enabling a worker we let go of to DevTools may take (see stale).
-# Idle, it answered in 3ms; busy, it did not answer in 2s. The renderer only
-# asks while it believes the worker idle, so this bounds the one case where
-# the worker turned busy on the way -- a prompt line, say -- and holds a run
-# at `arming` no longer than this. A choice, not a measurement.
+# Idle, it answered in 3ms; busy in a sketch, it did not answer in 2s. The
+# renderer only asks while it believes the worker idle, so this bounds the
+# cases where it is wrong -- an async sketch still looping after its run
+# said it was done (status `ready`), or a sketch started in between -- and
+# holds an Eval at `arming` no longer than this. A choice, not a measurement.
 STALE_LIMIT = 500
 
 # The debugger is on for every run, so what it keeps per script has to stay
@@ -401,7 +402,7 @@ module.exports = (win) ->
       stopped = null
       tell type: 'resumed'
 
-  # Armed is the Debugger domain on; disarmed is it off. Attachment itself is
+  # Armed is the Debugger domain on. Attachment itself is
   # for good once made: re-attaching to a worker we have let go of leaves
   # Debugger.enable hanging while that worker is busy (Electron 44), so we
   # never let go -- except to DevTools, which gives us no choice.
@@ -428,35 +429,39 @@ module.exports = (win) ->
     resetSession()
 
   # `idle` is the renderer's word that the worker is running nothing, which
-  # only matters for a stale one. It can be wrong by the time the enable
-  # lands, so that is bounded by STALE_LIMIT. Given up on, the enable is
-  # still out in V8, which answers it once the worker is idle (seen by Claude,
-  # 2026-10-08), and from then the worker is ours (`revived`). Another is
-  # never sent behind it: an arm meanwhile -- an Eval straight after the
-  # Stop that idled the worker, say -- waits for that answer instead, bounded
-  # the same way.
+  # only matters for a stale one. It can be wrong (see STALE_LIMIT), so that
+  # enable is bounded. Given up on, it is still out in V8, which answers it
+  # once the worker is idle (seen by Claude, 2026-10-08), and from then the
+  # worker is ours (`revived`). Until then every arm is refused at once:
+  # another enable is never sent behind it, and waiting on it again would
+  # hold every Eval for STALE_LIMIT, silently, if V8 never answers.
   enable = (idle = no) ->
     return null unless session
     return ready if enabled
     again = stale()
-    return null if again and not idle
-    if again and reviving?.session is session
-      return within(STALE_LIMIT, reviving.setting).catch(->)
+    return null if again and (not idle or reviving?.session is session)
     enabled = yes
     mine    = session
+    # The two settings wait for the turn: a stale worker's enable can answer
+    # long after it was sent, with the worker live and a pause of its own
+    # being set up, and nothing may reach V8 while that evaluates. A fresh
+    # worker waits for us before it runs, so for it there is no turn out.
     setting = do ->
       await command 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, mine
-      await command 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, mine
-      await command 'Debugger.setPauseOnExceptions', {state: pauseState()}, mine
+      await whenFree -> command 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, mine
+      await whenFree -> command 'Debugger.setPauseOnExceptions', {state: pauseState()}, mine
     ready = do ->
       try
         await within (if again then STALE_LIMIT else SETUP_LIMIT), setting
         dropped = null if again and session is mine
       catch error
-        enabled = no if session is mine
+        # A worker gone meanwhile -- a Run, Stop's deadline, DevTools again --
+        # took its enable with it, and is nobody's news.
+        return unless session is mine
+        enabled = no
         # Only a stale worker's enable that was given up on is still out;
-        # one that failed outright, or whose worker went, is over.
-        unless again and session is mine and /^timed out/.test error.message
+        # one that failed outright is over.
+        unless again and /^timed out/.test error.message
           return tell type: 'problem', text: "debugger: #{error.message}"
         reviving = here = {session: mine, setting}
         setting.then(-> revived mine).catch(->).finally ->

@@ -916,7 +916,7 @@ throw slow
     await t.quiet()
     {how, said: (await consoleText()).trim()}
   check 'after DevTools has been opened and closed, the next Run stops on its error again, and so does the one after',
-    before is 'error paused' and told.includes('work again from the next Run') and
+    before is 'error paused' and told.includes('DevTools closed -- breakpoints and error stops work again from the next Run or Eval') and
       after.every(({how, said}) -> how is 'error paused' and not said.includes 'debugger:'),
     JSON.stringify {before, told, after}
 
@@ -989,7 +989,8 @@ throw slow
   now   = await status()
   said  = await consoleText()
   check 'Ctrl-\\ at a sketch that was running when DevTools opened says, at once, that pausing works again from the next Run',
-    took < 500 and now is 'running' and said.includes('pausing works again from the next Run') and
+    took < 500 and now is 'running' and
+      said.includes('*** could not pause: this worker has not been armed again since DevTools let it go, and cannot be while it runs -- pausing works again from the next Run, or an Eval once it has stopped ***') and
       not said.includes('debugger:') and not said.includes('is DevTools open'),
     JSON.stringify {took, now, said}
   await click 'stop'
@@ -1051,6 +1052,19 @@ throw slow
     seq and how is 'error paused' and not said.includes('debugger:'),
     JSON.stringify {seq, how, said}
 
+  # 32b. The same from a run that ended in an error, which is idle too.
+  from  = await status()
+  await devtools()
+  since = (await pauseNumber()) ? 0
+  await evalText "breakpoint\nprint 'after'\n"
+  seq   = await nextPause since, 5000
+  how   = await status()
+  check 'after DevTools, an Eval into the worker it let go of, idle after an error, stops at its breakpoint',
+    from is 'error' and seq and how is 'line paused',
+    JSON.stringify {from, seq, how}
+  await click 'stop'
+  await t.settle()
+
   # 33. A busy one is still refused, at once -- enabling it would stall for
   # as long as it ran -- and the Eval with it, as at any busy worker. Once
   # it has stopped, the next Eval enables it.
@@ -1087,6 +1101,13 @@ throw slow
   armed = await js "return await beans.debug.arm(true)"
   took  = Date.now() - asked
   told  = await t.waitFor "return /got busy/.test(document.getElementById('console').textContent)", 3000
+  # Asked again while the first is still out: refused at once, and not said
+  # again. Waited on instead, every Eval would sit at `arming` for
+  # STALE_LIMIT for as long as V8 did not answer.
+  asked  = Date.now()
+  again  = await js "return await beans.debug.arm(true)"
+  retook = Date.now() - asked
+  await t.quiet()
   said  = await consoleText()
   how   = await status()
   before  = t.debugArmed()
@@ -1100,5 +1121,32 @@ throw slow
     armed is false and took < 1500 and how is 'running' and told and not before.some((a) -> a) and stopped and
       later and seq and (await status()) is 'line paused',
     JSON.stringify {armed, took, how, said, before, stopped, later, seq}
+  check 'an arm while a given-up enable is still out is refused at once, and nothing more is said',
+    again is false and retook < 200 and times(said, 'got busy') is 1,
+    JSON.stringify {again, retook, said}
   await click 'stop'
   await t.settle()
+
+  # 35. A Run never arms the worker it throws away. Over an async sketch
+  # still looping after its run said it was done -- `ready`, so idle to the
+  # renderer, and busy -- the Run waited out STALE_LIMIT at `arming` and
+  # said breakpoints would come back "from the next Run" during that very
+  # Run (a Claude review, 2026-10-08).
+  await laterRun "screen 320, 200\ndo ->\n  await new Promise (r) -> setTimeout r, 50\n  print 'looping'\n  loop\n    buffer.swap\nprint 'top done'\n"
+  looping = (await statusBecomes 'ready') and
+    await t.waitFor "return /looping/.test(document.getElementById('console').textContent)", 5000
+  await devtools()
+  await setDoc failing
+  await wait 500
+  await clearConsole()
+  asked  = Date.now()
+  await click 'runFresh'
+  arming = await armedIn asked
+  how    = await until_ (-> s = await status(); s if s in ['error', 'error paused']), 10000
+  await js "Stepping.resume(); return true" if how is 'error paused'
+  await statusBecomes 'error'
+  await t.quiet()
+  said   = await consoleText()
+  check 'a Run over an idle-looking but busy worker DevTools let go of goes at once, and stops on its error',
+    looping and arming < 300 and how is 'error paused' and not said.includes('got busy'),
+    JSON.stringify {looping, arming, how, said}

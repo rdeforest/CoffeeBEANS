@@ -60,8 +60,9 @@ Each entry: what to do, what should happen, where it came from.
   looping sketch, open DevTools, close it. Then (1) Run a sketch that throws:
   it stops as `error paused`, at once, with no "timed out" line; (2) Run one
   with `breakpoint`: it line-pauses; (3) Ctrl-\ on a sketch started while
-  DevTools was open: it pauses; (4) Eval into the sketch that was running
-  when DevTools opened: by design it no longer stops on errors until the
-  next Run (I1, overnight 2026-10-06; whether that should change is in that
-  night's brief). Untested is whether enabling a worker that a real DevTools
+  DevTools was open: it pauses; (4) Eval into the worker that was there
+  when DevTools opened: while its sketch runs the Eval is refused as
+  already running, at once; once it has stopped, an Eval that throws stops
+  as `error paused` and one with `breakpoint` line-pauses (Robert,
+  2026-10-08; until then it stopped on neither until the next Run). Untested is whether enabling a worker that a real DevTools
   had attached hangs the way a busy re-attached worker did (2s).
