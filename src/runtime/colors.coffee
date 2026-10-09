@@ -1,6 +1,7 @@
 # Colors are plain 32-bit numbers in 0xAARRGGBB. Everything that accepts a
-# color runs it through toColor, so names, builders and raw numbers are
-# interchangeable at every call site.
+# color runs it through toColor, so names, colour objects (a Color or a plain
+# {r, g, b, a, h, s, v}) and raw numbers are interchangeable at every call
+# site.
 
 NAMED =
   black:   0x000000
@@ -31,26 +32,119 @@ byte  = (n) -> clamp Math.round n * 255
 pack = (a, r, g, b) ->
   ((clamp(a) << 24) | (clamp(r) << 16) | (clamp(g) << 8) | clamp(b)) >>> 0
 
-class ColorBuilder
-  constructor: (@a = 255, @r = 0, @g = 0, @b = 0) ->
-  setAlpha: (v) -> @a = byte v; this
-  setRed:   (v) -> @r = byte v; this
-  setGreen: (v) -> @g = byte v; this
-  setBlue:  (v) -> @b = byte v; this
-  valueOf:  -> pack @a, @r, @g, @b
+# A colour object carries RGB and HSV side by side, so setting one model
+# never loses what the other knew: a hue set on black is still there when the
+# value comes up, which is the whole point of keeping h, s and v at all.
+# Bytes (a, r, g, b) are 0..255, hue is degrees, saturation and value 0..1.
+# Each of those is an accessor of the instance's own, so `c.h = 30` is
+# setHueDegrees and both halves stay in step however a colour is changed.
+# Own and enumerable, not on the prototype, so a Color still prints, spreads
+# and stringifies as {a, r, g, b, h, s, v}.
+class Color
+  constructor: (a = 255, r = 0, g = 0, b = 0, h = 0, s = 0, v = 0) ->
+    Object.defineProperty this, HELD, value: {a, r, g, b, h, s, v}
+    Object.defineProperties this, ACCESSORS
 
-  # Round-tripped through HSV so `setValue` means the same thing here as it
-  # does on a probe. A grey has no hue to preserve, which is why setting the
-  # saturation of one leaves it grey.
-  replaceHSV: (hue, saturation, value) ->
-    packed = fromHSV hue, saturation, value
-    @r = (packed >>> 16) & 0xFF
-    @g = (packed >>>  8) & 0xFF
-    @b =  packed         & 0xFF
+  setAlphaByte:  (n) -> @[HELD].a = roundByte number 'alpha', n; this
+  setRedByte:    (n) -> @[HELD].r = roundByte number 'red',   n; @rgbChanged()
+  setGreenByte:  (n) -> @[HELD].g = roundByte number 'green', n; @rgbChanged()
+  setBlueByte:   (n) -> @[HELD].b = roundByte number 'blue',  n; @rgbChanged()
+  setAlphaLevel: (n) -> @setAlphaByte number('alpha', n) * 255
+  setRedLevel:   (n) -> @setRedByte   number('red',   n) * 255
+  setGreenLevel: (n) -> @setGreenByte number('green', n) * 255
+  setBlueLevel:  (n) -> @setBlueByte  number('blue',  n) * 255
+
+  setHueDegrees: (n) -> @[HELD].h = ((number('hue', n) % 360) + 360) % 360; @hsvChanged()
+  setSaturation: (n) -> @[HELD].s = unit number 'saturation', n; @hsvChanged()
+  setValue:      (n) -> @[HELD].v = unit number 'value', n; @hsvChanged()
+
+  # A grey has no hue to read back and black no saturation either, so those
+  # keep what they were rather than snapping to 0.
+  rgbChanged: ->
+    held = @[HELD]
+    hsvInto pack(255, held.r, held.g, held.b), scratch
+    held.h = scratch[0] unless scratch[1] is 0
+    held.s = scratch[1] unless scratch[2] is 0
+    held.v = scratch[2]
     this
-  setHue:        (v) -> hsvInto @valueOf(), scratch; @replaceHSV v,         scratch[1], scratch[2]
-  setSaturation: (v) -> hsvInto @valueOf(), scratch; @replaceHSV scratch[0], v,         scratch[2]
-  setValue:      (v) -> hsvInto @valueOf(), scratch; @replaceHSV scratch[0], scratch[1], v
+
+  hsvChanged: ->
+    held   = @[HELD]
+    packed = fromHSV held.h, held.s, held.v
+    held.r = (packed >>> 16) & 0xFF
+    held.g = (packed >>>  8) & 0xFF
+    held.b =  packed         & 0xFF
+    this
+
+  valueOf: ->
+    held = @[HELD]
+    pack held.a, held.r, held.g, held.b
+
+# Where a Color keeps what its accessors show. A symbol, so it never prints
+# and no sketch's own key can collide with it.
+HELD = Symbol 'colour'
+
+roundByte = (n) -> clamp Math.round n
+
+# NaN would pack as 0 and draw black without a word.
+number = (what, n) ->
+  return n if typeof n is 'number' and isFinite n
+  shown = if typeof n is 'string' then JSON.stringify n else describe n
+  throw new Error "a colour's #{what} must be a number, got #{shown}"
+
+# A plain object is read key by key in its own order, each key applied as
+# its setter would be, so {r: 1, v: 0.5} is a red at half value.
+COLOR_KEYS =
+  a: 'setAlphaByte'
+  r: 'setRedByte'
+  g: 'setGreenByte'
+  b: 'setBlueByte'
+  h: 'setHueDegrees'
+  s: 'setSaturation'
+  v: 'setValue'
+
+applyKeys = (color, object) ->
+  any = false
+  for own key, n of object
+    unless Object.prototype.hasOwnProperty.call COLOR_KEYS, key
+      throw new Error "not a colour key: #{key} -- a colour object takes a, r, g, b, h, s and v"
+    color[COLOR_KEYS[key]] n
+    any = true
+  throw new Error 'not a colour: an object with none of a, r, g, b, h, s, v' unless any
+  color
+
+isPlain = (value) ->
+  proto = Object.getPrototypeOf value
+  proto is Object.prototype or proto is null
+
+ACCESSORS = {}
+for own key, setter of COLOR_KEYS then do (key, setter) ->
+  ACCESSORS[key] =
+    enumerable: true
+    get:     -> @[HELD][key]
+    set: (n) -> @[setter] n
+
+# A maker may hand back an object for every pixel, so reading one reuses a
+# single Color rather than allocating another.
+reading = new Color
+
+fromObject = (object) ->
+  held = reading[HELD]
+  held.a = 255
+  held.r = held.g = held.b = held.h = held.s = held.v = 0
+  applyKeys(reading, object).valueOf()
+
+# What the COLORS.set* functions work on: a Color is changed in place, and
+# anything else becomes a new one -- a plain object keeping the hue it gave.
+asColor = (value) ->
+  return value if value instanceof Color
+  return applyKeys new Color, value if value? and typeof value is 'object' and isPlain value
+  argb = toColor value
+  new Color((argb >>> 24) & 0xFF, (argb >>> 16) & 0xFF, (argb >>> 8) & 0xFF, argb & 0xFF).rgbChanged()
+
+SETTERS = ['setAlphaByte', 'setRedByte', 'setGreenByte', 'setBlueByte',
+           'setAlphaLevel', 'setRedLevel', 'setGreenLevel', 'setBlueLevel',
+           'setHueDegrees', 'setSaturation', 'setValue']
 
 unit = (value) -> Math.min 1, Math.max 0, value
 
@@ -118,10 +212,12 @@ COLORS =
     pack 255, (rgb >>> 16) & 0xFF, (rgb >>> 8) & 0xFF, rgb & 0xFF
   fromRGB:     (r, g, b, a = 1)-> pack byte(a),  byte(r),  byte(g),  byte(b)
   fromRGB256:  (r, g, b, a = 255) -> pack a, r, g, b
-  create:      -> new ColorBuilder
+  create:      -> new Color
   names:       -> Object.keys NAMED
 
 COLORS[name] = COLORS.byName name for name of NAMED
+for setter in SETTERS then do (setter) ->
+  COLORS[setter] = (color, n) -> asColor(color)[setter] n
 
 # Anything that is not a colour says so. It used to coerce: `true` became
 # 0x1, which is transparent, and null threw somewhere inside valueOf with a
@@ -132,6 +228,8 @@ toColor = (value, fallback) ->
     when 'number'    then value >>> 0
     when 'string'    then COLORS.byName value
     else
+      return value.valueOf() if value instanceof Color
+      return fromObject value if value? and typeof value is 'object' and isPlain value
       packed = value?.valueOf?()
       throw new Error "not a colour: #{describe value}" unless typeof packed is 'number'
       packed >>> 0
@@ -154,7 +252,7 @@ toNative = (argb) ->
 fromNative = toNative
 
 globalThis.COLORS       = COLORS
-globalThis.ColorBuilder = ColorBuilder
+globalThis.Color        = Color
 globalThis.toColor      = toColor
 globalThis.toNative     = toNative
 globalThis.hsvInto      = hsvInto

@@ -295,7 +295,7 @@
   // The CoffeeBEANS vocabulary: what attach installs, and the two names a
   // module publishes for sketches. Set at boot, by difference, so a new
   // command is in it without anyone remembering to list it. What the modules
-  // hang on globalThis before that (LAYOUT, toColor, ColorBuilder...), and
+  // hang on globalThis before that (LAYOUT, toColor, Color...), and
   // REPL after it, fall outside the difference and are never offered.
   let vocabulary = []
   const PUBLISHED = ['breakpoint', 'COLORS']

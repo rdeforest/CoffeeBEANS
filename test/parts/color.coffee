@@ -176,9 +176,9 @@ cls COLORS.black
 circleFill 50, 50, 50, radial COLORS.white, COLORS.black, x: 50, y: 50, radius: 50
 print 'radialCentre=' + (pget(50, 50) is COLORS.white)
 
-# HSV setters on the builder
-print 'setValue=' + (COLORS.create().setRed(1).setValue(0.5).valueOf() is COLORS.fromRGB256 128, 0, 0)
-print 'setHue='   + (COLORS.create().setRed(1).setHue(120).valueOf() is COLORS.lime)
+# HSV setters on a Color
+print 'setValue=' + (COLORS.create().setRedLevel(1).setValue(0.5).valueOf() is COLORS.fromRGB256 128, 0, 0)
+print 'setHue='   + (COLORS.create().setRedByte(255).setHueDegrees(120).valueOf() is COLORS.lime)
 print 'toHSV='    + (round(COLORS.toHSV(COLORS.lime).hue) is 120)
 
 # a solid colour still takes the fast path and is unchanged
@@ -235,6 +235,69 @@ catch error
   absent = (want for want in wanted when not text.includes want)
   check 'a colour we cannot read is refused, not drawn black', absent.length is 0,
     if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else 'all four'
+
+  # A colour object is read key by key in its own order, and a Color keeps
+  # its hue through black, so the setters work in any order. Before, a hue
+  # set on black was lost and the chain below came out white.
+  objects = """
+screen 320, 200
+print 'chain=' + (COLORS.create().setHueDegrees(120).setSaturation(1).setValue(1).valueOf() is COLORS.lime)
+print 'anyOrder=' + (COLORS.create().setValue(1).setSaturation(1).setHueDegrees(240).valueOf() is COLORS.blue)
+white = COLORS.setHueDegrees 'white', 0
+print 'white=' + JSON.stringify(white)
+print 'inOrder=' + (toColor({r: 1, v: 0.5}) is COLORS.fromHSV 0, 1, 0.5)
+print 'lastWins=' + (toColor({v: 0.5, r: 255}) is COLORS.fromRGB256 255, 128, 128)
+print 'keepsHue=' + (COLORS.setSaturation({h: 120, v: 1}, 1).valueOf() is COLORS.lime)
+c = COLORS.create()
+print 'inPlace=' + (COLORS.setRedLevel(c, 1) is c and c.r is 255)
+cls COLORS.black
+point 3, 3, r: 255, a: 255
+rectFill 10, 10, 19, 19, maker (p) -> g: 255, s: 0
+print 'drawn=' + (pget(3, 3) is COLORS.red and pget(15, 15) is COLORS.fromRGB256 255, 255, 255)
+try
+  point 1, 1, {r: 255, gren: 128}
+  print 'typo=accepted'
+catch error
+  print 'typo=' + error.message.includes('not a colour key: gren')
+try
+  point 1, 1, {}
+  print 'empty=accepted'
+catch error
+  print 'empty=' + error.message.includes('none of')
+try
+  point 1, 1, {r: NaN}
+  print 'nan=accepted'
+catch error
+  print 'nan=' + error.message.includes('must be a number')
+print 'oldGone=' + (COLORS.create().setRed is undefined)
+d = COLORS.create()
+d.h = 120
+d.s = 1
+d.v = 1
+print 'assigned=' + (d.valueOf() is COLORS.lime and d.g is 255)
+d.h = 390
+print 'assignedWraps=' + (d.h is 30 and d.r is 255)
+print 'shows=' + JSON.stringify(Object.keys d)
+try
+  d.g = 'x'
+  print 'assignedNaN=accepted'
+catch error
+  print 'assignedNaN=' + error.message.includes('must be a number')
+"""
+  await setDoc objects
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text   = await settled()
+  wanted = ['chain=true', 'anyOrder=true',
+            'white={"a":255,"r":255,"g":255,"b":255,"h":0,"s":0,"v":1}',
+            'inOrder=true', 'lastWins=true', 'keepsHue=true', 'inPlace=true', 'drawn=true',
+            'typo=true', 'empty=true', 'nan=true', 'oldGone=true',
+            'assigned=true', 'assignedWraps=true', 'shows=["a","r","g","b","h","s","v"]',
+            'assignedNaN=true']
+  absent = (want for want in wanted when not text.includes want)
+  check 'a colour object is read in order and a Color keeps its hue', absent.length is 0,
+    if absent.length then "missing #{absent.join ', '} -- #{JSON.stringify text.trim()}" else "all #{wanted.length}"
 
   # A fill started from inside another one shared the marks array, so the
   # nested walk left the outer walk believing it had already been everywhere.

@@ -190,7 +190,7 @@ SECTIONS = [
     ['radial a, b, opts',      'x:, y:, radius:']
     ['color maker (p) -> ...', 'a paint can be the current colour']
     ['COLORS.toHSV c',         'hue, saturation, value back out of a colour']
-    ['.setHue .setSaturation .setValue', 'on COLORS.create(), beside setRed']
+    ['r:, g:, b:, a:, h:, s:, v:', 'a maker can return a colour object']
   ]
 ,
   name:  'surfaces'
@@ -264,10 +264,15 @@ SECTIONS = [
     ['COLORS.fromRGB256 r,g,b', 'channels from 0..255, optional alpha']
     ['COLORS.fromHSV h, s, v',  'hue in degrees, the rest 0..1; wraps']
     ['COLORS.toHSV c',          'and back again']
-    ['COLORS.create()',         'builder: .setRed .setGreen .setBlue .setAlpha']
+    ['r: 255, v: 0.5',          'an object: a r g b 0..255, h degrees, s v 0..1']
+    ['',                        'keys applied in the order written']
+    ['COLORS.create()',         'a Color, black: keeps h and s while grey']
+    ['.setRedByte .setRedLevel', 'and Green, Blue, Alpha: 0..255 or 0..1']
+    ['.setHueDegrees',          'and .setSaturation .setValue, any order']
+    ['COLORS.setValue c, 1',    'every setter, on any colour; returns a Color']
     ['COLORS.names()',          'every name we know']
     ['',                        'anywhere a color is wanted, a number, a name']
-    ['',                        'string, or a builder all work.']
+    ['',                        'string, or a colour object all work.']
   ]
 ,
   name:  'math'

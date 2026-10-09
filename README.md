@@ -49,6 +49,30 @@ Lines are clipped before they are drawn, so `line -1e9, -1e9, 1e9, 1e9`
 costs the same as any other line. Ellipses are scanline-filled and bounded
 by the screen for the same reason.
 
+## Colours
+
+A colour is a number (`0xAARRGGBB`), a name (`"red"`, `COLORS.red`), or an
+object. An object's `a`, `r`, `g`, `b` are 0..255, `h` is degrees, `s` and
+`v` are 0..1, and its keys are applied in the order they are written,
+starting from opaque black:
+
+    point x, y, r: 1, v: 0.5          # the same as COLORS.fromHSV 0, 1, 0.5
+    color maker (p) -> r: p.x, g: p.y, a: 128, s: 0.5
+
+Any other key is refused by name. `COLORS.create()` makes a `Color`, which
+keeps its hue and saturation even while it is grey or black, so its setters
+work in any order, and assigning to one is the same as calling its setter
+(`c.h = 30` is `c.setHueDegrees 30`):
+
+    COLORS.create().setHueDegrees(120).setSaturation(1).setValue(1)   # lime
+    COLORS.setHueDegrees 'white', 0   # Color {a: 255, r: 255, g: 255, b: 255, h: 0, s: 0, v: 1}
+
+The setters are `setRedByte`/`setRedLevel` (0..255 and 0..1) and the same
+for green, blue and alpha, then `setHueDegrees`, `setSaturation` and
+`setValue`. Each is a method on a `Color` and a function on `COLORS` that
+takes any colour first: a `Color` passed in is changed, anything else comes
+back as a new one.
+
 ## Text
 
     locate 1, 1

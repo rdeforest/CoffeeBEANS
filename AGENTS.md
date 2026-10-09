@@ -12,8 +12,9 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: 700 checks on Linux after 2026-10-08's four changes
-(692 run on the Mac, plus the 8 only Linux makes; not yet run on Linux).
+Where it stands: 701 checks on Linux after 2026-10-08's four changes and
+2026-10-09's colour objects (693 run on the Mac, plus the 8 only Linux
+makes; not yet run on Linux).
 Before them main was green on Linux at 674 (Windows CI green apart from one runner-side `sound` flake). On
 Robert's Mac five checks fail on main as well (a folder made outside the
 app, Ctrl-Z after Ctrl-U, Ctrl-C copy, and the two `quit` children). The
@@ -122,7 +123,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 700 checks on Linux
+    npm test                                 all 701 checks on Linux
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
