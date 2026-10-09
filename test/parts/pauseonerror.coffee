@@ -699,20 +699,20 @@ loop
   await click 'runFresh'
   await statusBecomes 'ready'
 
-  # 23. The buffer arming and disarming while an endless line is out. Every
-  # arm told V8 to stop skipping pauses, whether or not a Stop had set them
-  # aside, straight into the evaluation (a reviewer of cbe904b, 2026-10-06).
+  # 23. Arms while an endless line is out. Every arm told V8 to stop
+  # skipping pauses, whether or not a Stop had set them aside, straight into
+  # the evaluation (a reviewer of cbe904b, 2026-10-06). The arms came from
+  # edits to the buffer then; since 2026-10-08 only a run arms, and none can
+  # be made from a line pause without ending it, so they are asked of main
+  # directly.
   crossed = t.crossings().length
   await linePause "n = 0\nbreakpoint\nprint 'after'\n"
   await js "Prompt.ask('loop then n += 1'); return true"
   await until_ -> js "return Prompt.pending()"
-  await setDoc "n = 0\nprint 'after'\n"            # no breakpoint: disarms
-  await wait 700                                   # past the buffer's 300ms debounce
-  await setDoc "n = 0\nbreakpoint\nprint 'after'\n"
-  await wait 700
+  await js "await beans.debug.arm(); await beans.debug.arm(); return true"
   answered = await freed()
   crossings = t.crossings()[crossed..]
-  check 'the buffer arming and disarming during an endless line sends nothing into it',
+  check 'arms made during an endless line send nothing into it',
     answered and not crossings.length,
     "answered=#{answered} crossings=#{JSON.stringify crossings}"
   await click 'stop'

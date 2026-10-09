@@ -92,7 +92,7 @@ loop
   # (Robert, 2026-10-05; AGENTS.md, Decisions), so a debugger is always
   # attached. With DevTools open, which keeps ours out, it is still a no-op;
   # that is not tested here. Spelled in pieces so the buffer never says the
-  # word: what stops it is the run's arming, not the buffer's.
+  # word, from when the buffer armed it (until 2026-10-08).
   linePaused = -> t.js "return Stepping.linePaused()"
   pausedAfter = (since) ->
     deadline = Date.now() + 10000

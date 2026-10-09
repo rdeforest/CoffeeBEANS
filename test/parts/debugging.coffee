@@ -1,6 +1,6 @@
 # Line stepping. The debugger lives in the main process and drives the worker
-# over the inspector protocol, so these checks go through the real thing: a
-# `breakpoint` in the buffer arms it, and every pause is a V8 pause.
+# over the inspector protocol, so these checks go through the real thing: it
+# is armed for every run, and every pause is a V8 pause.
 #
 # Waits are on the app, never the clock. A pause arrives when V8 says so, and
 # each one is numbered, so "a new pause" is a number going up rather than a
@@ -192,21 +192,24 @@ print 'after'
   await click 'stop'
   await until_ -> (await status()) is 'ready'
 
-  # 14. The buffer no longer disarms the debugger. It is still followed --
-  # Stepping.armed() is the buffer's verdict -- but since pausing on errors
-  # the debugger is armed for every run whatever the buffer says (Robert,
-  # 2026-10-05), so a `breakpoint` the buffer cannot see still stops. Until
-  # then this checked that the buffer armed and disarmed it by itself.
+  # 14. The buffer has no say in arming. Since pausing on errors the
+  # debugger is armed for every run whatever the buffer says (Robert,
+  # 2026-10-05), so a `breakpoint` the buffer cannot see still stops, even
+  # after a buffer that never said it at all. Until then this checked that
+  # the buffer armed and disarmed it by itself; until 2026-10-08, when the
+  # buffer's verdict was retired (Robert), it also read that verdict.
   await setDoc "print 'plain'\n"
-  disarmed = await until_ (-> (await js "return Stepping.armed()") is false), 3000
+  await wait 500
+  await evalAll()
+  plain = (await settled()).includes 'plain'
   await setDoc "w = 'break' + 'point'\nglobalThis[w]\nprint 'after'\n"
   await wait 500
   seen = (await pauseNumber()) ? 0
   await evalAll()
   hidden = await nextPause seen
   check 'with no breakpoint in the buffer the debugger is still armed: one spelled in pieces stops',
-    disarmed and hidden and (await status()) is 'line paused' and (await pausedText())?.trim() is "print 'after'",
-    "disarmed=#{disarmed} seq #{seen} -> #{hidden} status=#{await status()}"
+    plain and hidden and (await status()) is 'line paused' and (await pausedText())?.trim() is "print 'after'",
+    "plain=#{plain} seq #{seen} -> #{hidden} status=#{await status()}"
   await click 'stop'
   await until_ -> (await status()) is 'ready'
 
@@ -539,10 +542,11 @@ loop
   # 21. A Stop tells V8 to skip every pause until the next run, and the next
   # run has to know to take that back. A Stop waiting out an endless line at
   # the prompt only sets the skip once the line gives up, about 3s later; an
-  # arm in that wait -- an edit adding or removing `breakpoint`, a Run --
-  # found nothing skipped yet, the renderer then believed nothing was, and
-  # the run after it went past its breakpoint without a word (a reviewer of
-  # E1, 2026-10-06; it predates E1).
+  # arm in that wait -- an Eval, a Run, and until 2026-10-08 an edit adding
+  # or removing `breakpoint` -- found nothing skipped yet, the renderer then
+  # believed nothing was, and the run after it went past its breakpoint
+  # without a word (a reviewer of E1, 2026-10-06; it predates E1). The edit
+  # case became a Run when the buffer stopped arming anything.
   stopWhileAsking = ->
     await setDoc "n = 0\nbreakpoint\nprint 'after'"
     await wait 500
@@ -567,13 +571,12 @@ loop
     await until_ -> (await status()) is 'ready'
 
   await stopWhileAsking()
-  await setDoc "n = 0\nprint 'after'"
-  await wait 700
-  await setDoc "n = 0\nbreakpoint\nprint 'after'"
-  await wait 700
-  await pausesAfter 'though the buffer was armed and disarmed while the Stop waited'
+  await setDoc "print 'ran'"
+  await wait 500
+  await click 'runFresh'
+  await pausesAfter 'though a Run came while the Stop waited'
 
   await stopWhileAsking()
   await wait 300
   await evalAll()
-  await pausesAfter 'though a Run came while the Stop waited'
+  await pausesAfter 'though an Eval came while the Stop waited'

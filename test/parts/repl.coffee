@@ -993,8 +993,8 @@ done = 1
   # still loading its modules, with nowhere yet to read the line from, and a
   # sketch with no yield point never looks again: the line sat unanswered,
   # and every later one said it was still waiting, until the next restart.
-  # Run once first, so the debugger is already disarmed for an empty buffer
-  # and the Run under test starts its worker in the same tick.
+  # Run once first, so the debugger is already armed and the Run under test
+  # starts its worker in the same tick.
   await wait 400
   await click 'runFresh'
   await settle()

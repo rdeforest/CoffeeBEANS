@@ -35,7 +35,7 @@ contextBridge.exposeInMainWorld('beans', {
   },
   // Line stepping, in the app's words. See src/main/debugger.coffee.
   debug: {
-    arm:     (want)         => ipcRenderer.invoke('debug:arm', want),
+    arm:     ()             => ipcRenderer.invoke('debug:arm'),
     pause:   ()             => ipcRenderer.invoke('debug:pause'),
     step:    ()             => ipcRenderer.invoke('debug:step'),
     resume:  (skip)         => ipcRenderer.invoke('debug:resume', skip),

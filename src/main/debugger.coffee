@@ -2,7 +2,9 @@
 # speaks V8's inspector protocol is in this file; the renderer asks for a
 # pause, a step, a resume or a value, in the app's words, and hears back
 # where the sketch stopped and what it holds. The debugger is armed for every
-# run (ALWAYS, below), not on demand as it was before pausing on errors.
+# run, not on demand as it was before pausing on errors (Robert, 2026-10-05):
+# an error can only be stopped on if the Debugger domain is already on when
+# it is thrown.
 # Nothing raw crosses the bridge -- a renderer that could send arbitrary
 # protocol commands could read and write anything in any process we debug.
 #
@@ -17,13 +19,6 @@ CoffeeScript = require 'coffeescript'
 SKETCH     = /^beans-run-\d+\.coffee$/
 BREAKPOINT = 'beans-breakpoint.js'
 BOOT       = '/src/renderer/worker-boot.js'
-
-# Armed for every run, decided by Robert on 2026-10-05 (AGENTS.md, Decisions):
-# an error can only be stopped on if the Debugger domain is already on when
-# it is thrown. What the buffer says (`wanted`) and a pause asked for by key
-# (`forced`) no longer decide whether it is on; they and the renderer's
-# arm-from-the-buffer code are kept until Robert decides whether they go.
-ALWAYS = yes
 
 # Whether a run's uncaught error stops where it was thrown. One switch for the
 # app: the Stop on Errors preference sets it (track E2), and so does the
@@ -247,10 +242,6 @@ module.exports = (win) ->
   contents = win.webContents
   cdp      = contents.debugger
 
-  # Neither decides anything while ALWAYS holds; kept until Robert decides
-  # whether arming on demand goes for good (see ALWAYS).
-  wanted   = no          # the buffer holds a breakpoint
-  forced   = no          # a line pause was asked for by key
   session  = null        # the sketch worker's flattened session
   target   = null        # that worker's targetId, which outlives the session
   dropped  = null        # the targetId of the worker last let go of; see stale
@@ -450,12 +441,6 @@ module.exports = (win) ->
     await whenFree(-> send 'Debugger.setPauseOnExceptions', state: pauseState() if session).catch (error) ->
       tell type: 'problem', text: "debugger: #{error.message}"
 
-  disable = ->
-    return if stopped or chase or not enabled or not session
-    enabled = no
-    ready   = null
-    send('Debugger.disable').catch ->
-
   setUp = (id, waiting, targetId) ->
     sessionGone()
     session = id
@@ -469,7 +454,7 @@ module.exports = (win) ->
     enabled = no
     ready   = null
     try
-      await enable() if armWanted()
+      await enable()
     finally
       # Without this the worker waits for us forever and the app sits on
       # `booting`. If it fails, that is said: until 2026-10-06 the failure
@@ -495,16 +480,10 @@ module.exports = (win) ->
       tell type: 'problem', text: "debugger: #{error.message}"
       false
 
-  armWanted = -> ALWAYS or wanted or forced
-
   settle = ->
-    if armWanted()
-      return false unless await attach()
-      await enable()
-      enabled
-    else
-      disable()
-      false
+    return false unless await attach()
+    await enable()
+    enabled
 
   # `fresh` is for after the prompt has run something. A local scope is a
   # copy V8 took when it paused, so `b = 10` lands in the frame but not in
@@ -740,10 +719,6 @@ module.exports = (win) ->
           if sessionId is session and stopped
             stopped = null
             tell type: 'resumed'
-            # Once let a pause asked for by key disarm again; under ALWAYS,
-            # settle finds the debugger armed and leaves it so.
-            forced = no unless chase
-            settle()
     catch error
       tell type: 'problem', text: "debugger: #{error.message}"
 
@@ -769,18 +744,16 @@ module.exports = (win) ->
   # come back with the next worker, which Run makes.
   contents.on 'devtools-closed', ->
     devtools = no
-    tell type: 'problem', text: 'DevTools closed -- breakpoints and error stops work again from the next Run' if armWanted()
+    tell type: 'problem', text: 'DevTools closed -- breakpoints and error stops work again from the next Run'
 
   # The renderer's whole vocabulary.
-  arm = (want) ->
-    wanted = want
-    forced = no unless stopped or chase
+  arm = ->
     await hooks.arming() if hooks.arming
     armed = await settle()
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
     # them back. Only then, and never into a turn: every arm used to send
-    # this, and an edit that armed or disarmed the buffer sent it into the
-    # prompt's endless line (a reviewer of cbe904b, 2026-10-06).
+    # this, and an arm made while the prompt's endless line was out sent it
+    # into that line (a reviewer of cbe904b, 2026-10-06).
     if enabled and skipped
       skipped = no
       talk    = speaker()
@@ -802,9 +775,8 @@ module.exports = (win) ->
   # Answers true, false, or 'stale' for a worker we let go of (see stale).
   pause = ->
     return true if stopped
-    asked  = session
-    forced = yes
-    armed  = await settle()
+    asked = session
+    armed = await settle()
     return false if asked? and asked isnt session
     return 'stale' if stale()
     return false unless armed
@@ -878,8 +850,8 @@ module.exports = (win) ->
       await hooks.stopping() if hooks.stopping
       # The renderer is told here, not left to assume it from having asked.
       # A Stop waiting out the prompt's line sets this seconds after it was
-      # pressed, and an arm in between -- an edit adding or removing
-      # `breakpoint`, a Run -- found nothing to take back; the renderer then
+      # pressed, and an arm in between -- a Run, or then an edit adding or
+      # removing `breakpoint` -- found nothing to take back; the renderer then
       # thought nothing was skipped, and the next run went past its
       # breakpoint without a word (a reviewer of E1, 2026-10-06).
       skipped = yes
