@@ -49,7 +49,7 @@ module.exports = (t) ->
 
   # A data folder that is not there yet is made, as on a first launch.
   fresh = path.join sandbox, 'fresh'
-  made  = await dataHome.prepare fresh, examples
+  made  = await dataHome.prepare fresh, examples, '\n'
   check 'a missing data folder is created and seeded',
     (await exists path.join fresh, 'sketches', 'hello.coffee') and made.added.length > 0,
     "added #{made.added.length}"
@@ -60,7 +60,7 @@ module.exports = (t) ->
   await fsp.mkdir path.join(drive, 'sketches'), recursive: yes
   await fsp.mkdir linked
   await linkTo path.join(drive, 'sketches'), path.join(linked, 'sketches')
-  through = await dataHome.prepare linked, examples
+  through = await dataHome.prepare linked, examples, '\n'
   check 'a sketches link to a real folder is used',
     (await exists path.join drive, 'sketches', 'hello.coffee'),
     "added #{through.added.length} through the link"
@@ -73,7 +73,7 @@ module.exports = (t) ->
   await fsp.mkdir path.dirname(gone), recursive: yes
   await fsp.mkdir dangling
   await linkTo gone, link
-  refused = await dataHome.prepare(dangling, examples).then (-> null), (error) -> error
+  refused = await dataHome.prepare(dangling, examples, '\n').then (-> null), (error) -> error
   check 'a dangling sketches link is refused, naming the link and its target',
     refused?.code is 'EDANGLING' and refused.link is link and refused.target is path.resolve(gone),
     "#{refused?.code}: #{refused?.message}"
