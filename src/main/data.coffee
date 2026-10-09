@@ -61,7 +61,19 @@ refuseDanglingLink = (dir) ->
         code: 'EDANGLING', link: place, target: target
   undefined
 
-prepare = (data, examples) ->
+# An example is written with `ending`, the platform's (`newEnding` in
+# main.coffee), whatever git checked it out with: a seeded sketch should be
+# no different from one the player made (Robert, 2026-10-08), and a save
+# keeps the endings a file already has, so an LF example on Windows would
+# have stayed LF for good. Every example is a .coffee, so all of them are
+# text; were anything else ever seeded, it would want copying byte for byte.
+seed = (from, to, ending) ->
+  text = await fsp.readFile from, 'utf8'
+  await fsp.writeFile to, text.replace(/\r\n|\r|\n/g, ending), 'utf8'
+
+prepare = (data, examples, ending) ->
+  # Left out, it would be written into every example as the word "undefined".
+  throw new Error "prepare needs a line ending, given #{JSON.stringify ending}" unless typeof ending is 'string' and ending
   sketches = path.join data, 'sketches'
   await refuseDanglingLink sketches
   await fsp.mkdir sketches, recursive: yes
@@ -77,7 +89,7 @@ prepare = (data, examples) ->
   onDisk    = await coffeeFiles sketches
   candidates = (name for name in await coffeeFiles examples when name not in offered)
   fresh      = (name for name in candidates when name not in onDisk)
-  await fsp.copyFile path.join(examples, name), path.join(sketches, name) for name in fresh
+  await seed path.join(examples, name), path.join(sketches, name), ending for name in fresh
 
   if candidates.length or not manifest.found
     await fsp.writeFile path.join(data, MANIFEST), offered.concat(candidates).join('\n') + '\n', 'utf8'

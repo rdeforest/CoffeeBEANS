@@ -16,9 +16,8 @@ Where it stands: main is green at 674 checks on Linux (Windows CI green
 apart from one runner-side `sound` flake). The last overnight,
 `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
 open questions for Robert (retire arming from the buffer, main's uncaught
-exceptions in a player's app, seeded examples' line endings on Windows,
-redaction of names, Eval after DevTools, literal-first sketches, splitting
-`main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
+exceptions in a player's app, redaction of names, Eval after DevTools,
+literal-first sketches, splitting `main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
 moves to `docs/overnight/done/` once he has read it.
 
 The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
@@ -634,9 +633,11 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   with no newline) takes the platform's, CRLF on Windows. Nothing is
   remembered between saves -- the disk is the record. A raw CR inside a
   string was already lost before U2: CodeMirror splits on `\r` at load.
-  Examples seeded by `data.coffee` are copied as they are in git, so they
-  land LF on Windows; whether they should take the platform's is Robert's
-  call (open).
+  Examples seeded by `data.coffee` take the platform's endings too (Robert,
+  2026-10-08), from the same `newEnding` the saves use, whatever git checked
+  them out with; before, they were copied as they were in git and landed LF
+  on Windows for good. Every example is a `.coffee`; anything binary ever
+  seeded would want copying byte for byte.
 - **Saves failed on Windows, and a stale read reverted the editor** (fixed
   the same night, S1). Overlapping `sketch:write` calls shared one staging
   name, `.<name>.saving`, so one save's rename carried off another's file

@@ -50,20 +50,20 @@ module.exports = (t) ->
   await fsp.mkdir fakeEx, recursive: yes
   await fsp.writeFile path.join(fakeEx, 'one.coffee'), 'print 1\n', 'utf8'
 
-  first = await seeding.prepare fakeData, fakeEx
+  first = await seeding.prepare fakeData, fakeEx, '\n'
   check 'seeding copies a new example', first.added.join(',') is 'one.coffee', first.added.join ','
 
   mine = path.join fakeData, 'sketches', 'one.coffee'
   await fsp.writeFile mine, 'print "mine"\n', 'utf8'
   await fsp.writeFile path.join(fakeEx, 'two.coffee'), 'print 2\n', 'utf8'
-  second = await seeding.prepare fakeData, fakeEx
+  second = await seeding.prepare fakeData, fakeEx, '\n'
   kept   = await fsp.readFile mine, 'utf8'
   check 'a new example arrives without clobbering an edited one',
     second.added.join(',') is 'two.coffee' and kept is 'print "mine"\n',
     "added=#{second.added.join ','} kept=#{JSON.stringify kept}"
 
   await fsp.rm path.join(fakeData, 'sketches', 'two.coffee')
-  third = await seeding.prepare fakeData, fakeEx
+  third = await seeding.prepare fakeData, fakeEx, '\n'
   gone  = not (await fsp.readdir path.join fakeData, 'sketches').includes 'two.coffee'
   check 'a deleted example stays deleted', third.added.length is 0 and gone,
     "added=#{third.added.join ','} gone=#{gone}"
@@ -73,7 +73,7 @@ module.exports = (t) ->
   legacy = path.join sandbox, 'legacy'
   await fsp.mkdir path.join(legacy, 'sketches'), recursive: yes
   await fsp.writeFile path.join(legacy, 'sketches', 'one.coffee'), 'print "old"\n', 'utf8'
-  fourth = await seeding.prepare legacy, fakeEx
+  fourth = await seeding.prepare legacy, fakeEx, '\n'
   survived = await fsp.readFile path.join(legacy, 'sketches', 'one.coffee'), 'utf8'
   check 'a pre-manifest data folder keeps its edits',
     survived is 'print "old"\n' and fourth.added.join(',') is 'two.coffee',
@@ -84,9 +84,44 @@ module.exports = (t) ->
   await fsp.mkdir path.join(guardDir, 'sketches'), recursive: yes
   await fsp.writeFile path.join(guardDir, 'sketches', 'two.coffee'), "print 'not yours'\n", 'utf8'
   await fsp.writeFile path.join(guardDir, '.seeded'), "one.coffee\n", 'utf8'
-  guarded2 = await seeding.prepare guardDir, fakeEx
+  guarded2 = await seeding.prepare guardDir, fakeEx, '\n'
   survivor = await fsp.readFile path.join(guardDir, 'sketches', 'two.coffee'), 'utf8'
   recorded = await fsp.readFile path.join(guardDir, '.seeded'), 'utf8'
   check 'seeding does not overwrite a sketch already on disk',
     survivor is "print 'not yours'\n" and recorded.includes('two.coffee') and guarded2.added.length is 0,
     "added=#{guarded2.added.join ','} kept=#{guarded2.kept.join ','}"
+
+  # Seeded examples take the platform's line endings, as a new sketch does
+  # (Robert, 2026-10-08): through main's own seeding, so `newline.forced`
+  # stands in for Windows here as it does for saves. Before, they were copied
+  # as git had them -- LF on Windows too -- and every save kept that.
+  {newline, seedInto} = paths
+  shipped = {}
+  shipped[name] = await fsp.readFile path.join(paths.root, 'examples', name), 'utf8' for name in examples
+  seededWith = (forced, dir) ->
+    newline.forced = forced
+    await seedInto path.join sandbox, dir
+    wrong = []
+    for name, text of shipped
+      got = await fsp.readFile path.join(sandbox, dir, 'sketches', name), 'utf8'
+      wrong.push name unless got is text.replace /\r\n|\r|\n/g, forced
+    wrong
+  try
+    crlf = await seededWith '\r\n', 'windows'
+    lf   = await seededWith '\n', 'unix'
+  finally
+    newline.forced = null
+  check 'examples are seeded with CRLF where the platform says so',
+    examples.length and not crlf.length, "not CRLF throughout: #{crlf.join ', '}"
+  check 'examples are seeded with LF where the platform says so',
+    examples.length and not lf.length, "not LF throughout: #{lf.join ', '}"
+
+  # Whatever endings the example itself has: a checkout that ignored
+  # .gitattributes must not carry its CRLF onto Linux.
+  mixed = path.join sandbox, 'mixed'
+  await fsp.mkdir path.join(mixed, 'examples'), recursive: yes
+  await fsp.writeFile path.join(mixed, 'examples', 'crlf.coffee'), 'a = 1\r\nb = 2\rprint a\n', 'utf8'
+  await seeding.prepare path.join(mixed, 'data'), path.join(mixed, 'examples'), '\n'
+  converted = await fsp.readFile path.join(mixed, 'data', 'sketches', 'crlf.coffee'), 'utf8'
+  check "an example's own line endings do not reach the seeded copy",
+    converted is 'a = 1\nb = 2\nprint a\n', JSON.stringify converted

@@ -188,8 +188,13 @@ NATIVE_HISTORY =
   redo: (contents) -> contents.redo()
 ipcMain.handle 'edit:native', (event, verb) -> NATIVE_HISTORY[verb] event.sender
 
+# The examples take the platform's line endings, as a new sketch does; the
+# suite seeds folders of its own through this to see `newline.forced` reach
+# them.
+seedInto = (dir) -> data.prepare dir, EXAMPLES, newEnding()
+
 prepareDataHome = ->
-  {added} = await data.prepare DATA, EXAMPLES
+  {added} = await seedInto DATA
   console.log "added to #{SKETCHES}: #{added.join ', '}" if added.length
   undefined
 
@@ -839,7 +844,7 @@ createWindow = ->
   if process.env.BEANS_TEST
     win.webContents.once 'did-finish-load', ->
       try
-        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation, opened})
+        failures = await require('../../test/suite')(win, {root: ROOT, data: DATA, sketches: SKETCHES, faults, folding, probeFolding, newline, seedInto, saveLimit: SAVE_LIMIT, unserved, listening, loadPage, sayProblem, held: HELD, refuseNavigation, opened})
       catch error
         # A suite that throws must still bring the app down, or the run hangs.
         console.error "suite crashed: #{error.stack ? error}"
