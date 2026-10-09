@@ -12,8 +12,9 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: CHECKCOUNT. Before 2026-10-08 main was green on Linux at
-674 (Windows CI green apart from one runner-side `sound` flake). On
+Where it stands: 700 checks on Linux after 2026-10-08's four changes
+(692 run on the Mac, plus the 8 only Linux makes; not yet run on Linux).
+Before them main was green on Linux at 674 (Windows CI green apart from one runner-side `sound` flake). On
 Robert's Mac five checks fail on main as well (a folder made outside the
 app, Ctrl-Z after Ctrl-U, Ctrl-C copy, and the two `quit` children). The
 last overnight, `docs/overnight/2026-10-06.md`, is closed out; its morning
