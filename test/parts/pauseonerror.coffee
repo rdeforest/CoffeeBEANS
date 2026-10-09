@@ -923,8 +923,9 @@ throw slow
   # 28-30, from a Claude review of I1 (2026-10-06): a worker that was running
   # when DevTools took the session. Enabling it again once DevTools let go
   # hung for as long as it was busy (AGENTS.md, "Never re-attach"), so main
-  # never enables it again; breakpoints and error stops come back with the
-  # next Run, as the app says when DevTools closes.
+  # never enables it while it is busy (and until 2026-10-08, not at all);
+  # breakpoints and error stops come back with the next Run, or an Eval once
+  # it has stopped (31-34).
   LOOPING = "screen 320, 200\nn = 0\nloop\n  n += 1\n  buffer.swap\n"
   await laterRun LOOPING
   await statusBecomes 'running'
@@ -991,5 +992,113 @@ throw slow
     took < 500 and now is 'running' and said.includes('pausing works again from the next Run') and
       not said.includes('debugger:') and not said.includes('is DevTools open'),
     JSON.stringify {took, now, said}
+  await click 'stop'
+  await t.settle()
+
+  # 31-34, Robert's call on 2026-10-08: a worker let go of to DevTools is
+  # enabled again once it is idle, so an Eval into it -- the everyday loop --
+  # stops on errors and `breakpoint` again; only a busy one is refused, as
+  # 28 and 30 check, because enabling it stalls. Until then it was never
+  # enabled again, and every check here but 33's first half failed.
+  devtools = ->
+    t.webContents.emit 'devtools-opened'
+    t.webContents.emit 'devtools-closed'
+    await t.quiet()
+  evalText = (source) ->
+    await setDoc source
+    await wait 500
+    await clearConsole()
+    asked = Date.now()
+    await evalAll()
+    asked
+  armedIn = (asked) ->
+    await until_ (-> s = await status(); s if s isnt 'arming'), 10000
+    Date.now() - asked
+
+  # 31. An Eval with a `breakpoint` into a worker that sat idle while DevTools
+  # held the page stops there, in the same worker: what the Run before it
+  # left in the image is still there once it goes on.
+  await laterRun "keep = 7\n"
+  await statusBecomes 'ready'
+  await devtools()
+  since = (await pauseNumber()) ? 0
+  asked = await evalText "breakpoint\nprint 'kept ' + keep\n"
+  took  = await armedIn asked
+  seq   = await nextPause since, 5000
+  how   = await status()
+  line  = (await pausedText())?.trim()
+  await js "Stepping.resume(); return true"
+  await statusBecomes 'ready'
+  await t.quiet()
+  said  = await consoleText()
+  check 'after DevTools, an Eval into the idle worker it let go of stops at its breakpoint',
+    seq and how is 'line paused' and line is "print 'kept ' + keep" and said.includes('kept 7') and
+      took < 1000 and not said.includes('debugger:'),
+    JSON.stringify {seq, how, line, took, said}
+
+  # 32. The same with an error, after DevTools has had the same worker a
+  # second time.
+  await devtools()
+  since = (await pauseNumber()) ? 0
+  await evalText failing
+  seq   = await nextPause since, 5000
+  how   = await status()
+  await js "Stepping.resume(); return true" if how is 'error paused'
+  await statusBecomes 'error'
+  await t.quiet()
+  said  = await consoleText()
+  check 'after DevTools, an Eval into the idle worker it let go of stops on its error, a second time too',
+    seq and how is 'error paused' and not said.includes('debugger:'),
+    JSON.stringify {seq, how, said}
+
+  # 33. A busy one is still refused, at once -- enabling it would stall for
+  # as long as it ran -- and the Eval with it, as at any busy worker. Once
+  # it has stopped, the next Eval enables it.
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  await devtools()
+  asked = await evalText "print 'busy'\n"
+  took  = await armedIn asked
+  refused = await t.waitFor "return /already running/.test(document.getElementById('console').textContent)", 3000
+  quick   = (await consoleText()).trim()
+  await click 'stop'
+  await statusBecomes 'ready'
+  since = (await pauseNumber()) ? 0
+  await evalText "breakpoint\nprint 'after'\n"
+  seq   = await nextPause since, 5000
+  how   = await status()
+  check 'after DevTools, an Eval at the busy worker it let go of is refused at once, and the Eval after it stops is armed',
+    took < 500 and refused and not quick.includes('debugger:') and seq and how is 'line paused',
+    JSON.stringify {took, refused, quick, seq, how}
+  await click 'stop'
+  await t.settle()
+
+  # 34. The renderer's word that the worker is idle can be wrong by the time
+  # main acts on it (a prompt line can start in between). Told idle of a busy
+  # worker, the enable is given up on after STALE_LIMIT and said, and the
+  # app goes on. V8 answers it once the worker is idle (seen by Claude,
+  # 2026-10-08, Electron 44, macOS), and from then main counts the worker
+  # armed without being asked again, and the Eval after the Stop pauses.
+  # Every window of main's reads the same, so this asks for all of them.
+  await laterRun LOOPING
+  await statusBecomes 'running'
+  await devtools()
+  asked = Date.now()
+  armed = await js "return await beans.debug.arm(true)"
+  took  = Date.now() - asked
+  told  = await t.waitFor "return /got busy/.test(document.getElementById('console').textContent)", 3000
+  said  = await consoleText()
+  how   = await status()
+  before  = t.debugArmed()
+  await click 'stop'
+  stopped = await statusBecomes 'ready', 5000
+  later   = await until_ (-> t.debugArmed().every (a) -> a), 3000
+  since = (await pauseNumber()) ? 0
+  await evalText "breakpoint\nprint 'after'\n"
+  seq   = await nextPause since, 5000
+  check 'told a busy worker let go of to DevTools is idle, main gives up within STALE_LIMIT, says so, and arms it once V8 answers',
+    armed is false and took < 1500 and how is 'running' and told and not before.some((a) -> a) and stopped and
+      later and seq and (await status()) is 'line paused',
+    JSON.stringify {armed, took, how, said, before, stopped, later, seq}
   await click 'stop'
   await t.settle()

@@ -15,11 +15,14 @@ overnight queues. Keep sessions short and small.
 Where it stands: main is green at 674 checks on Linux (Windows CI green
 apart from one runner-side `sound` flake). The last overnight,
 `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
-open questions for Robert (retire arming from the buffer -- done
-2026-10-08, see below --, main's uncaught exceptions in a player's app, seeded examples' line endings on Windows,
+open questions for Robert (retire arming from the buffer, main's uncaught
+exceptions in a player's app, seeded examples' line endings on Windows,
 redaction of names, Eval after DevTools, literal-first sketches, splitting
 `main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
-moves to `docs/overnight/done/` once he has read it.
+moves to `docs/overnight/done/` once he has read it. Robert answered two on
+2026-10-08, both built that day: arming from the buffer is retired, and an
+Eval after DevTools stops on errors and `breakpoint` again (see "Where the
+debugger work stands").
 
 The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
 patched copy of the CoffeeScript mode (`src/renderer/vendor/coffeescript-
@@ -313,6 +316,11 @@ Done:
   editing the buffer now do it another way: `stopbutton` 20-22 send the
   renderer `detached` (`unarm`), `pauseonerror` 23 asks main for arms
   directly, and `debugging` 21's buffer case became a Run.
+- **Eval after DevTools** (Robert, 2026-10-08). The worker DevTools took is
+  enabled again once it is idle, so an Eval into it stops on errors and
+  `breakpoint`; only a busy one is refused, at once. How, and what is
+  known about the race, is under "Never re-attach" below. Checks
+  `pauseonerror` 31-34; suite hook `t.debugArmed`.
 
 ## Facts line stepping established
 
@@ -321,19 +329,34 @@ Verified in Electron 44 while building it; do not re-derive.
 - **Never re-attach to a worker you have detached from.** `Debugger.enable`
   on the new session hangs forever -- even with `Debugger.disable` and
   `Target.detachFromTarget` first. So the page stays attached once armed,
-  and arming is `Debugger.enable` on the live session. DevTools forces a detach, so after it closes breakpoints
-  work from the next Run (a fresh worker), and the app says so.
+  and arming is `Debugger.enable` on the live session. DevTools forces a
+  detach, so the worker it took cannot be counted on afterwards.
   Narrowed by a Claude reviewer of I1, 2026-10-06 (Electron 44, Linux,
   DevTools simulated by emitting its events, so the detach was a real
   `cdp.detach()`): re-enabling the old worker answered in 3ms when it was
   idle (1 of 1), and hung to the 2s `SETUP_LIMIT` when it was busy in a
   sketch loop (2 of 2). Auto-attach re-attaches it with the next attach
-  anyway, so main remembers its `targetId` and never enables it again
-  (`stale` in `src/main/debugger.coffee`); Ctrl-\ at it says pausing works
-  from the next Run. A worker born while DevTools was open is enabled as
-  any other: with the events simulated nobody had attached it, but a real
-  DevTools does, and whether enabling it then hangs is untested -- as is a
-  real DevTools session for all of the above.
+  anyway, so main remembers its `targetId` (`stale` in
+  `src/main/debugger.coffee`). Until 2026-10-08 it was never enabled again,
+  so an Eval into it went without error stops or `breakpoint` until the
+  next Run. Since then (Robert's call) it is enabled again at the next arm
+  made while the renderer says the worker is idle -- a Run, or an Eval,
+  which is refused at a busy worker anyway -- and is not stale once that
+  answers. Busy, it is refused at once: Ctrl-\ at it says pausing works
+  again from the next Run, or an Eval once it has stopped. The renderer's
+  `idle` (status `ready` or `error`, no prompt line asked or being
+  answered) can be wrong by the time main acts -- a prompt line can start
+  in between -- so that enable is bounded by `STALE_LIMIT` (500ms, a
+  choice) and said. **Seen 2026-10-08** (Claude, Electron 44, macOS, 6 of 6
+  runs of `pauseonerror` 34): an enable given up on at a busy
+  worker is answered once the worker goes idle, and main then counts it
+  armed (`revived`); no second enable is ever sent behind one still out.
+  Whether Linux and Windows answer late too is untested; if they do not,
+  the worker stays stale until the next Run, which is what the app says.
+  A worker born while DevTools was open is enabled as any other: with the
+  events simulated nobody had attached it, but a real DevTools does, and
+  whether enabling it then hangs is untested -- as is a real DevTools
+  session for all of the above.
 - **`Debugger.pause` stops inside ignore-listed code** -- `doSwap`, for a
   sketch parked on a frame -- and a `stepInto` from there never stops on the
   way back to the sketch; V8 only stops a step-in at a call. `stepOut`

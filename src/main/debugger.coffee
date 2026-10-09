@@ -53,6 +53,13 @@ CHASE_LIMIT = 200
 
 SETUP_LIMIT = 2000
 
+# How long enabling a worker we let go of to DevTools may take (see stale).
+# Idle, it answered in 3ms; busy, it did not answer in 2s. The renderer only
+# asks while it believes the worker idle, so this bounds the one case where
+# the worker turned busy on the way -- a prompt line, say -- and holds a run
+# at `arming` no longer than this. A choice, not a measurement.
+STALE_LIMIT = 500
+
 # The debugger is on for every run, so what it keeps per script has to stay
 # small for the life of a worker. Every named script keeps its url, which is
 # all that says whose code a frame is in: a function a region defined long ago
@@ -245,6 +252,7 @@ module.exports = (win) ->
   session  = null        # the sketch worker's flattened session
   target   = null        # that worker's targetId, which outlives the session
   dropped  = null        # the targetId of the worker last let go of; see stale
+  reviving = null        # {session, setting}: a stale worker's enable given up on, still out
   enabled  = no          # the Debugger domain is on in that session
   ready    = null        # resolves once it is
   scripts  = new Map     # scriptId -> {url}, for every named script
@@ -399,13 +407,16 @@ module.exports = (win) ->
   # never let go -- except to DevTools, which gives us no choice.
   #
   # That worker is attached again with the next attach, which Target's
-  # auto-attach makes for whatever worker is there, but never enabled: the
-  # first Run after DevTools closed, made over a sketch still running, sat at
-  # `arming` for SETUP_LIMIT and said the debugger had timed out (found by a
-  # Claude review of I1, 2026-10-06). Breakpoints and error stops come back
-  # with the next worker, as devtools-closed says. A worker born while
-  # DevTools held the page was never ours to let go of, and is enabled as
-  # any other; with a real DevTools, which attaches it too, that is untested.
+  # auto-attach makes for whatever worker is there, and enabled again only
+  # when the renderer says it is idle (`idle`, from an arm): the first Run
+  # after DevTools closed, made over a sketch still running, sat at `arming`
+  # for SETUP_LIMIT and said the debugger had timed out (found by a Claude
+  # review of I1, 2026-10-06). Enabled, it is ours again and not stale. Until
+  # 2026-10-08 it was never enabled again, so an Eval into it went without
+  # breakpoints or error stops until the next Run (Robert asked for this).
+  # A worker born while DevTools held the page was never ours to let go of,
+  # and is enabled as any other; with a real DevTools, which attaches it too,
+  # that is untested.
   #
   # `target` is kept when the session goes: letting go reports
   # Target.detachedFromTarget, which resets the session, before either caller
@@ -416,26 +427,59 @@ module.exports = (win) ->
     dropped = target
     resetSession()
 
-  enable = ->
-    return null if not session or stale()
+  # `idle` is the renderer's word that the worker is running nothing, which
+  # only matters for a stale one. It can be wrong by the time the enable
+  # lands, so that is bounded by STALE_LIMIT. Given up on, the enable is
+  # still out in V8, which answers it once the worker is idle (seen by Claude,
+  # 2026-10-08), and from then the worker is ours (`revived`). Another is
+  # never sent behind it: an arm meanwhile -- an Eval straight after the
+  # Stop that idled the worker, say -- waits for that answer instead, bounded
+  # the same way.
+  enable = (idle = no) ->
+    return null unless session
     return ready if enabled
+    again = stale()
+    return null if again and not idle
+    if again and reviving?.session is session
+      return within(STALE_LIMIT, reviving.setting).catch(->)
     enabled = yes
-    mine = session
+    mine    = session
+    setting = do ->
+      await command 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, mine
+      await command 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, mine
+      await command 'Debugger.setPauseOnExceptions', {state: pauseState()}, mine
     ready = do ->
       try
-        await within SETUP_LIMIT, do ->
-          await command 'Debugger.enable', {maxScriptsCacheSize: SCRIPT_CACHE}, mine
-          await command 'Debugger.setBlackboxPatterns', {patterns: IGNORED}, mine
-          await command 'Debugger.setPauseOnExceptions', {state: pauseState()}, mine
+        await within (if again then STALE_LIMIT else SETUP_LIMIT), setting
+        dropped = null if again and session is mine
       catch error
         enabled = no if session is mine
-        tell type: 'problem', text: "debugger: #{error.message}"
+        # Only a stale worker's enable that was given up on is still out;
+        # one that failed outright, or whose worker went, is over.
+        unless again and session is mine and /^timed out/.test error.message
+          return tell type: 'problem', text: "debugger: #{error.message}"
+        reviving = here = {session: mine, setting}
+        setting.then(-> revived mine).catch(->).finally ->
+          reviving = null if reviving is here
+        tell type: 'problem', text: 'debugger: this sketch got busy as breakpoints and error stops came back -- they work again from the next Run'
       undefined
+
+  # A stale worker's enable that answered after it was given up on. The
+  # renderer still thinks it unarmed, so its next run arms, and finds it so.
+  revived = (mine) ->
+    return unless session is mine and not enabled
+    enabled = yes
+    ready   = Promise.resolve()
+    dropped = null
+    # The switch may have moved since the enable read it.
+    exceptions()
 
   # The switch, flipped while this session is live.
   exceptions = ->
     return unless enabled and session
     await ready
+    # Enabling can fail or be given up on, and then nothing is to be sent.
+    return unless enabled and session
     # The session current once the turn is free: a setting, not a step in
     # anyone's work, and a new session takes it as it is enabled anyway.
     await whenFree(-> send 'Debugger.setPauseOnExceptions', state: pauseState() if session).catch (error) ->
@@ -480,9 +524,9 @@ module.exports = (win) ->
       tell type: 'problem', text: "debugger: #{error.message}"
       false
 
-  settle = ->
+  settle = (idle = no) ->
     return false unless await attach()
-    await enable()
+    await enable idle
     enabled
 
   # `fresh` is for after the prompt has run something. A local scope is a
@@ -740,16 +784,17 @@ module.exports = (win) ->
       cdp.detach()
       dropSession()           # which says `resumed` if we were paused
       tell type: 'problem', text: 'breakpoints and error stops are off while DevTools is open'
-  # The worker we had is never enabled again (see stale), so breakpoints
-  # come back with the next worker, which Run makes.
+  # The worker we had is enabled again by the next arm at an idle worker
+  # (see stale): a Run, or an Eval, which is refused while it is busy.
   contents.on 'devtools-closed', ->
     devtools = no
-    tell type: 'problem', text: 'DevTools closed -- breakpoints and error stops work again from the next Run'
+    tell type: 'problem', text: 'DevTools closed -- breakpoints and error stops work again from the next Run or Eval'
 
-  # The renderer's whole vocabulary.
-  arm = ->
+  # The renderer's whole vocabulary. `idle`: the worker is running nothing,
+  # which a stale one needs to be enabled again (see enable).
+  arm = (idle = no) ->
     await hooks.arming() if hooks.arming
-    armed = await settle()
+    armed = await settle Boolean idle
     # A Stop sets pauses aside so the sketch can unwind; the next run wants
     # them back. Only then, and never into a turn: every arm used to send
     # this, and an arm made while the prompt's endless line was out sent it
@@ -968,7 +1013,8 @@ module.exports = (win) ->
 
   id = contents.id
   kept = -> {scripts: scripts.size, maps: maps.size}
-  controllers.set id, {arm, pause, step, resume, evaluate, members, getter, exceptions, kept}
+  isArmed = -> enabled and not stale()
+  controllers.set id, {arm, pause, step, resume, evaluate, members, getter, exceptions, kept, isArmed}
   win.on 'closed', -> controllers.delete id
   undefined
 
@@ -986,6 +1032,9 @@ module.exports.hooks = hooks
 
 # For the suite: how many scripts and source maps each live session is keeping.
 module.exports.kept = -> (controller.kept() for controller from controllers.values())
+
+# For the suite: whether each live session is armed, without arming it.
+module.exports.armed = -> (controller.isArmed() for controller from controllers.values())
 
 # For the suite: every command sent into a running evaluation so far (see
 # `watched`). Always empty outside BEANS_TEST.

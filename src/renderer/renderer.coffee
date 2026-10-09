@@ -1288,10 +1288,11 @@ linePause = ->
   goFrames()
 
 # Why main did not pause, by its answer. `stale` is a worker it let go of to
-# DevTools, which it never arms again (see stale in src/main/debugger.coffee).
+# DevTools, which it arms again only once that worker is idle (see stale in
+# src/main/debugger.coffee) -- and Ctrl-\ is only ever at a busy one.
 UNPAUSED =
   false: '*** could not pause -- is DevTools open? ***'
-  stale: '*** could not pause: this worker was in use before DevTools opened -- pausing works again from the next Run ***'
+  stale: '*** could not pause: this sketch was already running when DevTools closed -- pausing works again from the next Run, or an Eval once it has stopped ***'
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
 # paused frame, and V8 must not be moved on under it (main refuses too; this
@@ -1334,10 +1335,14 @@ togglePause = ->
 armed    = no
 skipping = no          # a Stop set breakpoints aside; the next run wants them
 
-armDebug = ->
+# `idle` is for a worker main let go of to DevTools, which it enables again
+# only while that worker runs nothing: enabling a busy one stalls (see stale
+# in src/main/debugger.coffee). Not booting either -- loading its modules is
+# running. A prompt line out, asked or being answered, is running too.
+armDebug = (idle) ->
   skipping = no
   try
-    armed = await beans.debug.arm()
+    armed = await beans.debug.arm idle
   catch error
     armed = no
     say "debugger: #{error.message ? error}", 'err'
@@ -1974,11 +1979,12 @@ stop = ->
 # mistaking the gap for a run that has already finished.
 armFirst = (run) ->
   return run() if armed and not skipping
+  idle      = underHold() in ['ready', 'error'] and Atomics.load(i32, H.ASK_STATE) not in [1, 4]
   before    = status
   armedOver = before unless before is 'arming'   # a second arming keeps the first's
   asked     = stops
   setStatus 'arming'
-  await armDebug()
+  await armDebug idle
   # Cancelled, it leaves the status alone: the Stop put it back already, and
   # by now it may be a newer arming's 'arming', whose own `before` is the one
   # that counts.
