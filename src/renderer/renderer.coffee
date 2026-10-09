@@ -2046,6 +2046,7 @@ Editor.mount document.getElementById('editor'),
   onMessage:  (text) -> say text, 'sys'
   onProblem:  (text) -> say text, 'err'
   onEdit:     (name) -> openSketch name
+  onReload:   -> beans.reload()
 
 # The open sketch's name lives in the window title, which costs the header
 # nothing, and is remembered so the next launch reopens it instead of

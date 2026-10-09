@@ -10,13 +10,22 @@ url  = require 'url'
 # blocks this process until somebody clicks it. A test run has nobody to
 # click: twice on 2026-10-06 a hidden run sat on that box, on Robert's
 # desktop, until it was killed (Claude, A2). So a test run says it and exits
-# instead. Registered first, so it covers everything below. What a player's
-# app should do is Robert's call (docs/research/unhandled-exceptions.md,
-# Questions); until then it keeps Electron's box.
-if process.env.BEANS_TEST
-  process.on 'uncaughtException', (error) ->
-    console.error "uncaught exception: #{error.stack ? error}"
-    app.exit 1
+# instead. A player's app says it in the window's console and carries on
+# (`mainFailed`, below; Robert, 2026-10-08). Registered first, so it covers
+# everything below. BEANS_UNCAUGHT=player is how the startup part has a
+# second app of its own take the player's way.
+process.on 'uncaughtException', (error) ->
+  if process.env.BEANS_TEST and process.env.BEANS_UNCAUGHT isnt 'player'
+    console.error "uncaught exception: #{error?.stack ? error}"
+    return app.exit 1
+  # A throw in here would be one more uncaught exception, and Node ends the
+  # process for that rather than coming back: the terminal is as far as it
+  # gets. mainFailed is not defined yet for one thrown while this file loads.
+  try
+    mainFailed error
+  catch failure
+    console.error "uncaught exception: #{error?.stack ? error}"
+    console.error "and saying it failed: #{failure?.stack ? failure}"
 
 ROOT     = path.join __dirname, '..', '..'
 EXAMPLES = path.join ROOT, 'examples'
@@ -68,18 +77,25 @@ join = (page) ->
 
 ipcMain.on 'app:problems', (event) -> join event.sender
 
+# /reload, the way back mainFailed offers: what View > Reload does, for the
+# page that asked. Main's reload, because a page's own location.reload()
+# comes to will-navigate, and refuseNavigation refuses it: nothing happened
+# (measured by Claude, Electron 44, macOS, 2026-10-08).
+ipcMain.on 'app:reload', (event) -> event.sender.reload()
+
 # A page stops hearing them once it starts loading another: said while it
 # goes, a problem went to the page on its way out and was lost with it. If no
 # other page arrives -- a navigation refused (refuseNavigation) starts
 # loading and stops again, measured by Claude, Electron 44, 2026-10-06 -- it
 # hears them again, with whatever was held meanwhile. Nor does a page whose
 # renderer has died: sent to it, a problem was lost rather than held for the
-# page that comes up next.
+# page that comes up next. A page that did go -- a reload -- starts the count
+# of uncaught exceptions again (mainFailed, below).
 leaving = new Set
 
 app.on 'web-contents-created', (event, page) ->
   page.on 'did-start-loading', -> leaving.add page if listening.delete page
-  page.on 'did-navigate',      -> leaving.delete page
+  page.on 'did-navigate',      -> forgetUncaught() if leaving.delete page
   page.on 'did-stop-loading',  -> join page if leaving.delete page
   for gone in ['render-process-gone', 'destroyed']
     page.on gone, ->
@@ -87,12 +103,54 @@ app.on 'web-contents-created', (event, page) ->
       leaving.delete page
 
 # Visible, never quiet: the terminal still gets the stack, and the window the
-# message. Not uncaughtException, which Electron already shows in a box
-# (and a test run exits on, above). Listening replaces Node's own warning, so
-# the terminal line says "unhandled" itself: the startup part looks for that
-# word in a launch.
+# message. Listening replaces Node's own warning, so the terminal line says
+# "unhandled" itself: the startup part looks for that word in a launch.
 process.on 'unhandledRejection', (reason) ->
   sayProblem "main: #{reason?.message ? reason}", "unhandled rejection: #{reason?.stack ? reason}"
+
+# An exception nobody caught in main, in a player's app. Electron's box
+# blocked the app until clicked and said nothing a player could act on, so
+# it is said like any other problem, with the way back: /reload (or View >
+# Reload) brings the window up afresh. Whether main is still sound after one
+# cannot be known from here -- whatever it was doing stopped halfway -- so
+# the line says it may not be, and that quitting is the sure way. Nothing
+# reloads by itself: a throw that comes back with the page would reload it
+# forever.
+#
+# Said once for each place it was thrown from (the stack below its message,
+# so `x is 3` and `x is 4` from one line are one), and for at most
+# SAID_UNCAUGHT places, then one line saying the rest go to the terminal: a
+# timer that throws every frame must not bury the console. Counted afresh
+# when the window reloads (see `forgetUncaught`), so one that still happens
+# afterwards is said again in the new page. The terminal has the stack once
+# a place, and a count at the second, tenth, hundredth... time. At most
+# KEPT_UNCAUGHT places are remembered, so a throw whose stack is new every
+# time costs a terminal line each, not memory.
+SAID_UNCAUGHT = 5
+KEPT_UNCAUGHT = 100
+uncaught      = new Map
+
+mainFailed = (error) ->
+  stack = String error?.stack ? error
+  place = stack.split('\n')[1..].join('\n') or stack
+  times = (uncaught.get(place) ? 0) + 1
+  uncaught.set place, times unless times is 1 and uncaught.size >= KEPT_UNCAUGHT
+  if times > 1
+    console.error "uncaught exception, #{times} times now: #{stack.split('\n')[0]}" if times is 2 or /^10+$/.test times
+    return
+  logged = "uncaught exception: #{stack}"
+  said   = "main: #{error?.message ? error}"
+  switch
+    when uncaught.size is 1
+      sayProblem "#{said} -- CoffeeBEANS hit an error of its own and may not work properly from here. /reload reloads the window (the sketch's text is kept, what it built is not); if that does not help, quit and start it again", logged
+    when uncaught.size <= SAID_UNCAUGHT
+      sayProblem said, logged
+    when uncaught.size is SAID_UNCAUGHT + 1
+      sayProblem "main: more errors inside CoffeeBEANS; the rest go to the terminal only", logged
+    else
+      console.error logged
+
+forgetUncaught = -> uncaught.clear()
 
 # Read in reachWindow, once the data folder is known to be there.
 SETTINGS     = path.join DATA, 'settings.json'

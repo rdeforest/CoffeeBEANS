@@ -376,6 +376,10 @@ COMMANDS = [
   {name: 'continue', short: 'cont',    run: -> handlers.onGo?()}
   # Line at a time: to the next line that runs, wherever it is.
   {name: 'line',     short: 'li',      run: -> handlers.onLine?()}
+  # What View > Reload does, from the keyboard: the way back main offers
+  # when it fails (mainFailed in main.coffee). Never shortened -- it throws
+  # away everything the sketch built, so a slip of `/re` must not.
+  {name: 'reload',   short: 'reload',  run: -> handlers.onReload?()}
 ]
 
 lookup = (word) ->

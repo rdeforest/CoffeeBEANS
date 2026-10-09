@@ -465,7 +465,7 @@ module.exports = (t) ->
   text = await ask '/foo'
   check 'an unknown command says so and names the real ones',
     text.includes('/foo is not a command') and
-      ['/run', '/restart', '/eval', '/edit', '/help', '/target', '/pause', '/step', '/continue', '/line', '/write']
+      ['/run', '/restart', '/eval', '/edit', '/help', '/target', '/pause', '/step', '/continue', '/line', '/write', '/reload']
         .every((name) -> text.includes name),
     JSON.stringify text.trim()
 

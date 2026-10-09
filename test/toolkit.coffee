@@ -258,6 +258,9 @@ module.exports = (win, paths) ->
   # first, for the checks of what a launch reads from settings.json.
   t.reset = ->
     t.launched ?= {(await t.vimState())..., stops: t.stopsState()}
+    # And what the console said as the app came up, before the first reset
+    # clears it: what main held from before the window is said there.
+    t.booted ?= await t.consoleText()
     await t.stopOnErrors no
     await t.vimKeys off
     await t.js "await Editor.load('scratch'); return true"

@@ -50,6 +50,8 @@ SECTIONS = [
     ['',                  'do), /e Foo opens foo, and Edit > Warn About Name']
     ['',                  'Case says so']
     ['Cmd/Ctrl-O',        'open a sketch with the system file picker']
+    ['/reload',           'reload the window, as View > Reload does: the text']
+    ['',                  'is kept, everything the sketch built is not']
     ['/target <n>',       'flag the first source line past n; /target 0 clears']
     ['/help <word>',      'this, or one section, or an object like keys,']
     ['',                  'or else every line that mentions the word']
