@@ -72,10 +72,15 @@ process.on 'uncaughtException', (error) ->
 # writes to stderr (Electron's docs), so there it waits for `ready`, for at
 # most READY_LIMIT.
 READY_LIMIT = 10000
+# One box: on Linux every throw before `ready` would queue its own, and
+# app.exit does not stop the queued ones.
+boxed = no
 
 failedLoading = (error) ->
   stack = printable error, 'stack'
   console.error "uncaught exception while starting: #{stack}"
+  return if boxed
+  boxed = yes
   box =
     title:   'CoffeeBEANS could not start'
     content: """
@@ -83,12 +88,18 @@ failedLoading = (error) ->
 
       #{stack}
     """
+  limit = null
+  # The limit is for reaching `ready`, not for reading the box; and a box
+  # that throws must still let the process go.
   show = ->
-    onDesktop 'error box', box, -> dialog.showErrorBox box.title, box.content
-    app.exit 1
+    clearTimeout limit
+    try
+      onDesktop 'error box', box, -> dialog.showErrorBox box.title, box.content
+    finally
+      app.exit 1
   return show() if app.isReady() or process.platform isnt 'linux'
   app.whenReady().then show
-  setTimeout (-> app.exit 1), READY_LIMIT
+  limit = setTimeout (-> app.exit 1), READY_LIMIT
 
 ROOT     = path.join __dirname, '..', '..'
 EXAMPLES = path.join ROOT, 'examples'
@@ -1115,7 +1126,7 @@ app.whenReady().then ->
       await reachWindow()
       break
     catch error
-      console.error "could not start: #{error.message}"
+      console.error "could not start: #{printable error}"
       return app.exit 1 unless tryAgain startupBox error
   app.on 'activate', -> createWindow() unless BrowserWindow.getAllWindows().length
 
