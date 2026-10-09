@@ -204,6 +204,8 @@ Commands are typed at that `>` prompt, starting with `/`:
     /target 30          flag the first source line past 30; /target 0 clears
     /help [word]        quick reference in the console pane: a section,
                         an object (keys, mouse, buffer), or a search
+    /reload             reload the window, as View > Reload does: the text
+                        is kept, what the sketch built is not
 
 `:run` means what `/run` does, for hands that learned vim. A prompt line
 starting with `/` or `:` is always a command, so CoffeeScript that opens

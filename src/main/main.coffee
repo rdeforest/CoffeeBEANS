@@ -6,17 +6,100 @@ os   = require 'os'
 path = require 'path'
 url  = require 'url'
 
+# Whatever would open something on the desktop of whoever runs the app -- a
+# box, a file picker, a file manager, a browser -- goes through here, so no
+# test can ever open one: the suite runs on Robert's own desktop. Before
+# 2026-10-06 two of these checked BEANS_TEST themselves and two did not, and
+# only the report part, by standing in for `shell` around its own checks,
+# kept the file manager and the browser shut (found by a Claude review of
+# main at 404fb07). Under BEANS_TEST it prints what it would have opened, as
+# `<what>: <detail>` -- the startup part reads those lines from a second app
+# -- keeps it in `opened` for the suite, and answers undefined; each caller
+# says what that means for it. Up here, ahead of everything, because an
+# exception while this file is still loading needs it (failedLoading).
+opened = []
+onDesktop = (what, detail, act) ->
+  return act() unless process.env.BEANS_TEST
+  console.log "#{what}: #{if typeof detail is 'string' then detail else JSON.stringify detail}"
+  opened.push {what, detail}
+  undefined
+
+# A thrown value as text, whatever it is. Anything can be thrown: a Symbol
+# or an object with no prototype will not go into a string, and a `stack`
+# or `message` getter can throw. Failing here would be a throw inside the
+# uncaughtException listener, which ends the process without a word.
+printable = (value, field) ->
+  try
+    picked = value?[field]
+    return String picked ? value
+  try
+    Object::toString.call value
+  catch
+    'something that cannot be printed'
+
 # An exception nobody catches in main gets Electron's own modal box, which
 # blocks this process until somebody clicks it. A test run has nobody to
 # click: twice on 2026-10-06 a hidden run sat on that box, on Robert's
 # desktop, until it was killed (Claude, A2). So a test run says it and exits
-# instead. Registered first, so it covers everything below. What a player's
-# app should do is Robert's call (docs/research/unhandled-exceptions.md,
-# Questions); until then it keeps Electron's box.
-if process.env.BEANS_TEST
-  process.on 'uncaughtException', (error) ->
-    console.error "uncaught exception: #{error.stack ? error}"
-    app.exit 1
+# instead. A player's app says it in the window's console and carries on
+# (`mainFailed`, below; Robert, 2026-10-08) -- once this file has loaded.
+# Before then no window can come: whenReady's handler is not registered yet
+# (failedLoading). Registered first, so it covers everything below.
+# BEANS_UNCAUGHT=player is how the startup part has a second app of its own
+# take the player's way.
+loaded = no
+
+process.on 'uncaughtException', (error) ->
+  if process.env.BEANS_TEST and process.env.BEANS_UNCAUGHT isnt 'player'
+    console.error "uncaught exception: #{printable error, 'stack'}"
+    return app.exit 1
+  # A throw in here would be one more uncaught exception, and Node ends the
+  # process for that rather than coming back: the terminal is as far as it
+  # gets.
+  try
+    if loaded then mainFailed error else failedLoading error
+  catch failure
+    console.error "uncaught exception: #{printable error, 'stack'}"
+    console.error "and saying it failed: #{printable failure, 'stack'}"
+
+# Thrown while this file was loading: the app never got as far as asking
+# for its window, so there is no console to say it in, and left alone the
+# process would sit there with nothing on screen -- on Windows and Linux,
+# one more of those for every double-click. Electron's own box stands down
+# once anyone listens, so this is a box of the app's own, and then out.
+# showErrorBox is synchronous, so A1's never-settling promise cannot bite,
+# and safe before `ready` -- except that on Linux before `ready` it only
+# writes to stderr (Electron's docs), so there it waits for `ready`, for at
+# most READY_LIMIT.
+READY_LIMIT = 10000
+# One box: on Linux every throw before `ready` would queue its own, and
+# app.exit does not stop the queued ones.
+boxed = no
+
+failedLoading = (error) ->
+  stack = printable error, 'stack'
+  console.error "uncaught exception while starting: #{stack}"
+  return if boxed
+  boxed = yes
+  box =
+    title:   'CoffeeBEANS could not start'
+    content: """
+      Something inside CoffeeBEANS went wrong while it was starting, and it has to stop. Your sketches are as they were last saved.
+
+      #{stack}
+    """
+  limit = null
+  # The limit is for reaching `ready`, not for reading the box; and a box
+  # that throws must still let the process go.
+  show = ->
+    clearTimeout limit
+    try
+      onDesktop 'error box', box, -> dialog.showErrorBox box.title, box.content
+    finally
+      app.exit 1
+  return show() if app.isReady() or process.platform isnt 'linux'
+  app.whenReady().then show
+  limit = setTimeout (-> app.exit 1), READY_LIMIT
 
 ROOT     = path.join __dirname, '..', '..'
 EXAMPLES = path.join ROOT, 'examples'
@@ -68,31 +151,94 @@ join = (page) ->
 
 ipcMain.on 'app:problems', (event) -> join event.sender
 
+# /reload, the way back mainFailed offers: what View > Reload does, for the
+# page that asked. Main's reload, because a page's own location.reload()
+# comes to will-navigate, and refuseNavigation refuses it: nothing happened
+# (measured by Claude, Electron 44, macOS, 2026-10-08).
+#
+# Without the crash recovery's `crashed`: reloaded with it, the page said
+# again that the app had just crashed.
+ipcMain.on 'app:reload', (event) ->
+  page = event.sender
+  where = new URL page.getURL()
+  return page.reload() unless where.searchParams.has 'crashed'
+  where.searchParams.delete 'crashed'
+  loadPage page, where.search
+
 # A page stops hearing them once it starts loading another: said while it
 # goes, a problem went to the page on its way out and was lost with it. If no
 # other page arrives -- a navigation refused (refuseNavigation) starts
 # loading and stops again, measured by Claude, Electron 44, 2026-10-06 -- it
 # hears them again, with whatever was held meanwhile. Nor does a page whose
 # renderer has died: sent to it, a problem was lost rather than held for the
-# page that comes up next.
+# page that comes up next. A page that did go -- a reload, a crash -- starts
+# the count of uncaught exceptions again (mainFailed, below).
 leaving = new Set
 
 app.on 'web-contents-created', (event, page) ->
   page.on 'did-start-loading', -> leaving.add page if listening.delete page
-  page.on 'did-navigate',      -> leaving.delete page
+  page.on 'did-navigate',      -> forgetUncaught() if leaving.delete page
   page.on 'did-stop-loading',  -> join page if leaving.delete page
   for gone in ['render-process-gone', 'destroyed']
     page.on gone, ->
       listening.delete page
       leaving.delete page
+  # The page the crash recovery brings up is a new one too, but it is not
+  # on the list by then, so did-navigate above would not count it afresh.
+  page.on 'render-process-gone', -> forgetUncaught()
 
 # Visible, never quiet: the terminal still gets the stack, and the window the
-# message. Not uncaughtException, which Electron already shows in a box
-# (and a test run exits on, above). Listening replaces Node's own warning, so
-# the terminal line says "unhandled" itself: the startup part looks for that
-# word in a launch.
+# message. Listening replaces Node's own warning, so the terminal line says
+# "unhandled" itself: the startup part looks for that word in a launch.
 process.on 'unhandledRejection', (reason) ->
   sayProblem "main: #{reason?.message ? reason}", "unhandled rejection: #{reason?.stack ? reason}"
+
+# An exception nobody caught in main, in a player's app. Electron's box
+# blocked the app until clicked and said nothing a player could act on, so
+# it is said like any other problem, with the way back: /reload (or View >
+# Reload) brings the window up afresh. Whether main is still sound after one
+# cannot be known from here -- whatever it was doing stopped halfway -- so
+# the line says it may not be, and that quitting is the sure way. Nothing
+# reloads by itself: a throw that comes back with the page would reload it
+# forever.
+#
+# Said once for each place it was thrown from (the stack's frames, so `x is
+# 3` and `x is 4` from one line are one; an error with no frames -- one
+# Node's fs hands a callback has none -- is placed by its first line, so
+# each file it names is a place of its own), and for at most
+# SAID_UNCAUGHT places, then one line saying the rest go to the terminal: a
+# timer that throws every frame must not bury the console. Counted afresh
+# when the window reloads (see `forgetUncaught`), so one that still happens
+# afterwards is said again in the new page. The terminal has the stack once
+# a place, and a count at the second, tenth, hundredth... time. At most
+# KEPT_UNCAUGHT places are remembered, so a throw whose stack is new every
+# time costs a terminal line each, not memory.
+SAID_UNCAUGHT = 5
+KEPT_UNCAUGHT = 100
+uncaught      = new Map
+
+mainFailed = (error) ->
+  stack  = printable error, 'stack'
+  frames = (line for line in stack.split('\n') when line.startsWith '    at ')
+  place  = frames.join('\n') or stack.split('\n')[0]
+  times = (uncaught.get(place) ? 0) + 1
+  uncaught.set place, times unless times is 1 and uncaught.size >= KEPT_UNCAUGHT
+  if times > 1
+    console.error "uncaught exception, #{times} times now: #{stack.split('\n')[0]}" if times is 2 or /^10+$/.test times
+    return
+  logged = "uncaught exception: #{stack}"
+  said   = "main: #{printable error, 'message'}"
+  switch
+    when uncaught.size is 1
+      sayProblem "#{said} -- CoffeeBEANS hit an error of its own and may not work properly from here. /reload reloads the window (the sketch's text is kept, what it built is not); if that does not help, quit and start it again", logged
+    when uncaught.size <= SAID_UNCAUGHT
+      sayProblem said, logged
+    when uncaught.size is SAID_UNCAUGHT + 1
+      sayProblem "main: more errors inside CoffeeBEANS; the rest go to the terminal only", logged
+    else
+      console.error logged
+
+forgetUncaught = -> uncaught.clear()
 
 # Read in reachWindow, once the data folder is known to be there.
 SETTINGS     = path.join DATA, 'settings.json'
@@ -146,23 +292,6 @@ ipcMain.handle 'app:about', ->
   version = await VERSION
   {version: version.text, note: version.note, text: Version.about version}
 ipcMain.handle 'clipboard:write', (event, text) -> clipboard.writeText text
-
-# Whatever would open something on the desktop of whoever runs the app -- a
-# box, a file picker, a file manager, a browser -- goes through here, so no
-# test can ever open one: the suite runs on Robert's own desktop. Before
-# 2026-10-06 two of these checked BEANS_TEST themselves and two did not, and
-# only the report part, by standing in for `shell` around its own checks,
-# kept the file manager and the browser shut (found by a Claude review of
-# main at 404fb07). Under BEANS_TEST it prints what it would have opened, as
-# `<what>: <detail>` -- the startup part reads those lines from a second app
-# -- keeps it in `opened` for the suite, and answers undefined; each caller
-# says what that means for it.
-opened = []
-onDesktop = (what, detail, act) ->
-  return act() unless process.env.BEANS_TEST
-  console.log "#{what}: #{if typeof detail is 'string' then detail else JSON.stringify detail}"
-  opened.push {what, detail}
-  undefined
 
 # The 📣🐞 button. The draft is redacted here, where the folders and the
 # machine's names are known; what is saved is the text the player was shown,
@@ -1002,11 +1131,15 @@ app.whenReady().then ->
       await reachWindow()
       break
     catch error
-      console.error "could not start: #{error.message}"
+      console.error "could not start: #{printable error}"
       return app.exit 1 unless tryAgain startupBox error
   app.on 'activate', -> createWindow() unless BrowserWindow.getAllWindows().length
 
 app.on 'window-all-closed', -> app.quit()
+
+# From here an exception in main can be said in a window that will come
+# (mainFailed); before, there was none to come (failedLoading).
+loaded = yes
 
 # A window stops waiting for its page's last save after about 500ms (see
 # sketch:flush), and without this the app then exited with the save still

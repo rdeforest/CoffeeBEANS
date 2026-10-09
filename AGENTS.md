@@ -12,14 +12,18 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: main is green at 674 checks on Linux (Windows CI green
-apart from one runner-side `sound` flake). The last overnight,
-`docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
-open questions for Robert (retire arming from the buffer, main's uncaught
-exceptions in a player's app, redaction of names, Eval after DevTools,
-literal-first sketches, splitting `main.coffee` and `renderer.coffee`) and
-a by-hand play-test list. The plan moves to `docs/overnight/done/` once he
-has read it.
+Where it stands: CHECKCOUNT. Before 2026-10-08 main was green on Linux at
+674 (Windows CI green apart from one runner-side `sound` flake). On
+Robert's Mac five checks fail on main as well (a folder made outside the
+app, Ctrl-Z after Ctrl-U, Ctrl-C copy, and the two `quit` children). The
+last overnight, `docs/overnight/2026-10-06.md`, is closed out; its morning
+brief holds the open questions for Robert and a by-hand play-test list.
+Answered on 2026-10-08: arming from the buffer is retired, an Eval after
+DevTools stops again when the worker is idle, seeded examples take the
+platform's line endings, and main's uncaught exceptions are said in a
+player's console (see Running and testing). Still open: redaction of names,
+literal-first sketches, splitting `main.coffee` and `renderer.coffee`. The
+plan moves to `docs/overnight/done/` once he has read it.
 
 The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
 patched copy of the CoffeeScript mode (`src/renderer/vendor/coffeescript-
@@ -117,7 +121,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 674 checks
+    npm test                                 all 684 checks on Linux
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -136,11 +140,13 @@ turns it back on. Until then, run the suite locally before pushing.
 
 Parts: `startup problems editor image repl buffers stepping debugging focus
 lifecycle drawing color loading shell about report input random names sound
-perf pauseonerror stopbutton`. Each starts from a reset app, so running one alone means
-the same thing as running it in the middle of everything else. `quit` runs
-only when named (`BY_NAME` in `test/suite.coffee`): it ends the app it runs
-in, so `lifecycle` starts a second Electron to run it, and `startup` starts
-children of its own. Error stops are off in every part except `pauseonerror`
+perf pauseonerror stopbutton`. Each starts from a reset app, so running one
+alone means the same thing as running it in the middle of everything else.
+`quit`, `launched` and `uncaught` run only when named (`BY_NAME` in
+`test/suite.coffee`), each in a second Electron: `quit` ends the app it
+runs in, so `lifecycle` starts one to run it; `launched` reports what a
+launch read, for `pauseonerror`; `uncaught` throws in main, for `startup`.
+`startup` starts other children of its own. Error stops are off in every part except `pauseonerror`
 (Robert, 2026-10-05), through the same switch the preference uses.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
@@ -164,6 +170,20 @@ Under `BEANS_TEST` an uncaught exception in main prints its stack and exits
 1 (since 2026-10-06, A2). Without that, Electron puts a modal "JavaScript
 error in the main process" box on screen and a hidden run hangs under the
 suite lock until someone kills it -- which happened twice that night.
+
+A player's app (not under `BEANS_TEST`) says an uncaught exception in main
+through `sayProblem` instead -- held until a page listens -- with an offer
+of `/reload` and a warning that the app may not work properly from there,
+and carries on (`mainFailed` in `main.coffee`; Robert, 2026-10-08). One
+thrown while `main.coffee` is still loading -- before any window can come
+-- gets a box of the app's own (`failedLoading`, through `onDesktop`) and
+exits 1. Once
+for each place it was thrown from, at most five places, then one line
+saying the rest go to the terminal; counted afresh when the window
+reloads. Nothing reloads by itself. `BEANS_UNCAUGHT=player` makes a test
+run take that way: the `startup` part starts a second Electron with it and
+the by-name part `uncaught`, which throws real exceptions from main. Never
+run `uncaught` in the suite's own app.
 
 **Do not pipe `npm test` into `head`.** Closing stdout mid-run throws EPIPE out
 of the main process and Electron shows a modal dialog. Redirect to a file.
