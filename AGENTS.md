@@ -121,7 +121,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 684 checks on Linux
+    npm test                                 all 700 checks on Linux
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -286,7 +286,7 @@ Done:
 
 - **Line stepping** (`src/main/debugger.coffee`, the `line stepping` and
   `variables pane` sections of `renderer.coffee`, test part `debugging`).
-  The buffer arms it; `breakpoint`, Cmd/Ctrl-\ / F8, F10 / `:line`, the ↧
+  Armed for every run; `breakpoint`, Cmd/Ctrl-\ / F8, F10 / `:line`, the ↧
   button; the pane beside the console; the prompt against the paused frame.
   Both must-fixes are in: Stop lets a line-paused sketch go with pauses
   skipped and only then starts its deadline, and the prompt goes through
@@ -321,13 +321,23 @@ Done:
   (before E1 they vanished). A check guards the prediction trap: any `catch`
   above the run turns the feature off silently.
 
-Not done, each waiting on a reason:
-
-- **Retiring arming from the buffer.** With the debugger armed for every
-  run, `watchBuffer`/`wantsDebug`/`armedFor` in the renderer and `wanted`/
-  `forced`/`disable` in main decide nothing. They are kept until Robert
-  rules on the Decision below; `armFirst` is still load-bearing (the first
-  attach, and clearing a Stop's skip).
+- **Arming from the buffer retired** (Robert, 2026-10-08). With the
+  debugger armed for every run it decided nothing, so the renderer's
+  `watchBuffer`/`wantsDebug`/`armedFor`, `Stepping.armed`, main's
+  `wanted`/`forced`/`disable`/`ALWAYS`, and the argument of `debug:arm` are
+  gone, and the buffer is not watched for `breakpoint` at all. `armFirst`
+  stays: a run arms first unless the renderer has heard an arm succeed
+  (`armed`, cleared by main's `detached`) and no Stop has set pauses aside
+  since (`skipping`). That covers the first attach, attaching again after
+  DevTools, and taking back a Stop's skip. Checks that drove arming by
+  editing the buffer now do it another way: `stopbutton` 20-22 send the
+  renderer `detached` (`unarm`), `pauseonerror` 23 asks main for arms
+  directly, and `debugging` 21's buffer case became a Run.
+- **Eval after DevTools** (Robert, 2026-10-08). The worker DevTools took is
+  enabled again once it is idle, so an Eval into it stops on errors and
+  `breakpoint`; only a busy one is refused, at once. How, and what is
+  known about the race, is under "Never re-attach" below. Checks
+  `pauseonerror` 31-35; suite hook `t.debugArmed`.
 
 ## Facts line stepping established
 
@@ -336,20 +346,41 @@ Verified in Electron 44 while building it; do not re-derive.
 - **Never re-attach to a worker you have detached from.** `Debugger.enable`
   on the new session hangs forever -- even with `Debugger.disable` and
   `Target.detachFromTarget` first. So the page stays attached once armed,
-  and arm/disarm is `Debugger.enable`/`disable` on the live session, which
-  re-enables fine. DevTools forces a detach, so after it closes breakpoints
-  work from the next Run (a fresh worker), and the app says so.
+  and arming is `Debugger.enable` on the live session. DevTools forces a
+  detach, so the worker it took cannot be counted on afterwards.
   Narrowed by a Claude reviewer of I1, 2026-10-06 (Electron 44, Linux,
   DevTools simulated by emitting its events, so the detach was a real
   `cdp.detach()`): re-enabling the old worker answered in 3ms when it was
   idle (1 of 1), and hung to the 2s `SETUP_LIMIT` when it was busy in a
   sketch loop (2 of 2). Auto-attach re-attaches it with the next attach
-  anyway, so main remembers its `targetId` and never enables it again
-  (`stale` in `src/main/debugger.coffee`); Ctrl-\ at it says pausing works
-  from the next Run. A worker born while DevTools was open is enabled as
-  any other: with the events simulated nobody had attached it, but a real
-  DevTools does, and whether enabling it then hangs is untested -- as is a
-  real DevTools session for all of the above.
+  anyway, so main remembers its `targetId` (`stale` in
+  `src/main/debugger.coffee`). Until 2026-10-08 it was never enabled again,
+  so an Eval into it went without error stops or `breakpoint` until the
+  next Run. Since then (Robert's call) it is enabled again at the next
+  Eval made while the renderer says the worker is idle (a Run never
+  offers it: it is about to be thrown away), and is not stale once that
+  answers. Busy, it is refused at once: Ctrl-\ at it says pausing works
+  again from the next Run, or an Eval once it has stopped. The renderer's
+  `idle` (status `ready` or `error`, no prompt line asked or being
+  answered) can be wrong -- an async sketch still looping after its run
+  said it was done reads `ready` -- so that enable is bounded by
+  `STALE_LIMIT` (500ms, a choice) and said. **Seen 2026-10-08** (Claude,
+  Electron 44, macOS):
+  - an enable given up on at a busy worker is answered once the worker
+    goes idle (11 of 11 runs of `pauseonerror` 34), and main then counts it
+    armed (`revived`). Until then every arm is refused at once; no second
+    enable is sent behind one still out, and its two follow-up settings
+    wait for the turn (`whenFree`) since they can land on a live worker.
+    Whether Linux and Windows answer late too is untested; if they do not,
+    the worker stays stale until the next Run, which is what the app says.
+  - only a running *sketch* stalls the enable. A busy prompt line --
+    swap-bound or CPU-bound -- did not: the enable answered and the Eval
+    paused (a Claude reviewer's probe). The renderer still counts a prompt
+    line out as busy; that is caution, not a measured need.
+  A worker born while DevTools was open is enabled as any other: with the
+  events simulated nobody had attached it, but a real DevTools does, and
+  whether enabling it then hangs is untested -- as is a real DevTools
+  session for all of the above.
 - **`Debugger.pause` stops inside ignore-listed code** -- `doSwap`, for a
   sketch parked on a frame -- and a `stepInto` from there never stops on the
   way back to the sketch; V8 only stops a step-in at a call. `stepOut`
@@ -490,14 +521,13 @@ Verified against a real CDP session in Electron 44; do not re-derive.
   boundary). The means of pausing picks the kind.
   Clicking outside the canvas was considered and rejected — that is how you get
   to the editor.
-- **Arm from the buffer**: armed while the buffer (or the source being run)
-  contains `breakpoint`, disarmed when it does not, debounced off the
-  keystroke stream the line counter already uses; a run checks for itself
-  first. Zero ceremony, and it cannot be armed-when-you-forgot. Armed means
-  the Debugger domain is on, not attached -- see the re-attach fact above.
-  **Moot since 2026-10-06:** Robert's choice for pausing on errors arms the
-  debugger for every run. The code is kept until he decides whether to
-  remove it (see "Not done" above).
+- **Arm from the buffer** -- **retired by Robert on 2026-10-08.** It was:
+  armed while the buffer (or the source being run) contains `breakpoint`,
+  disarmed when it does not, debounced off the keystroke stream the line
+  counter already uses; a run checks for itself first. Armed means the
+  Debugger domain is on, not attached -- see the re-attach fact above.
+  Moot from 2026-10-06, when Robert's choice for pausing on errors armed
+  the debugger for every run, and removed two days later (see Done above).
 - **A line step is a step *into*:** the next line that runs, wherever it is.
   The runtime is ignore-listed, so `print` and `buffer.swap` are one step.
   There is no separate step-over; the scope wall has room for four verbs.

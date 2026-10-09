@@ -338,6 +338,16 @@ module.exports = (t) ->
   """
   saw = (pattern, limit) -> t.waitFor "return #{pattern}.test(document.getElementById('console').textContent)", limit
 
+  # Tells the renderer the debugger is not armed, as main does when DevTools
+  # takes the session, so the next run arms first over whatever is running.
+  # Main is left as it was. Until 2026-10-08 a `breakpoint` new in the buffer
+  # did this; the buffer has no say in arming now. Waited for by a line sent
+  # after it on the same channel, which arrives in order.
+  unarm = ->
+    t.webContents.send 'debug:event', type: 'detached'
+    t.webContents.send 'debug:event', type: 'problem', text: '(the suite: unarmed)'
+    saw '/the suite: unarmed/'
+
   # 18. A sketch that ends under a hold, without reaching a swap, ends the
   # hold with it. Left in place, the hold froze the next run at its first
   # frame under a status that said 'running'.
@@ -385,16 +395,17 @@ module.exports = (t) ->
     boot[0] is 'booting' and boot[1] is 'frame paused' and warm and held is 'frame paused' and ended and shot,
     JSON.stringify {boot, warm, held, ended, shot, status: await status()}
 
-  # 20. Two evals in one tick over a running sketch, `breakpoint` new in the
-  # buffer, so the first arms. The second meets the arming and must still
+  # 20. Two evals in one tick over a running sketch, the renderer told it is
+  # not armed, so the first arms. The second meets the arming and must still
   # find the worker busy: sent, it sat in the worker's inbox and ran the
   # moment the Stop below ended the first sketch, under a status of 'ready'.
   await t.clearConsole()
   await load LOOPS
   await t.evalAll()
   await becomes 'running'
+  await unarm()
   first = await js """
-    #{typed "screen 320, 200\nprint 'second ran'\nloop\n  buffer.swap\n# breakpoint\n"}
+    #{typed "screen 320, 200\nprint 'second ran'\nloop\n  buffer.swap\n"}
     Editor.command('/eval')
     const status = document.getElementById('status').textContent
     Editor.command('/eval')
@@ -419,10 +430,11 @@ module.exports = (t) ->
   await load LOOPS
   await t.evalAll()
   await becomes 'running'
+  await unarm()
   t.debugHooks.arming = -> wait STRETCH
   try
     cancelled = await js """
-      #{typed "screen 320, 200\nprint 'third ran'\nloop\n  buffer.swap\n# breakpoint\n"}
+      #{typed "screen 320, 200\nprint 'third ran'\nloop\n  buffer.swap\n"}
       const at = performance.now()
       document.getElementById('runFresh').click()
       const status = document.getElementById('status').textContent
@@ -456,8 +468,8 @@ module.exports = (t) ->
   await load COUNTS
   await t.evalAll()
   await becomes 'running'
+  await unarm()
   pressed = await js """
-    #{typed COUNTS + "# breakpoint\n"}
     Editor.command('/eval')
     const before = document.getElementById('status').textContent
     document.getElementById('pauseFrame').click()

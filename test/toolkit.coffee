@@ -190,6 +190,7 @@ module.exports = (win, paths) ->
   t.debugKept    = -> require('../src/main/debugger').kept()
   t.debugHooks   = require('../src/main/debugger').hooks
   t.crossings    = -> require('../src/main/debugger').crossings()
+  t.debugArmed   = -> require('../src/main/debugger').armed()
 
   t.pause  = -> t.js "Stepping.pause(); return true"
   t.step   = -> t.js "Stepping.step(); return true"

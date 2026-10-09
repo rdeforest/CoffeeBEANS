@@ -91,8 +91,7 @@ loop
   # no debugger attached -- but the debugger is now armed for every run
   # (Robert, 2026-10-05; AGENTS.md, Decisions), so a debugger is always
   # attached. With DevTools open, which keeps ours out, it is still a no-op;
-  # that is not tested here. Spelled in pieces so the buffer never says the
-  # word: what stops it is the run's arming, not the buffer's.
+  # that is not tested here.
   linePaused = -> t.js "return Stepping.linePaused()"
   pausedAfter = (since) ->
     deadline = Date.now() + 10000
@@ -102,12 +101,11 @@ loop
       await wait 25
   await setDoc """
 screen 320, 200
-word = 'break' + 'point'
-print 'kind=' + typeof Object.getOwnPropertyDescriptor(globalThis, word).get
-globalThis[word]
+print 'kind=' + typeof Object.getOwnPropertyDescriptor(globalThis, 'breakpoint').get
+breakpoint
 print 'ranOn=true'
 each = (n) ->
-  globalThis[word]
+  breakpoint
   n * 2
 print 'inAFunction=' + each 21
 """

@@ -1288,10 +1288,12 @@ linePause = ->
   goFrames()
 
 # Why main did not pause, by its answer. `stale` is a worker it let go of to
-# DevTools, which it never arms again (see stale in src/main/debugger.coffee).
+# DevTools, which it arms again only once that worker is idle (see stale in
+# src/main/debugger.coffee) -- and Ctrl-\ is only ever at a busy one, which
+# may have been running when DevTools closed or started since.
 UNPAUSED =
   false: '*** could not pause -- is DevTools open? ***'
-  stale: '*** could not pause: this worker was in use before DevTools opened -- pausing works again from the next Run ***'
+  stale: '*** could not pause: this worker has not been armed again since DevTools let it go, and cannot be while it runs -- pausing works again from the next Run, or an Eval once it has stopped ***'
 
 # Something -- a line, Tab, a getter -- is still being worked out inside the
 # paused frame, and V8 must not be moved on under it (main refuses too; this
@@ -1326,41 +1328,25 @@ togglePause = ->
 # what an arm answers, and cleared when main says it let the session go
 # (`detached`: DevTools took it, or the debugger was detached). A run arms
 # first unless it is armed and nothing since has set pauses aside
-# (`skipping`).
-#
-# The buffer used to arm it: attached while it said `breakpoint` anywhere,
-# let go when it did not. Since pausing on errors main arms for every run
-# whatever the buffer says (Robert, 2026-10-05), so the buffer's verdict,
-# `armedFor`, can only ask for an arm main makes anyway. It is kept, and so
-# is the debounced watch on the keystrokes, until Robert decides whether
-# they go. Until 2026-10-06 it could also suppress one: a run skipped arming
-# whenever the buffer's verdict had not changed, so after DevTools let go
-# nothing ever attached again, and error stops and breakpoints stayed off
-# for good (found by a Claude review of main at 404fb07).
-BREAKPOINT = /\bbreakpoint\b/
-armedFor   = null
-armTimer   = null
-armed      = no
-skipping   = no          # a Stop set breakpoints aside; the next run wants them
+# (`skipping`). Main arms for every run (Robert, 2026-10-05); the buffer,
+# which used to arm and disarm it by whether it said `breakpoint`, has no
+# say since 2026-10-08 (Robert). While it had, a run skipped arming whenever
+# the buffer's verdict had not changed, so after DevTools let go nothing
+# ever attached again (found by a Claude review of main at 404fb07).
+armed    = no
+skipping = no          # a Stop set breakpoints aside; the next run wants them
 
-wantsDebug = (extra = '') -> BREAKPOINT.test(Editor.all()) or BREAKPOINT.test extra
-
-syncDebug = (extra = '') ->
-  clearTimeout armTimer
-  want = wantsDebug extra
-  armedFor = want
+# `idle` is for a worker main let go of to DevTools, which it enables again
+# only while that worker runs nothing: enabling a busy one stalls (see stale
+# in src/main/debugger.coffee). Not booting either -- loading its modules is
+# running. A prompt line out, asked or being answered, is running too.
+armDebug = (idle) ->
   skipping = no
   try
-    armed = await beans.debug.arm want
+    armed = await beans.debug.arm idle
   catch error
     armed = no
     say "debugger: #{error.message ? error}", 'err'
-
-watchBuffer = ->
-  clearTimeout armTimer
-  armTimer = setTimeout (->
-    syncDebug() unless BREAKPOINT.test(Editor.all()) is armedFor
-  ), 300
 
 endLinePause = ->
   linePaused = null
@@ -1411,7 +1397,6 @@ globalThis.Stepping =
   suspend: linePause
   resume: continueAll
   linePaused: -> linePaused
-  armed:  -> armedFor
 
 # --- the variables pane -----------------------------------------------------
 
@@ -1990,17 +1975,20 @@ stop = ->
 # Arming has to finish before the run it is for, or the first breakpoint is
 # missed and an error does not stop. It is the only wait in front of a run,
 # so it is skipped while main says the debugger is armed and no Stop has set
-# pauses aside since -- and, for now, the buffer's verdict has not changed
-# (see `armed`) -- and said on the status line when it happens, which is
-# also what stops anything watching the status from mistaking the gap for a
-# run that has already finished.
-armFirst = (source, run) ->
-  return run() if armed and not skipping and wantsDebug(source) is armedFor
+# pauses aside since (see `armed`), and said on the status line when it
+# happens, which is also what stops anything watching the status from
+# mistaking the gap for a run that has already finished.
+#
+# `fresh` is for a Run, which throws the worker away: arming it first, if it
+# is one main let go of to DevTools, would only hold the Run up.
+armFirst = (run, fresh = no) ->
+  return run() if armed and not skipping
+  idle      = not fresh and underHold() in ['ready', 'error'] and Atomics.load(i32, H.ASK_STATE) not in [1, 4]
   before    = status
   armedOver = before unless before is 'arming'   # a second arming keeps the first's
   asked     = stops
   setStatus 'arming'
-  await syncDebug source
+  await armDebug idle
   # Cancelled, it leaves the status alone: the Stop put it back already, and
   # by now it may be a newer arming's 'arming', whose own `before` is the one
   # that counts.
@@ -2008,12 +1996,12 @@ armFirst = (source, run) ->
   setStatus before if status is 'arming'
   run()
 
-runSource = (source, name, cut) -> armFirst source, ->
+runSource = (source, name, cut) -> armFirst ->
   return start {source, name, cut} unless worker
   return pending = {source, name, cut} if status is 'booting'
   send {source, name, cut}
 
-runFresh = (source, name) -> armFirst source, -> start {source, name}
+runFresh = (source, name) -> armFirst (-> start {source, name}), yes
 
 # A sketch you run is almost always one you are about to play with, so Run
 # and :eval give it the keyboard. Region eval does not: that is the loop of
@@ -2042,7 +2030,7 @@ Editor.mount document.getElementById('editor'),
   onRun:      (source, name) -> say '*** run -- fresh worker ***', 'sys'; toCanvas(); runFresh source, name
   onExternal: (name) -> say "reloaded #{name}.coffee from disk", 'sys'
   onHelp:     showHelp
-  onLines:    (lines) -> setLines lines; watchBuffer()
+  onLines:    setLines
   onMessage:  (text) -> say text, 'sys'
   onProblem:  (text) -> say text, 'err'
   onEdit:     (name) -> openSketch name
