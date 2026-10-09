@@ -156,16 +156,14 @@ module.exports = (t) ->
   seen    = try JSON.parse report catch then {}
   tail    = JSON.stringify player.output[-600..]
   offer   = '/reload reloads the window'
-  check 'an uncaught exception in main lets a player\'s app carry on',
-    player.code is 0 and report? and not player.output.includes('and saying it failed'),
+  check 'an uncaught exception in main lets a player\'s app carry on, its stack still on the terminal',
+    player.code is 0 and report? and not player.output.includes('and saying it failed') and
+      player.output.includes('uncaught exception: Error: startup: thrown in main\n') and player.output.includes('throw-in-main.js'),
     "exit #{player.code ? player.signal}: #{tail}"
   check 'one thrown before the window is said there once it is up, offering /reload and saying the app may not work properly',
     countIn(seen.first ? '', 'main: startup: thrown in main') is 1 and
       seen.first.includes(offer) and seen.first.includes('may not work properly'),
     JSON.stringify seen.first ? tail
-  check 'its stack still goes to the terminal',
-    player.output.includes('uncaught exception: Error: startup: thrown in main\n') and player.output.includes('throw-in-main.js'),
-    tail
   check 'one thrown again and again from one place is said once, and only the first of all offers /reload',
     countIn(seen.repeated ? '', 'main: again ') is 1 and countIn(seen.repeated ? '', offer) is 0 and
       (seen.repeated ? '').includes('main: second place'),
@@ -187,3 +185,26 @@ module.exports = (t) ->
       not (seen.after ? '').includes('place 3') and
       countIn(seen.after ? '', 'main: again 21') is 1 and (seen.after ? '').includes(offer),
     JSON.stringify seen.after ? tail
+  odd = seen.odd ? ''
+  check 'a thrown value that will not go into a string is still said, and the app carries on',
+    ['main: [object Object]', 'main: Symbol(odd)', 'main: bad stack'].every((said) -> odd.includes said),
+    JSON.stringify odd
+  check '/reload after the crash recovery\'s load does not say again that the app crashed',
+    seen.crashSaid and seen.crashReloaded and not seen.crashUrl?.includes('crashed') and
+      not (seen.crashAfter ? '').includes('the app crashed'),
+    JSON.stringify {url: seen.crashUrl, after: seen.crashAfter}
+
+  # Thrown while main.coffee is still loading, before the window is asked
+  # for: no console will ever come, so a player's app shows a box of its own
+  # and exits. A test run prints the box instead (onDesktop). Early is
+  # before mainFailed exists, late after it. Against the first version of
+  # this both sat with no window until killed.
+  for at in ['early', 'late']
+    began  = Date.now()
+    loader = await launch paths, path.join(sandbox, "loading-#{at}"), '', {NODE_OPTIONS: "--require \"#{thrower}\"", BEANS_UNCAUGHT: 'player', BEANS_THROW_LOADING: at}, 20000
+    shown  = printed(loader.output, 'error box: ')[0]
+    boxed  = try JSON.parse shown catch then null
+    check "an uncaught exception while main is loading (#{at}) shows a box and exits",
+      loader.code is 1 and boxed?.title is 'CoffeeBEANS could not start' and
+        boxed.content.includes("startup: thrown while loading") and not loader.output.includes('and saying it failed'),
+      "exit #{loader.code ? loader.signal} after #{Date.now() - began}ms: #{JSON.stringify loader.output[-400..]}"

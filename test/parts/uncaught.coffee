@@ -8,7 +8,7 @@
 # Makes no check of its own; prints `uncaught: <json>` once, at the end.
 
 module.exports = (t) ->
-  {js, waitFor, consoleText, quiet, wait, webContents} = t
+  {js, waitFor, consoleText, quiet, wait, webContents, paths} = t
 
   # Thrown from a timer, so nothing in the suite is on the stack to catch it.
   # `place` stands in for where it was thrown from: two errors made on the
@@ -59,5 +59,29 @@ module.exports = (t) ->
   throwLater 'again 21', 'loop'
   await waitFor shows('again 21'), 5000
   seen.after = await consoleText()
+
+  # Things that will not go into a string, thrown: an object with no
+  # prototype, a Symbol, an error whose stack getter throws. Each said, and
+  # the app still standing to say the next.
+  setTimeout -> throw Object.create null
+  setTimeout -> throw Symbol 'odd'
+  setTimeout ->
+    error = new Error 'bad stack'
+    Object.defineProperty error, 'stack', get: -> throw new Error 'no stack for you'
+    throw error
+  await waitFor shows('main: bad stack'), 5000
+  seen.odd = await handled()
+
+  # A reload after the crash recovery's: the page is not told again that
+  # the app crashed. The recovery's load stood in for, as main makes it.
+  paths.loadPage webContents, '?crashed=pretend'
+  await waitFor shows('the app crashed (pretend)'), 10000
+  seen.crashSaid = (await consoleText()).includes 'the app crashed (pretend)'
+  loaded = new Promise (resolve) -> webContents.once 'did-finish-load', resolve
+  await js "setTimeout(() => Prompt.ask('/reload'), 0); return true"
+  seen.crashReloaded = await Promise.race [loaded.then(-> yes), wait(10000).then(-> no)]
+  await waitFor shows('CoffeeBEANS '), 10000
+  seen.crashUrl   = webContents.getURL()
+  seen.crashAfter = await consoleText()
 
   console.log "uncaught: #{JSON.stringify seen}"

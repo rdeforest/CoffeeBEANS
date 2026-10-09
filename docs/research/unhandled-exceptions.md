@@ -27,7 +27,7 @@ read failures said once, `setWindowOpenHandler`, and the merge of `main` at
 
 | Where | What happens | Seen by a player? | |
 |---|---|---|---|
-| main, unhandled rejection | Node prints `UnhandledPromiseRejectionWarning` on stderr and carries on (Electron leaves Node in warn mode) | no | measured |
+| main, unhandled rejection | Node prints `UnhandledPromiseRejectionWarning` on stderr and carries on (Electron leaves Node in warn mode); since A2 said in the window's console through `sayProblem` (M1) | yes, since A2 | measured |
 | main, uncaught exception | Electron's own "A JavaScript error occurred in the main process" box, unless something listens for `uncaughtException`; a test run now does (**second fixer**): it prints `uncaught exception: <stack>` and exits 1. Since 2026-10-08 a player's app does too: `mainFailed` says it through `sayProblem`, offering `/reload`, and carries on (see "Since 2026-10-08") | yes, in the console; a test run puts nothing on the screen | the box: **measured** -- two of the first A2 fixer's runs hung on it (below). The test run's exit and the player's way: checked, `startup` part |
 | main, `ipcMain.handle` that throws | stderr gets `Error occurred in handler for 'x': ...`; the renderer's promise rejects with `Error invoking remote method 'x': Error: ...` | only if the renderer says so | measured |
 | renderer, after `renderer.coffee` has run | `window` `error` and `unhandledrejection` listeners (`renderer.coffee:1611-1614`) say `renderer: <message>` in the console, and do not `preventDefault`, so DevTools and main's terminal (`[renderer] Uncaught ...`) get it too | yes, without a stack | measured |
@@ -386,7 +386,7 @@ each fix was taken out alone, and its check failed (Claude, 2026-10-06).
   without breaking the checkout.
 - **A test run exits on an uncaught exception in main** (second fixer):
   `process.on 'uncaughtException'`, registered at the top of `main.coffee`
-  only under `BEANS_TEST`, prints `uncaught exception: <stack>` and calls
+  (only under `BEANS_TEST` until 2026-10-08, in every run since), prints `uncaught exception: <stack>` and calls
   `app.exit 1`. Before, Electron's modal box blocked main until clicked,
   and a hidden run sat on it, on Robert's desktop, until killed (twice on
   2026-10-06, below). Nothing in the suite depended on the box: the
@@ -471,29 +471,60 @@ if a reloading page is still sent problems.
   again`. Whether main is sound after a throw cannot be known, so the line
   says it may not be rather than guessing. A failure inside `mainFailed`
   goes to the terminal: a throw inside the listener would end the process.
-- **Before any window.** Through `sayProblem`, so held and said once the
-  page asks -- no dialog, so A1's never-settling async box does not arise.
-- **No spam, no reload loop.** Once for each place thrown from (the stack
-  below the message), at most five places, then one line saying the rest
+  Every thrown value goes through `printable` first, which cannot throw: a
+  Symbol, an object with no prototype and a throwing `stack` getter each
+  broke the first version's handler (found in review).
+- **Before any window, once loaded.** Through `sayProblem`, so held and
+  said once the page asks -- no dialog, so A1's never-settling async box
+  does not arise.
+- **While `main.coffee` is still loading** no window can ever come
+  (`whenReady`'s handler and `window-all-closed` are registered at the
+  end). The first version handed that to `mainFailed` too -- or, before
+  it existed, failed -- and since a listener makes Electron's box stand
+  down, the process sat with nothing on screen until killed; on Windows
+  and Linux each double-click left one more (found by a Claude reviewer,
+  measured). Now `failedLoading` shows `dialog.showErrorBox` -- synchronous,
+  and safe before `ready` by Electron's docs, except that on Linux before
+  `ready` it only writes to stderr, so there it waits for `ready` (at most
+  10s) -- then exits 1. A test run prints the box through `onDesktop`
+  instead, which moved to the top of `main.coffee` for it. Whether the box
+  shows before `ready` on macOS and Windows is from the docs, not seen.
+- **No spam, no reload loop.** Once for each place thrown from (the stack's
+  `    at` frames; an error with none, as Node's fs hands callbacks, is
+  placed by its first line), at most five places, then one line saying the rest
   go to the terminal; repeats are counted on the terminal at the 2nd,
   10th, 100th... time; at most 100 places are remembered. The count starts
-  again when a listening page navigates (a reload), so something still
-  throwing is said again in the new page. Nothing reloads on its own.
+  again when a listening page navigates (a reload) or its renderer dies
+  (the crash recovery's page), so something still throwing is said again
+  in the new page. Nothing reloads on its own.
 - **`/reload`** (and `:reload`), a new command in the shared table, never
   shortened, does what View > Reload does: main reloads the page that
   asked. A page's own `location.reload()` reaches `will-navigate` and is
   refused there (M11), so it did nothing (measured, Electron 44, macOS).
+  It leaves out the crash recovery's `?crashed=`, which made the reloaded
+  page say again that the app had crashed. View > Reload (Electron's role)
+  still keeps it.
 - **Checked** by a second Electron from the `startup` part, with
   `BEANS_UNCAUGHT=player` (a test run taking the player's way) and the
   `throw-in-main.js` preload, running the by-name part `uncaught`, which
   throws real exceptions from main's timers and reports the console at
   each step: the child exits 0, the held line and the offer show once, a
   repeat is said once, the cap, the terminal counts, `/rel` not reloading,
-  and the reloaded page hearing the next throw afresh. Against the old
-  code the child exits 1 on the first throw.
+  the reloaded page hearing the next throw afresh, unprintable values, and
+  `/reload` after a crash query. Against the old code the child exits 1 on
+  the first throw. Two more children throw while `main.coffee` loads
+  (`BEANS_THROW_LOADING=early`, before `mainFailed` exists, and `late`,
+  after): each must print the box and exit 1.
+- **Left as it was, for Robert:** main's `unhandledRejection` keeps the
+  bare `sayProblem` -- no offer of `/reload`, no once-per-place --
+  deliberately: his decision covered the exception, and whether a
+  rejection should get the same is his. Exceptions in the preload and in utility processes are
+  out of scope.
 - **Not checked:** that Electron's box no longer appears in a player's app
   (it shows only when nothing listens, which the test run's exit already
-  relies on); a real throw in shipped code (none is known).
+  relies on); that the count resets after a real crash recovery (a test run
+  does not recover, `render-process-gone` in `createWindow`); a real throw
+  in shipped code (none is known).
 
 ## Questions
 

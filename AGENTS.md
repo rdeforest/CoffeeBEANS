@@ -12,10 +12,11 @@ his working energy. The Steam / Next Fest October 2027 target is dropped;
 still open sessions because he enjoys it: no deadlines, no phases, no
 overnight queues. Keep sessions short and small.
 
-Where it stands: main is green at 674 checks on Linux (Windows CI green
-apart from one runner-side `sound` flake); 681 since the uncaught-exception
-change of 2026-10-08, counted on the Mac (673 there), not yet run on Linux.
-On Robert's Mac five checks fail on main as well (a folder made outside the
+Where it stands: 684 checks on Linux since the uncaught-exception change of
+2026-10-08 (counted from the Mac's run plus the checks only Linux makes; not
+yet run on Linux -- before it main was green there at 674, Windows CI green
+apart from one runner-side `sound` flake). On Robert's Mac five checks fail
+on main as well (a folder made outside the
 app, Ctrl-Z after Ctrl-U, Ctrl-C copy, and the two `quit` children). The
 last overnight, `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
 open questions for Robert (retire arming from the buffer, main's uncaught
@@ -121,7 +122,7 @@ list of things to try by hand.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 681 checks (673 on a Mac)
+    npm test                                 all 684 checks on Linux
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -140,11 +141,13 @@ turns it back on. Until then, run the suite locally before pushing.
 
 Parts: `startup problems editor image repl buffers stepping debugging focus
 lifecycle drawing color loading shell about report input random names sound
-perf pauseonerror stopbutton`. Each starts from a reset app, so running one alone means
-the same thing as running it in the middle of everything else. `quit` runs
-only when named (`BY_NAME` in `test/suite.coffee`): it ends the app it runs
-in, so `lifecycle` starts a second Electron to run it, and `startup` starts
-children of its own. Error stops are off in every part except `pauseonerror`
+perf pauseonerror stopbutton`. Each starts from a reset app, so running one
+alone means the same thing as running it in the middle of everything else.
+`quit`, `launched` and `uncaught` run only when named (`BY_NAME` in
+`test/suite.coffee`), each in a second Electron: `quit` ends the app it
+runs in, so `lifecycle` starts one to run it; `launched` reports what a
+launch read, for `pauseonerror`; `uncaught` throws in main, for `startup`.
+`startup` starts other children of its own. Error stops are off in every part except `pauseonerror`
 (Robert, 2026-10-05), through the same switch the preference uses.
 
 Other switches: `BEANS_SHOW=1` shows the test window (hidden by default, so a
@@ -172,7 +175,10 @@ suite lock until someone kills it -- which happened twice that night.
 A player's app (not under `BEANS_TEST`) says an uncaught exception in main
 through `sayProblem` instead -- held until a page listens -- with an offer
 of `/reload` and a warning that the app may not work properly from there,
-and carries on (`mainFailed` in `main.coffee`; Robert, 2026-10-08). Once
+and carries on (`mainFailed` in `main.coffee`; Robert, 2026-10-08). One
+thrown while `main.coffee` is still loading -- before any window can come
+-- gets a box of the app's own (`failedLoading`, through `onDesktop`) and
+exits 1. Once
 for each place it was thrown from, at most five places, then one line
 saying the rest go to the terminal; counted afresh when the window
 reloads. Nothing reloads by itself. `BEANS_UNCAUGHT=player` makes a test
