@@ -17,8 +17,9 @@ apart from one runner-side `sound` flake). The last overnight,
 `docs/overnight/2026-10-06.md`, is closed out; its morning brief holds the
 open questions for Robert (retire arming from the buffer, main's uncaught
 exceptions in a player's app, redaction of names, Eval after DevTools,
-literal-first sketches, splitting `main.coffee` and `renderer.coffee`) and a by-hand play-test list. The plan
-moves to `docs/overnight/done/` once he has read it.
+literal-first sketches, splitting `main.coffee` and `renderer.coffee`) and
+a by-hand play-test list. The plan moves to `docs/overnight/done/` once he
+has read it.
 
 The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
 patched copy of the CoffeeScript mode (`src/renderer/vendor/coffeescript-
