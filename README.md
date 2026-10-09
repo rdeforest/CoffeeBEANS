@@ -133,6 +133,11 @@ rotated, and `overlaps` answers collision by actual pixels rather than
 bounding boxes. `drawTo` takes a block, which restores the previous target
 even if the block throws; called bare it is a mode, like the current colour.
 
+`put` and `stamp` draw over what is there by each pixel's alpha, so a
+surface with a soft edge -- a glow that fades out from its centre -- blends
+into the picture underneath. `put s, x, y, 'copy'` writes the pixels as they
+are, alpha included; `'xor'`, `'or'` and `'and'` are PUT's old actions.
+
 The same type is meant to serve sprites, loaded images and font glyphs when
 those arrive. `examples/tree.coffee` uses it for recursive feedback.
 

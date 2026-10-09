@@ -106,6 +106,53 @@ print 'pixels=' + overlaps(left, 0, 0, right, -5, -5)
   text = await settled()
   check 'put clips at the edges', text.includes('topLeft=true') and text.includes('bottomRight=true') and text.includes('survived=true'), JSON.stringify text.trim()
 
+  # 26b. 'over' blends by alpha (source-over, straight alpha); 'copy' is raw.
+  # A half-clear red over opaque blue is the midpoint, opaque. Before
+  # 2026-10-08 'over' wrote the half-clear pixel as it was, so `midpoint`
+  # read 0x80FF0000.
+  blending = """
+screen 320, 200
+hex = (c) -> (c >>> 0).toString(16)
+near = (c, want) -> [24, 16, 8, 0].every (s) -> abs((c >>> s & 255) - (want >>> s & 255)) <= 1
+dot = (argb) ->
+  s = surface 1, 1
+  drawTo s, -> cls argb
+  s
+half  = dot 0x80FF0000
+solid = dot 0xFFFF0000
+clear = dot 0x00FF0000
+
+cls 0xFF0000FF
+put half, 10, 10
+put solid, 11, 10
+put clear, 12, 10
+put half, 13, 10, 'copy'
+stamp half, 14, 10
+print 'midpoint=' + hex(pget 10, 10) + ' ' + near(pget(10, 10), 0xFF80007F)
+print 'solid=' + hex(pget 11, 10) + ' ' + (pget(11, 10) is 0xFFFF0000)
+print 'clear=' + hex(pget 12, 10) + ' ' + (pget(12, 10) is 0xFF0000FF)
+print 'copy=' + hex(pget 13, 10) + ' ' + (pget(13, 10) is 0x80FF0000)
+print 'stamped=' + hex(pget 14, 10) + ' ' + near(pget(14, 10), 0xFF80007F)
+
+# Over a half-clear destination the result is more opaque than either, and
+# its colour is weighted by what each side shows: 192 alpha, 170 red, 85 blue.
+glass = dot 0x800000FF
+drawTo glass, -> put half, 0, 0
+print 'layered=' + hex(drawTo glass, -> pget 0, 0) + ' ' + near(drawTo(glass, -> pget 0, 0), 0xC0AA0055)
+"""
+  await setDoc blending
+  await wait 500
+  await clearConsole()
+  await evalAll()
+  text  = await settled()
+  said  = (name) -> new RegExp("#{name}=\\w+ true").test text
+  check "put 'over' a half-clear pixel on an opaque one gives the midpoint, opaque", said('midpoint'), JSON.stringify text.trim()
+  check "put 'over' an opaque pixel still replaces what is under it", said('solid'), JSON.stringify text.trim()
+  check "put 'over' a clear pixel still leaves what is under it", said('clear'), JSON.stringify text.trim()
+  check "put 'copy' writes a half-clear pixel as it is, alpha and all", said('copy'), JSON.stringify text.trim()
+  check "stamp blends by alpha the same way", said('stamped'), JSON.stringify text.trim()
+  check "over a half-clear destination, alpha adds up and colour is weighted", said('layered'), JSON.stringify text.trim()
+
   # 27. stamp: identity matches put, and scale and rotation land where geometry says
   stamping = """
 screen 320, 200

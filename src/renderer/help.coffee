@@ -196,8 +196,10 @@ SECTIONS = [
   lines: [
     ['surface w, h',        'a new off-screen surface, cleared transparent']
     ['get x1,y1,x2,y2',     'capture a region of the current target']
-    ['put s, x, y',         'blit it back, skipping transparent pixels']
-    ["put s, x, y, 'xor'",  "also 'copy', 'or', 'and' -- PUT's old actions"]
+    ['put s, x, y',         'blit it back over what is there, by its alpha:']
+    ['',                    'clear shows through, half clear blends half']
+    ["put s, x, y, 'copy'", 'write its pixels as they are, alpha and all']
+    ["put s, x, y, 'xor'",  "also 'or', 'and' -- PUT's old actions"]
     ['stamp s, x, y, opts', 'scale:, angle:, anchorX:, anchorY:, mode:']
     ['drawTo s, -> ...',    'send every drawing command to s instead']
     ['drawTo s',            'same, but as a mode until you drawTo display']

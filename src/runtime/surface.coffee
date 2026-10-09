@@ -9,11 +9,32 @@ class Surface
     @base   = 0
     @pixels = new Uint32Array @width * @height
 
+# Source-over with straight (not premultiplied) alpha. The colour is a mix
+# weighted by how much each side contributes to the result's alpha, not by
+# the source alpha alone: against a half-clear destination, using `a` alone
+# would drag the colour towards whatever invisible colour sat underneath.
+# Channels are treated alike, so the byte order inside the Uint32 does not
+# matter here; only alpha's place at the top does.
+sourceOver = (under, over) ->
+  a = over >>> 24
+  return over  if a is 255
+  return under if a is 0
+  # Both weights are scaled by 255, so the sum is the result's alpha * 255.
+  top    = a * 255
+  bottom = (under >>> 24) * (255 - a)
+  total  = top + bottom
+  half   = total / 2
+  c0 = (((over & 0xFF)         * top + (under & 0xFF)         * bottom + half) / total) | 0
+  c1 = (((over >>>  8 & 0xFF)  * top + (under >>>  8 & 0xFF)  * bottom + half) / total) | 0
+  c2 = (((over >>> 16 & 0xFF)  * top + (under >>> 16 & 0xFF)  * bottom + half) / total) | 0
+  ((((total + 127) / 255) | 0) << 24 | c2 << 16 | c1 << 8 | c0) >>> 0
+
 # PUT's actions in GW-BASIC were PSET, PRESET, AND, OR and XOR. These are
 # the same idea; `over` is the one BASIC had no need for, since nothing on
-# an EGA screen was transparent.
+# an EGA screen was transparent. `copy` is PSET: the pixels as they are,
+# alpha included, so a clear pixel punches a hole.
 BLIT =
-  over: (under, over) -> over
+  over: sourceOver
   copy: (under, over) -> over
   or:   (under, over) -> (under | over) >>> 0
   and:  (under, over) -> (under & over) >>> 0
@@ -39,7 +60,9 @@ blit = (dest, dx, dy, source, mode = 'over') ->
       pixel = source.pixels[sourceRow + x]
       continue if skipClear and not opaque pixel
       at = destRow + x
-      dest.pixels[at] = combine dest.pixels[at], pixel
+      # The opaque pixel is most of any sprite; it skips the call and the mix.
+      if skipClear and pixel >>> 24 is 255 then dest.pixels[at] = pixel
+      else dest.pixels[at] = combine dest.pixels[at], pixel
   undefined
 
 # Sampled per destination pixel and inverse-transformed back into the
@@ -87,7 +110,8 @@ stamp = (dest, x, y, source, options = {}) ->
       pixel = source.pixels[source.base + sy * source.width + sx]
       continue if skipClear and not opaque pixel
       at = destRow + px
-      dest.pixels[at] = combine dest.pixels[at], pixel
+      if skipClear and pixel >>> 24 is 255 then dest.pixels[at] = pixel
+      else dest.pixels[at] = combine dest.pixels[at], pixel
   undefined
 
 # Bounding boxes first, then the actual pixels. Computed on demand rather
