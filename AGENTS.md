@@ -18,8 +18,9 @@ makes; not yet run on Linux). Before them main was green on Linux at 674
 Mac five checks fail on main as well (a folder made outside the app, Ctrl-Z
 after Ctrl-U, Ctrl-C copy, and the two `quit` children).
 
-The last overnight, `docs/overnight/2026-10-06.md`, is closed out; Robert is
-reading its brief (2026-10-12) and moves it to `docs/overnight/done/` after.
+The last overnight, `docs/overnight/done/2026-10-06.md`, is closed out;
+Robert's answers are inline in its brief (2026-10-12), and those that need
+work are in `TODO.md`.
 Its open questions, answered:
 
 - 2026-10-08: arming from the buffer is retired, an Eval after DevTools
@@ -130,9 +131,12 @@ in voxel-mvp that is the step that caught the cross-track bugs.
   before merge. On 2026-10-06 nearly every such review found something, and
   several were blocking.
 
-**The morning brief**, at the bottom of the plan: what needs Robert first;
-what landed; what was decided without him; what was not done and why; and a
-list of things to try by hand.
+**The morning brief** is short (Robert, 2026-10-12: the 10-06 brief was too
+long to read whole). It holds only what Robert needs to see: anything that
+might surprise him; decisions made without him; decisions needing him,
+each with its evidence; recommendations; and misses, if any. The full
+record of what landed, and the by-hand test list, go in the plan above the
+brief or in `docs/manual-tests.md`, not in it.
 
 ## Running and testing
 
@@ -150,6 +154,10 @@ still holds its own files in there until it has exited.
 ubuntu-24.04 (under xvfb) and windows-latest on every push, macOS on a `v*`
 tag or by hand (`gh workflow run test.yml`). The repo is private, so runs
 cost minutes: push merges, not every commit.
+**Windows is best effort** (Robert, 2026-10-12): he expects it to be the
+hardest platform, and may look for a Windows developer if it becomes too
+much. Keep a last-known-good Windows build available; when playtesters need
+a version that will not build there, that is the time to decide.
 It was disabled from 2026-10-08 to 2026-10-12 while the project was on
 hold (`gh workflow disable` / `enable test.yml`).
 
