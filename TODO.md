@@ -36,8 +36,8 @@ console with an offer of `/reload`). Robert's strategy, from the 10-06 brief:
 - if so, walk them through it (the 📣🐞 dialog's steps);
 - at startup, delete all but the ten most recent reports.
 
-To settle when it is planned: YAML is a new dependency (settings chose JSON
-in K2 to avoid one); whether the console line and `/reload` stay alongside;
+YAML is Robert's choice (2026-10-13), new dependency and all; K2's JSON
+for settings stands. To settle when it is planned: whether the console line and `/reload` stay alongside;
 and redaction, which stays best effort with the report shown before saving.
 
 ## Line endings: always the platform's, with a setting (Robert, 2026-10-12)
@@ -47,8 +47,8 @@ line termination all the time, add persistent settings for changing the
 defaults." Today (U2, 2026-10-06, also Robert's call) a save keeps the
 file's own majority ending and only a file with none takes the platform's;
 seeded examples take the platform's (2026-10-08). The new rule would
-rewrite a LF sketch as CRLF on Windows at its next save. Confirm with
-Robert that this replaces U2 before building.
+rewrite a LF sketch as CRLF on Windows at its next save. It replaces U2's
+keep-the-majority rule (Robert, 2026-10-13).
 
 ## Eval after DevTools: least surprise (Robert, 2026-10-12; to talk about)
 
