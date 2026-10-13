@@ -33,8 +33,9 @@ Each entry: what to do, what should happen, where it came from.
 ## macOS (Robert's MacBook)
 
 - Everything on `docs/overnight/done/2026-10-05.md`'s play-test list, and in
-  particular: Ctrl-Enter, Ctrl-S and Ctrl-. are literal Ctrl, not Cmd; the
-  CI by-hand run missed the first save in a folder created outside the app.
+  particular: Ctrl-Enter, Ctrl-S and Ctrl-. are literal Ctrl, not Cmd. (The
+  first save in a folder created outside the app, missed here, is fixed and
+  checked by the suite since 2026-10-12.)
 - **Undo and redo, Cmd-Z and Cmd-Shift-Z.** Found dead at the prompt by
   Robert on 2026-10-05; Edit > Undo and Redo added for it in K7, overnight
   2026-10-06, and proved on Linux only by clicking the menu items from the

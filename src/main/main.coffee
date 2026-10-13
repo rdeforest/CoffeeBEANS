@@ -490,7 +490,15 @@ ipcMain.handle 'sketch:create', (event, asked) ->
     throw error unless error.code is 'EEXIST'
     {name: await spelled(asked), created: no}
 
-ipcMain.handle 'sketch:read',  (event, name)       -> fsp.readFile sketchFile(await spelled name), 'utf8'
+# The sketch the editor last opened, as its file's case key: a folder that
+# arrives while the app runs re-reads only this one (watchSketches).
+inEditor = null
+
+ipcMain.handle 'sketch:read',  (event, name) ->
+  file     = sketchFile await spelled name
+  text     = await fsp.readFile file, 'utf8'
+  inEditor = caseKey file
+  text
 
 # Line endings follow the platform (Robert, 2026-10-05): players bring their
 # own editors, and nobody knows what every Windows editor does with LF. Read
@@ -571,7 +579,7 @@ retried = (what, file, attempt) ->
 # from outside. Only the suite is handed this object (createWindow); nothing
 # else touches it, so outside a test run every field stays at its zero and
 # the hook does nothing.
-faults = {slow: 0, refuse: 0, unreadable: 0, windows: no}
+faults = {slow: 0, refuse: 0, unreadable: 0, windows: no, arrive: null}
 
 readOld = (file) ->
   if faults.unreadable > 0
@@ -795,8 +803,20 @@ watchSketches = (win) ->
     failing.add where
     sayProblem "could not read #{where}: #{error.message}", logged
 
-  watchTree = (dir) ->
-    return if watchers.has dir
+  # A folder that arrives while the app runs is watched only once its
+  # parent's event has come and a stat has answered. A sketch saved in it
+  # before then -- straight after the mkdir, as the editor part does -- was
+  # missed on macOS, every time on Robert's Mac (Claude, 2026-10-12; that the
+  # event is what comes late is reasoned, not measured). So once an arrived
+  # folder is watched, the sketch the editor has open is read again if it is
+  # in there. Only that one: a folder of thousands copied in would otherwise
+  # be thousands of reads at once, for files nobody has open. A read that
+  # matches what the editor holds, or what it last saved, changes nothing.
+  # `faults.arrive`, a promise, holds the watch back until the suite settles
+  # it, so the suite can prove this on any platform.
+  watchTree = (dir, arrived = no) ->
+    # A stat, or a held watch, can answer after the window has gone.
+    return if watchers.has(dir) or win.isDestroyed()
     try
       watcher  = fs.watch dir
       children = fs.readdirSync dir, withFileTypes: yes
@@ -820,12 +840,18 @@ watchSketches = (win) ->
       fsp.stat(entry)
         .then (stats) ->
           failing.delete entry
-          watchTree entry if stats.isDirectory()
+          return unless stats.isDirectory()
+          return watchTree entry, yes unless faults.arrive
+          faults.arrive.then -> watchTree entry, yes
         .catch (error) ->
           return unread entry, error unless error.code is 'ENOENT'
           failing.delete entry
           forget entry
-    watchTree path.join dir, child.name for child in children when child.isDirectory()
+    for child in children
+      if child.isDirectory()
+        watchTree path.join(dir, child.name), arrived
+      else if arrived and caseKey(path.join dir, child.name) is inEditor
+        reload sketchName path.join dir, child.name
     undefined
 
   watchTree SKETCHES

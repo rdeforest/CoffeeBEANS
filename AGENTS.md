@@ -11,12 +11,12 @@ development priority again, and the Steam / Next Fest October 2027 schedule
 in `docs/ROADMAP.md` is live again. Overnight queues may resume; the next is
 not yet planned.
 
-Where it stands: 701 checks on Linux after 2026-10-08's four changes and
-2026-10-09's colour objects (693 run on the Mac, plus the 8 only Linux
-makes; not yet run on Linux). Before them main was green on Linux at 674
-(Windows CI green apart from one runner-side `sound` flake). On Robert's
-Mac five checks fail on main as well (a folder made outside the app, Ctrl-Z
-after Ctrl-U, Ctrl-C copy, and the two `quit` children).
+Where it stands: 701 checks on Linux and 695 on the Mac (the Mac skips 8
+that only Linux makes, and runs 2 of its own). The Mac is all green as of
+2026-10-12, its five old failures fixed (Platform facts: a folder created
+outside the app; native menu roles). Linux has not run since 2026-10-08's
+four changes and 2026-10-09's colour objects; before them it was green at
+674 (Windows CI green apart from one runner-side `sound` flake).
 
 The last overnight, `docs/overnight/done/2026-10-06.md`, is closed out;
 Robert's answers are inline in its brief (2026-10-12), and those that need
@@ -141,7 +141,7 @@ brief or in `docs/manual-tests.md`, not in it.
 ## Running and testing
 
     npm start                                the app
-    npm test                                 all 701 checks on Linux
+    npm test                                 all 701 checks on Linux, 695 on the Mac
     BEANS_TESTS=stepping npm test            one part, ~10s
 
 `npm test` runs `test/run.coffee`, which works from cmd.exe and PowerShell
@@ -728,9 +728,20 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   `sketch:changed`. And with no conflict detection, an outside edit made
   during one of our saves is lost silently. Main hands the suite a `faults`
   hook (slow, refused renames) to test this; it does nothing otherwise.
-- **macOS missed the first save in a folder created outside the app** once
-  (`a folder created outside the app is watched, every save`), in the one
-  by-hand run. Not investigated.
+- **macOS missed the first save in a folder created outside the app**, every
+  run on Robert's Mac (fixed 2026-10-12). A folder that arrives is watched
+  only after its parent's event and a stat; a save made straight after the
+  mkdir landed before that. That the event is what comes late is reasoned,
+  not measured. Now an arrived folder, once watched, re-reads the sketch the
+  editor has open if it is in there (only that one: `inEditor`, set by
+  `sketch:read`), and the suite holds the watch back (`faults.arrive`) so
+  the check fails without the fix on any platform.
+- **On macOS a native menu role does nothing when clicked from JavaScript**:
+  Electron leaves `quit`, `copy` and the like to Cocoa. The suite sends
+  `terminate:` for Cmd-Q (`quit` part) and calls `webContents.copy()` for
+  Cmd-C; Edit > Undo is our own item, so clicking it works everywhere. And
+  Ctrl-Z and Ctrl-C with a selection do nothing in a Mac text field, which
+  the `repl` part now checks there.
 
 Found on the night of 2026-10-06, Electron 44, measured unless marked:
 

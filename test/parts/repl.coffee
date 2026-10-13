@@ -4,7 +4,7 @@
 
 fsp             = require 'fs/promises'
 pathTo          = require 'path'
-{BrowserWindow} = require 'electron'
+{BrowserWindow, Menu} = require 'electron'
 
 module.exports = (t) ->
   {js, wait, check, setDoc, evalAll, consoleText, clearConsole,
@@ -199,14 +199,29 @@ module.exports = (t) ->
     check "#{what}, at the prompt", got.value is after and got.from is landed and got.to is landed,
       JSON.stringify got
 
-  # 7. edits keep the input's own undo, which assigning the value would wipe
+  # 7. edits keep the input's own undo, which assigning the value would wipe.
+  # On macOS undo is Cmd-Z, which only the menu hears (K7), so there the
+  # menu's own item is clicked, handed the window as the menu hands it the
+  # focused one; Ctrl-Z in a Mac text field does nothing.
+  menuItem = (id) ->
+    item = Menu.getApplicationMenu().getMenuItemById id
+    item?.click undefined, win, win.webContents
+  undoKey = if process.platform is 'darwin' then 'Cmd-Z' else 'Ctrl-Z'
   await promptAt 'hello world', 5
   await press 'C-u'
   cut = (await promptNow()).value
-  await press 'C-z'
+  if process.platform is 'darwin'
+    await press 'C-z'
+    unmoved = (await promptNow()).value
+    check 'Ctrl-Z at the prompt does nothing on macOS', unmoved is cut,
+      "after Ctrl-U #{JSON.stringify cut}, after Ctrl-Z #{JSON.stringify unmoved}"
+    menuItem 'undo'
+    await until_ -> (await promptNow()).value isnt cut
+  else
+    await press 'C-z'
   back = (await promptNow()).value
-  check 'Ctrl-Z undoes a Ctrl-U', cut is ' world' and back is 'hello world',
-    "after Ctrl-U #{JSON.stringify cut}, after Ctrl-Z #{JSON.stringify back}"
+  check "#{undoKey} undoes a Ctrl-U", cut is ' world' and back is 'hello world',
+    "after Ctrl-U #{JSON.stringify cut}, after #{undoKey} #{JSON.stringify back}"
 
   # 7b. a click moves the caret out from under a yank, so Alt-Y after one has
   # nothing to swap. The kill ring outlives promptAt, which only sets the value.
@@ -249,24 +264,34 @@ module.exports = (t) ->
     JSON.stringify await promptNow()
 
   # 8. Ctrl-C: the ordinary key where there is a selection, readline's
-  # .break where there is not
+  # .break where there is not. On macOS copy is Cmd-C, the menu's copy role
+  # (webContents.copy), and Ctrl-C with a selection does nothing.
   await js """
     if (!window.__copiesCounted) {
       window.__copiesCounted = true
       window.__copies = 0
-      document.addEventListener('copy', () => window.__copies++)
+      // Counted and cancelled: a copy that went through would replace the
+      // system clipboard, which the suite never touches (V1).
+      document.addEventListener('copy', (event) => { window.__copies++; event.preventDefault() })
     }
     return true
   """
   copiesBefore = await js "return window.__copies"
   await promptAt 'hello', 0, 2
   await press 'C-c'
-  kept   = await promptNow()
-  copied = (await js "return window.__copies") - copiesBefore
+  kept = await promptNow()
+  if process.platform is 'darwin'
+    ignored = (await js "return window.__copies") - copiesBefore
+    check 'Ctrl-C with a selection copies nothing on macOS', ignored is 0, "copies=#{ignored}"
+    # What the menu's copy role does, which is what Cmd-C reaches.
+    win.webContents.copy()
+    await until_ -> (await js "return window.__copies") - copiesBefore > ignored
+  copied = (await js "return window.__copies") - copiesBefore - (ignored ? 0)
   await promptAt 'hello', 2
   await press 'C-c'
   dropped = await promptNow()
-  check 'Ctrl-C copies a selection, and without one clears the line',
+  copyKey = if process.platform is 'darwin' then 'Cmd-C' else 'Ctrl-C'
+  check "#{copyKey} copies a selection, and Ctrl-C without one clears the line",
     kept.value is 'hello' and kept.from is 0 and kept.to is 2 and copied is 1 and dropped.value is '',
     "with selection #{JSON.stringify kept} copies=#{copied}; without #{JSON.stringify dropped}"
 

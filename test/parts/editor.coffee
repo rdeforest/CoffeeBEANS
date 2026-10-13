@@ -219,18 +219,29 @@ module.exports = (t) ->
     JSON.stringify seen
 
   # A folder made by someone else while the app runs has to be watched too,
-  # and a file in it saved the same way, more than once.
+  # and a file in it saved the same way, more than once. Its watch is held
+  # back (`faults.arrive`) until the first save has landed, as macOS's late
+  # event held it back on Robert's Mac, so that save is seen only through
+  # the read an arrived folder makes of the open sketch; the second needs
+  # the watch itself.
   outside = path.join paths.sketches, 'made-outside'
   await fsp.rm outside, recursive: yes, force: yes
-  await fsp.mkdir outside
-  later = path.join outside, 'later.coffee'
-  await fsp.writeFile later, "print 'START'\n", 'utf8'
-  await js "await Editor.load('made-outside/later'); return true"
-  seen = []
-  for round in [1..2]
-    text = "print 'LATER #{round}'\n"
-    await vimSave later, text
-    seen.push await untilDoc text
+  release = null
+  paths.faults.arrive = new Promise (resolve) -> release = resolve
+  try
+    await fsp.mkdir outside
+    later = path.join outside, 'later.coffee'
+    await fsp.writeFile later, "print 'START'\n", 'utf8'
+    await js "await Editor.load('made-outside/later'); return true"
+    seen = []
+    for round in [1..2]
+      text = "print 'LATER #{round}'\n"
+      await vimSave later, text
+      release() if round is 1
+      seen.push await untilDoc text
+  finally
+    release()
+    paths.faults.arrive = null
   check 'a folder created outside the app is watched, every save',
     seen.every((doc, index) -> doc is "print 'LATER #{index + 1}'\n"),
     JSON.stringify seen
@@ -628,9 +639,9 @@ module.exports = (t) ->
 
   # The real menu items, clicked the way the menu clicks them, handed the
   # window because a hidden test run has none focused. On a Mac they are the
-  # only way Cmd-Z reaches the prompt (K7, 2026-10-06), and no Mac runs this;
-  # what runs here is that each click goes to the history that has focus, and
-  # takes one step there. A step is a paste so that CodeMirror never joins
+  # only way Cmd-Z reaches the prompt (K7, 2026-10-06). What runs here is
+  # that each click goes to the history that has focus, and takes one step
+  # there. A step is a paste so that CodeMirror never joins
   # two of them into one, as it joins edits typed close together.
   {Menu, BrowserWindow} = require 'electron'
   win      = BrowserWindow.getAllWindows()[0]
