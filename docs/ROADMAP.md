@@ -94,8 +94,8 @@ Open:
 - Packaged builds for Windows, macOS and Linux from GitHub Actions, and the
   test suite running on all three. The repo is private, so minutes count:
   Linux and Windows on every push, macOS on release builds only.
-- Engine pieces the game needs: seeded `rnd` (NOTES.md, Seeded randomness),
-  feature gating by progress, a sandbox mode with gating off, and a way for
+- Engine pieces the game needs: ~~seeded `rnd`~~ (`randomize`, `7a87c8e`,
+  2026-10-05), feature gating by progress, a sandbox mode with gating off, and a way for
   the game to notice a demonstrated outcome.
 - Design doc v1: the story outline, the challenge tree, the mascot brief.
 - Start looking for an artist.

@@ -4,35 +4,49 @@ README says what CoffeeBEANS is and how to use it. NOTES.md is the design
 diary. This file is the working state: what is half-built, what was decided
 and why, and the facts that cost something to learn.
 
-## Status: on hold, recreation only (since 2026-10-07)
+## Status: top priority again (since 2026-10-12)
 
-Robert put CoffeeBEANS on hold on 2026-10-07 for a new venture that takes
-his working energy. The Steam / Next Fest October 2027 target is dropped;
-`docs/ROADMAP.md` stays as the record of that plan, not a schedule. He may
-still open sessions because he enjoys it: no deadlines, no phases, no
-overnight queues. Keep sessions short and small.
+On hold from 2026-10-07 to 2026-10-12; Robert has made CoffeeBEANS his top
+development priority again, and the Steam / Next Fest October 2027 schedule
+in `docs/ROADMAP.md` is live again. Overnight queues may resume; the next is
+not yet planned.
 
 Where it stands: 701 checks on Linux after 2026-10-08's four changes and
 2026-10-09's colour objects (693 run on the Mac, plus the 8 only Linux
-makes; not yet run on Linux).
-Before them main was green on Linux at 674 (Windows CI green apart from one runner-side `sound` flake). On
-Robert's Mac five checks fail on main as well (a folder made outside the
-app, Ctrl-Z after Ctrl-U, Ctrl-C copy, and the two `quit` children). The
-last overnight, `docs/overnight/2026-10-06.md`, is closed out; its morning
-brief holds the open questions for Robert and a by-hand play-test list.
-Answered on 2026-10-08: arming from the buffer is retired, an Eval after
-DevTools stops again when the worker is idle, seeded examples take the
-platform's line endings, and main's uncaught exceptions are said in a
-player's console (see Running and testing). Still open: redaction of names,
-literal-first sketches, splitting `main.coffee` and `renderer.coffee`. The
-plan moves to `docs/overnight/done/` once he has read it.
+makes; not yet run on Linux). Before them main was green on Linux at 674
+(Windows CI green apart from one runner-side `sound` flake). On Robert's
+Mac five checks fail on main as well (a folder made outside the app, Ctrl-Z
+after Ctrl-U, Ctrl-C copy, and the two `quit` children).
+
+The last overnight, `docs/overnight/2026-10-06.md`, is closed out; Robert is
+reading its brief (2026-10-12) and moves it to `docs/overnight/done/` after.
+Its open questions, answered:
+
+- 2026-10-08: arming from the buffer is retired, an Eval after DevTools
+  stops again when the worker is idle, seeded examples take the platform's
+  line endings, and main's uncaught exceptions are said in a player's
+  console (see Running and testing).
+- 2026-10-12: **redaction stays best-effort** -- the report is shown before
+  it is saved, with a plea to look for anything not fit for a billboard,
+  and that is as much as is reasonable for now. **A sketch that opens with
+  a literal must keep its names** -- not fixing it is not an option (plenty
+  of cultures use string literals as comments; least surprise) -- and the
+  fix should use CoffeeScript's own lexer (`CoffeeScript.tokens`, already
+  loaded in the worker) rather than a lexer of ours. **Split the large
+  files**: any file over about 300 lines is a candidate (a heuristic, not
+  a limit). Robert's bar: each file manages one problem concisely enough
+  that someone who does not know the language could review it, see what it
+  does, and trust that it does it correctly.
 
 The editor's division-as-regex bug was fixed on 2026-10-08 in a vendored,
 patched copy of the CoffeeScript mode (`src/renderer/vendor/coffeescript-
-mode.js`). Offering the patch upstream waits on Robert.
+mode.js`). **Robert offers it upstream himself**: a first contact with any
+project is his, not an agent's, until that project is known to welcome
+automated input.
 
-Known bugs and gaps: the brief's "Not done" list, and the "Still open" notes
-throughout this file.
+Known bugs and gaps: the brief's "Not done" list, the "Still open" notes
+throughout this file, and `TODO.md`. Robert prioritises them after reading
+the brief.
 
 ## Before starting work
 
@@ -136,9 +150,8 @@ still holds its own files in there until it has exited.
 ubuntu-24.04 (under xvfb) and windows-latest on every push, macOS on a `v*`
 tag or by hand (`gh workflow run test.yml`). The repo is private, so runs
 cost minutes: push merges, not every commit.
-**Disabled since 2026-10-08** (Robert, with the project on hold), with
-`gh workflow disable`; the file is kept. `gh workflow enable test.yml`
-turns it back on. Until then, run the suite locally before pushing.
+It was disabled from 2026-10-08 to 2026-10-12 while the project was on
+hold (`gh workflow disable` / `enable test.yml`).
 
 Parts: `startup problems editor image repl buffers stepping debugging focus
 lifecycle drawing color loading shell about report input random names sound
@@ -236,16 +249,17 @@ those safely needs a lexer, because a heredoc can hold a line starting
 
 ## Priorities
 
-**On hold since 2026-10-07** (see Status, at the top). What follows is the
-record of the priorities before that.
+**On hold 2026-10-07 to 2026-10-12;** the schedule below is live again.
 
 **The direction changed on 2026-10-04:** CoffeeBEANS becomes a game for
 Steam, done by 2027-07-30, aimed at Next Fest in October 2027. The schedule
-and every decision behind it are in `docs/ROADMAP.md`. Dropped 2026-10-07.
+and every decision behind it are in `docs/ROADMAP.md`. Dropped 2026-10-07,
+restored 2026-10-12.
 
-Was next: Phase 0 there -- the licence, builds and tests for all three
-platforms in CI, seeded `rnd` (NOTES.md, Seeded randomness), feature gating,
-and the sandbox mode.
+Next: the rest of Phase 0 there -- the content repository's licences,
+packaged builds and tests for all three platforms in CI, feature gating,
+the sandbox mode, and noticing a demonstrated outcome; each needs Robert.
+Seeded `rnd` is done (`randomize`, `rnd.currentSeed`; `7a87c8e`).
 
 From Robert's playtesting, 2026-10-04:
 
