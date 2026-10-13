@@ -11,12 +11,10 @@ development priority again, and the Steam / Next Fest October 2027 schedule
 in `docs/ROADMAP.md` is live again. Overnight queues may resume; the next is
 not yet planned.
 
-Where it stands: 701 checks on Linux and 695 on the Mac (the Mac skips 8
-that only Linux makes, and runs 2 of its own). The Mac is all green as of
-2026-10-12, its five old failures fixed (Platform facts: a folder created
-outside the app; native menu roles). Linux has not run since 2026-10-08's
-four changes and 2026-10-09's colour objects; before them it was green at
-674 (Windows CI green apart from one runner-side `sound` flake).
+Where it stands, 2026-10-12 (`bf2f759`): green everywhere -- 701 checks on
+Linux and 696 on Windows (CI), 695 on Robert's Mac. The Mac's five old
+failures are fixed (Platform facts: a folder created outside the app;
+native menu roles).
 
 The last overnight, `docs/overnight/done/2026-10-06.md`, is closed out;
 Robert's answers are inline in its brief (2026-10-12), and those that need
