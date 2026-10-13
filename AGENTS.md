@@ -738,8 +738,10 @@ Found by CI on GitHub's runners, 2026-10-05 (C1 and C2 of that night's plan):
   Electron leaves `quit`, `copy` and the like to Cocoa. The suite sends
   `terminate:` for Cmd-Q (`quit` part) and calls `webContents.copy()` for
   Cmd-C; Edit > Undo is our own item, so clicking it works everywhere. And
-  Ctrl-Z and Ctrl-C with a selection do nothing in a Mac text field, which
-  the `repl` part now checks there.
+  Ctrl-Z and Ctrl-C with a selection do nothing in a Mac text field, so on
+  macOS the prompt's Ctrl-C clears the line even over a selection, as
+  Terminal's does (Robert found it doing nothing, 2026-10-13); the `repl`
+  part checks both there.
 
 Found on the night of 2026-10-06, Electron 44, measured unless marked:
 

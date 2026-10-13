@@ -681,9 +681,10 @@ submit = ->
 
 # Ctrl-C copies a selection -- the ordinary key wins there, since readline has
 # no selection to mean anything else by it -- and otherwise drops the line,
-# the REPL's .break.
+# the REPL's .break. On macOS copy is Cmd-C and Ctrl-C in a text field does
+# nothing, so there it always drops the line, as Terminal's does.
 clearLine = ->
-  return PASS if promptLine.selectionStart isnt promptLine.selectionEnd
+  return PASS if not ON_MAC and promptLine.selectionStart isnt promptLine.selectionEnd
   rewrite 0, promptLine.value.length
   enteredAt = entered.length
 

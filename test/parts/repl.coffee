@@ -265,7 +265,7 @@ module.exports = (t) ->
 
   # 8. Ctrl-C: the ordinary key where there is a selection, readline's
   # .break where there is not. On macOS copy is Cmd-C, the menu's copy role
-  # (webContents.copy), and Ctrl-C with a selection does nothing.
+  # (webContents.copy), and Ctrl-C drops the line even over a selection.
   await js """
     if (!window.__copiesCounted) {
       window.__copiesCounted = true
@@ -278,15 +278,20 @@ module.exports = (t) ->
   """
   copiesBefore = await js "return window.__copies"
   await promptAt 'hello', 0, 2
-  await press 'C-c'
-  kept = await promptNow()
   if process.platform is 'darwin'
-    ignored = (await js "return window.__copies") - copiesBefore
-    check 'Ctrl-C with a selection copies nothing on macOS', ignored is 0, "copies=#{ignored}"
+    await press 'C-c'
+    cleared = await promptNow()
+    check 'Ctrl-C with a selection clears the line on macOS, copying nothing',
+      cleared.value is '' and (await js "return window.__copies") is copiesBefore,
+      "#{JSON.stringify cleared} copies=#{(await js "return window.__copies") - copiesBefore}"
+    await promptAt 'hello', 0, 2
     # What the menu's copy role does, which is what Cmd-C reaches.
     win.webContents.copy()
-    await until_ -> (await js "return window.__copies") - copiesBefore > ignored
-  copied = (await js "return window.__copies") - copiesBefore - (ignored ? 0)
+    await until_ -> (await js "return window.__copies") > copiesBefore
+  else
+    await press 'C-c'
+  kept = await promptNow()
+  copied = (await js "return window.__copies") - copiesBefore
   await promptAt 'hello', 2
   await press 'C-c'
   dropped = await promptNow()
